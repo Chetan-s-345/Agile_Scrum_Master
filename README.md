@@ -20,11 +20,11 @@
 <br/>
 
 <!-- Stats Badges -->
-![GitHub Stars](https://img.shields.io/github/stars/deekshithgowda85/ai-sprint-manager?style=social)
-![GitHub Forks](https://img.shields.io/github/forks/deekshithgowda85/ai-sprint-manager?style=social)
-![GitHub Watchers](https://img.shields.io/github/watchers/deekshithgowda85/ai-sprint-manager?style=social)
-![GitHub Issues](https://img.shields.io/github/issues/deekshithgowda85/ai-sprint-manager?color=red)
-![GitHub Last Commit](https://img.shields.io/github/last-commit/deekshithgowda85/ai-sprint-manager?color=2563EB)
+![GitHub Stars](https://img.shields.io/github/stars/deekshithgowda85/Agile_Scrum_Master?style=social)
+![GitHub Forks](https://img.shields.io/github/forks/deekshithgowda85/Agile_Scrum_Master?style=social)
+![GitHub Watchers](https://img.shields.io/github/watchers/deekshithgowda85/Agile_Scrum_Master?style=social)
+![GitHub Issues](https://img.shields.io/github/issues/deekshithgowda85/Agile_Scrum_Masterai-sprint-manager?color=red)
+![GitHub Last Commit](https://img.shields.io/github/last-commit/deekshithgowda85/Agile_Scrum_Master?color=2563EB)
 
 </div>
 
