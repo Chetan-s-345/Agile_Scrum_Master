@@ -1,0 +1,1286 @@
+================================================================================
+        AI SPRINT MANAGER — COMPLETE ROUTE PROMPTS
+        Divided into Modules | Neon DB Multi-Org Branch Architecture
+        Copy each prompt separately into your AI coding assistant
+================================================================================
+
+Each prompt below is self-contained and builds on the previous one.
+Run them in order for a complete, working backend system.
+
+================================================================================
+████████████████████████████████████████████████████████████████████████████████
+PROMPT 01 — PROJECT SETUP & FOLDER STRUCTURE
+████████████████████████████████████████████████████████████████████████████████
+================================================================================
+
+Create a production-ready backend project for an AI Sprint Manager SaaS platform
+with multi-organization support using Neon DB (PostgreSQL). Each organization
+gets its own isolated Neon DB branch.
+
+---
+
+CREATE THIS EXACT FOLDER STRUCTURE:
+
+ai-sprint-manager/
+├── backend/
+│   ├── api-gateway/                  (Node.js + Express)
+│   │   ├── src/
+│   │   │   ├── config/
+│   │   │   │   ├── database.js       (universal DB + org DB pool manager)
+│   │   │   │   ├── neon.js           (Neon API client)
+│   │   │   │   ├── redis.js          (Redis connection)
+│   │   │   │   └── env.js            (env validation with zod)
+│   │   │   ├── middleware/
+│   │   │   │   ├── auth.js           (JWT verify)
+│   │   │   │   ├── orgDb.js          (attach org DB to req)
+│   │   │   │   ├── rateLimiter.js    (per-org rate limiting)
+│   │   │   │   ├── errorHandler.js   (global error handler)
+│   │   │   │   └── logger.js         (morgan + winston)
+│   │   │   ├── routes/
+│   │   │   │   ├── auth.routes.js
+│   │   │   │   ├── org.routes.js
+│   │   │   │   ├── developer.routes.js
+│   │   │   │   ├── project.routes.js
+│   │   │   │   ├── sprint.routes.js
+│   │   │   │   ├── task.routes.js
+│   │   │   │   ├── assignment.routes.js
+│   │   │   │   ├── report.routes.js
+│   │   │   │   └── webhook.routes.js
+│   │   │   ├── controllers/          (one per route file)
+│   │   │   ├── services/             (business logic)
+│   │   │   ├── validators/           (zod schemas)
+│   │   │   └── app.js
+│   │   ├── package.json
+│   │   └── .env.example
+│   │
+│   └── ai-service/                   (Python FastAPI)
+│       ├── app/
+│       │   ├── agents/
+│       │   ├── models/
+│       │   ├── services/
+│       │   ├── routes/
+│       │   └── main.py
+│       └── requirements.txt
+│
+├── db/
+│   ├── universal_schema.sql
+│   ├── org_schema.sql
+│   └── migrations/
+│       ├── universal/
+│       └── org/
+│
+├── docker-compose.yml
+└── .env.example
+
+---
+
+INSTALL THESE PACKAGES:
+
+npm init -y
+npm install express pg @neondatabase/serverless dotenv jsonwebtoken bcryptjs
+            zod cors helmet morgan winston express-rate-limit ioredis uuid
+            @bull-board/express bullmq axios
+
+npm install --save-dev nodemon jest supertest
+
+---
+
+CREATE .env.example WITH THESE VARIABLES:
+
+# Universal DB (Supabase or main Neon project)
+UNIVERSAL_DATABASE_URL=postgresql://user:password@host/universal_db
+
+# Neon API (for creating org branches)
+NEON_API_KEY=your_neon_api_key
+NEON_PROJECT_ID=your_neon_project_id
+NEON_BASE_BRANCH_ID=your_base_branch_id  # the branch with org_schema.sql applied
+
+# Auth
+JWT_SECRET=your_super_secret_jwt_key_min_32_chars
+JWT_EXPIRES_IN=7d
+REFRESH_TOKEN_SECRET=your_refresh_secret
+REFRESH_EXPIRES_IN=30d
+
+# Redis
+REDIS_URL=redis://localhost:6379
+
+# AI Service
+AI_SERVICE_URL=http://localhost:8000
+OPENAI_API_KEY=your_openai_key
+ANTHROPIC_API_KEY=your_anthropic_key
+
+# App
+PORT=4000
+NODE_ENV=development
+FRONTEND_URL=http://localhost:3000
+
+# Jira OAuth
+JIRA_CLIENT_ID=your_jira_client_id
+JIRA_CLIENT_SECRET=your_jira_client_secret
+
+# GitHub
+GITHUB_WEBHOOK_SECRET=your_webhook_secret
+
+---
+
+CREATE src/app.js:
+- Express app with helmet, cors, morgan, json body parser
+- Mount all route files under /api/v1/
+- Add global error handler middleware last
+- Add health check route GET /health
+- Start server on PORT from env
+
+================================================================================
+████████████████████████████████████████████████████████████████████████████████
+PROMPT 02 — NEON DB BRANCH MANAGER (Core Multi-Org Engine)
+████████████████████████████████████████████████████████████████████████████████
+================================================================================
+
+Build the Neon DB Branch Manager for an AI Sprint Manager SaaS. This is the
+core system that creates an isolated Neon database branch for every new
+organization that signs up, and manages connections to each branch.
+
+---
+
+FILE: src/config/neon.js
+
+Build a NeonBranchManager class with these methods:
+
+1. createOrgBranch(orgId, orgSlug)
+   - Calls POST https://console.neon.tech/api/v2/projects/{NEON_PROJECT_ID}/branches
+   - Request body:
+     {
+       branch: {
+         name: "org-{orgSlug}-{orgId.slice(0,8)}",
+         parent_id: NEON_BASE_BRANCH_ID   // clone from base schema branch
+       },
+       endpoints: [{ type: "read_write", autoscaling_limit_min_cu: 0.25 }]
+     }
+   - Headers: Authorization: Bearer NEON_API_KEY
+   - Wait for branch to be ready (poll GET /branches/{branchId} until ready)
+   - Extract connection string from response endpoints
+   - Return: { branchId, branchName, connectionString, host }
+
+2. getOrgConnectionString(orgId)
+   - Calls GET https://console.neon.tech/api/v2/projects/{id}/branches
+   - Find branch named "org-*-{orgId.slice(0,8)}"
+   - Get its endpoint connection URI
+   - Return connection string
+
+3. deleteBranch(branchId)
+   - Calls DELETE https://console.neon.tech/api/v2/projects/{id}/branches/{branchId}
+   - Used when org is deleted or subscription cancelled
+
+4. suspendBranch(branchId)
+   - Calls POST .../branches/{branchId}/endpoints/{endpointId}/suspend
+   - Used when org subscription expires to pause DB and stop billing
+
+5. resumeBranch(branchId)
+   - Calls POST .../branches/{branchId}/endpoints/{endpointId}/resume
+   - Used when org reactivates subscription
+
+6. listAllBranches()
+   - Returns all branches for the Neon project
+   - Maps each to: { branchId, name, orgId, createdAt, state }
+
+7. getBranchMetrics(branchId)
+   - Calls GET .../branches/{branchId}/metrics
+   - Returns compute time, data transfer, storage used
+
+Include:
+- Retry logic (3 retries with exponential backoff) for all API calls
+- Axios instance with base URL and auth header pre-configured
+- Polling helper that checks branch state every 2 seconds, times out at 60s
+- Error classes: NeonApiError, BranchCreationError, BranchNotFoundError
+
+---
+
+FILE: src/config/database.js
+
+Build a DatabasePoolManager class:
+
+1. universalPool
+   - Single pg.Pool connected to UNIVERSAL_DATABASE_URL
+   - Max 20 connections
+   - Used for: orgs, users, billing, sessions, audit
+
+2. getOrgPool(orgId)
+   - Check in-memory Map for existing pool
+   - If not found: query universal DB for org's connectionString
+   - Create new pg.Pool with that connection string
+   - Max 10 connections per org pool
+   - Set idleTimeoutMillis: 30000
+   - Store in Map with orgId key
+   - Return pool
+
+3. releaseOrgPool(orgId)
+   - End pool and remove from Map
+   - Called when org is inactive
+
+4. query(pool, sql, params)
+   - Wrapper around pool.query with error logging
+
+5. transaction(pool, callback)
+   - Runs callback inside BEGIN/COMMIT/ROLLBACK block
+   - callback receives a client for making queries
+
+---
+
+FILE: src/middleware/orgDb.js
+
+Build Express middleware orgDbMiddleware:
+- Extract orgId from req.user.orgId (set by auth middleware)
+- Call DatabasePoolManager.getOrgPool(orgId)
+- Attach pool to req.orgDb
+- Attach helper: req.orgQuery(sql, params) = pool.query(sql, params)
+- Call next()
+- On error: return 503 with message "Database unavailable"
+
+================================================================================
+████████████████████████████████████████████████████████████████████████████████
+PROMPT 03 — AUTHENTICATION & ORGANIZATION ROUTES
+████████████████████████████████████████████████████████████████████████████████
+================================================================================
+
+Build the Authentication and Organization management system for the AI Sprint
+Manager. Uses the universal_db for all identity and org data. Each successful
+org signup triggers Neon branch creation.
+
+---
+
+FILE: src/routes/auth.routes.js
+Mount at: /api/v1/auth
+
+BUILD THESE ENDPOINTS:
+
+POST /register
+- Body: { email, password, fullName, orgName, orgSlug, planSlug? }
+- Validate with zod: email format, password min 8 chars, orgSlug alphanumeric
+- Check email not already in global_users
+- Check orgSlug not already in organizations
+- Hash password with bcrypt (rounds: 12)
+- In a universal DB transaction:
+  1. INSERT into global_users
+  2. INSERT into organizations (status: trial, trial_ends_at: NOW()+14days)
+  3. INSERT into org_members (role: owner)
+  4. INSERT into subscriptions (plan: free by default)
+- Trigger Neon branch creation:
+  5. Call NeonBranchManager.createOrgBranch(orgId, orgSlug)
+  6. Save connectionString back to organizations.db_connection_string
+  7. INSERT into db_provisioning_log (status: success)
+- Run org schema seed: insert org_settings row into new branch
+- Generate JWT + refresh token
+- Return: { user, org, tokens }
+- On Neon failure: rollback org creation, return 503
+
+POST /login
+- Body: { email, password, orgSlug? }
+- Find user in global_users by email
+- Check is_active and not locked
+- Compare password with bcrypt
+- If orgSlug provided: verify org_members membership
+- If user belongs to multiple orgs and no orgSlug: return list of orgs to pick
+- Update last_login_at, last_login_ip
+- INSERT into auth_sessions
+- Return: { user, org, tokens }
+
+POST /refresh
+- Body: { refreshToken }
+- Verify refresh token signature and expiry
+- Find session in auth_sessions
+- Issue new access token
+- Rotate refresh token (update in auth_sessions)
+- Return: { accessToken, refreshToken }
+
+POST /logout
+- Auth required
+- Set auth_sessions.is_active = FALSE for current session
+- Return: 200 OK
+
+POST /forgot-password
+- Body: { email }
+- Find user, generate secure token with crypto.randomBytes(32)
+- Hash token, INSERT into password_resets
+- Send email (log to console in dev)
+- Return 200 always (no user enumeration)
+
+POST /reset-password
+- Body: { token, newPassword }
+- Hash token, find in password_resets where used=FALSE and not expired
+- Update global_users.password_hash
+- Mark password_resets.used = TRUE
+- Invalidate all existing auth_sessions
+- Return 200
+
+POST /verify-email
+- Body: { token }
+- Find and validate token
+- Update global_users.email_verified = TRUE
+
+GET /me
+- Auth required
+- Return current user + org memberships
+
+---
+
+FILE: src/routes/org.routes.js
+Mount at: /api/v1/org
+All routes require auth middleware
+
+BUILD THESE ENDPOINTS:
+
+GET /
+- Return current org details + plan + member count + DB branch status
+
+PATCH /settings
+- Auth required, role: admin or owner
+- Body: { name?, timezone?, logo_url?, notification_settings? }
+- Update organizations and org_settings in org branch DB
+- Log to org_audit_log
+
+GET /members
+- Query org branch: SELECT team_members with role, joined_at, last_active_at
+- Return paginated list
+
+POST /members/invite
+- Body: { email, role }
+- Check plan max_members limit
+- INSERT into invitations with secure token
+- Send invite email (console.log in dev)
+- Log to org_audit_log
+
+DELETE /members/:memberId
+- Role: owner or admin only
+- Cannot remove owner
+- SET is_active=FALSE in team_members (org branch)
+- SET is_active=FALSE in org_members (universal)
+- Log to org_audit_log
+
+GET /invitations
+- Return pending invitations for this org
+
+POST /invitations/:token/accept
+- Find invitation by token
+- Check not expired and status=pending
+- INSERT into global_users if not exists
+- INSERT into org_members
+- INSERT into team_members (org branch)
+- SET invitation status=accepted
+- Return JWT tokens
+
+GET /billing
+- Return subscription, plan details, current usage
+- Query ai_usage_daily for this month totals
+
+GET /db-status
+- Auth required, role: admin or owner
+- Call NeonBranchManager.getBranchMetrics(org.neon_branch_id)
+- Return: { branchId, storageBytes, computeTimeSeconds, state }
+
+================================================================================
+████████████████████████████████████████████████████████████████████████████████
+PROMPT 04 — DEVELOPER PROFILE & ASSIGNMENT ENGINE ROUTES
+████████████████████████████████████████████████████████████████████████████████
+================================================================================
+
+Build the Developer Profile management and Smart Assignment Engine API routes
+for the AI Sprint Manager. All queries run against the org's Neon DB branch.
+
+---
+
+FILE: src/routes/developer.routes.js
+Mount at: /api/v1/developers
+All routes: auth middleware + orgDb middleware
+
+BUILD THESE ENDPOINTS:
+
+GET /
+- Query org branch: developer_profiles JOIN team_members
+- Support query params: ?role=frontend&available=true&minMerit=70
+- Filter by availability_status, primary_role, merit_score
+- Return list with: id, fullName, role, techStack, meritScore,
+  currentLoad, maxCapacity, loadPct, availabilityStatus, burnoutRiskFlag
+
+GET /leaderboard
+- Query v_developer_leaderboard view from org branch
+- Return top developers ordered by merit_score DESC
+- Include: rank, name, meritScore, completionRate, codeQuality,
+  prReviewSpeed, peerRating, trend (improving/stable/declining)
+- Trend: compare last 2 sprint merit scores
+
+GET /:developerId
+- Return full developer profile including:
+  - Basic info from team_members
+  - Skills and scores from developer_profiles
+  - Last 5 sprints from sprint_performance
+  - Merit score history chart data from merit_score_history
+  - Upcoming leave from developer_availability
+  - Current assigned tasks
+
+POST /
+- Auth: admin or manager role
+- Body: { memberId, techStack[], skillLevels{}, primaryRole,
+          maxSprintCapacity, yearsExperience, githubUsername }
+- INSERT into developer_profiles
+- Log to org_audit_log
+
+PATCH /:developerId
+- Body: { techStack?, skillLevels?, maxSprintCapacity?, preferredTaskTypes? }
+- UPDATE developer_profiles
+- Log change to org_audit_log
+
+GET /:developerId/availability
+- Return developer_availability for next 90 days
+- Mark days as: available, on_leave, partial
+
+POST /:developerId/availability
+- Body: { leaveType, startDate, endDate, reason }
+- Validate dates do not overlap existing leave
+- INSERT into developer_availability
+- Check if this affects any assigned sprint tasks
+
+DELETE /:developerId/availability/:availabilityId
+- Remove leave entry
+- Check if leave is in the future
+
+GET /:developerId/performance
+- Query sprint_performance for last 10 sprints
+- Return per-sprint: pointsAssigned, pointsCompleted, completionRate,
+  codeQualityScore, prReviewHours, peerRating, meritScore
+
+---
+
+FILE: src/routes/assignment.routes.js
+Mount at: /api/v1/assignment
+All routes: auth middleware + orgDb middleware
+
+BUILD THESE ENDPOINTS:
+
+POST /assign
+- Body: { taskId, sprintId, techTags[], storyPoints, priority }
+- This is the core Smart Assignment Engine endpoint
+- Run the full assignment algorithm:
+
+  STEP 1 — Tech Stack Filter:
+  SELECT dp.* FROM developer_profiles dp
+  WHERE dp.tech_stack @> $techTags   -- GIN index on tech_stack array
+  AND dp.availability_status = 'available'
+
+  STEP 2 — Availability Filter:
+  For each matched developer:
+  - Check current_sprint_load + storyPoints <= max_sprint_capacity
+  - Check no leave in developer_availability overlapping sprint dates
+  - Remove developers who fail either check
+
+  STEP 3 — Merit Score Ranking:
+  Sort remaining developers by:
+  (merit_score * assignment_weight) DESC
+
+  STEP 4 — Workload Balance:
+  Among top 3 ranked:
+  - Calculate remaining_capacity = max_sprint_capacity - current_sprint_load
+  - Pick developer with highest remaining_capacity
+
+  STEP 5 — Assign:
+  - UPDATE tasks SET assignee_id, assigned_by='ai', assigned_at=NOW()
+  - UPDATE developer_profiles SET current_sprint_load += storyPoints
+  - INSERT into assignment_log with all scores and reasoning
+  - Call Jira service to update assignee (if Jira connected)
+  - Call Slack service to notify developer (if Slack connected)
+
+  STEP 6 — Fallback:
+  If no developer passes all filters:
+  - INSERT into assignment_failures with reason_code and details
+  - Return 200 with { assigned: false, reason, suggestion }
+
+- Return: { assigned: true, developer, scores, reason }
+
+POST /assign-bulk
+- Body: { tasks: [{ taskId, techTags[], storyPoints }] }
+- Run assignment for multiple tasks in priority order
+- Balance workload across sprint — do not assign all to same person
+- Return: { results: [{ taskId, assigned, developer?, reason }] }
+
+POST /reassign
+- Body: { taskId, reason }
+- Exclude current assignee from candidates
+- Run assignment algorithm again
+- UPDATE previous assignment_log outcome
+- Log reassignment event
+
+GET /suggest/:taskId
+- Do not assign — just return ranked list of candidates
+- Show: developer name, meritScore, techMatch%, currentLoad, available
+- Useful for manual assignment with AI recommendations
+
+GET /failures
+- Return recent assignment_failures that are unresolved
+- Group by reason_code
+- Include suggestion for each
+
+GET /log
+- Return assignment_log with pagination
+- Filter: ?developerId=&sprintId=&from=&to=
+- Include: task title, developer name, score breakdown, outcome
+
+================================================================================
+████████████████████████████████████████████████████████████████████████████████
+PROMPT 05 — PROJECT, SPRINT & TASK ROUTES
+████████████████████████████████████████████████████████████████████████████████
+================================================================================
+
+Build the Project, Sprint, and Task management API routes for the AI Sprint
+Manager. All data is scoped to the org's Neon DB branch.
+
+---
+
+FILE: src/routes/project.routes.js
+Mount at: /api/v1/projects
+All routes: auth middleware + orgDb middleware
+
+BUILD THESE ENDPOINTS:
+
+GET /
+- Return all projects for org
+- Include: name, status, memberCount, activeSprint, completedSprints, techStack
+- Filter: ?status=active
+
+POST /
+- Body: { name, slug, description, techStack[], jiraProjectKey?, githubRepo?, ownerId }
+- Validate slug unique within org
+- INSERT into projects
+- INSERT into project_members for creator
+- Return created project
+
+GET /:projectId
+- Return full project details
+- Include: members, epics count, sprints summary, active sprint
+
+PATCH /:projectId
+- Body: { name?, description?, status?, techStack?, targetEndDate? }
+- UPDATE projects
+- Log to org_audit_log
+
+POST /:projectId/members
+- Body: { memberId, role }
+- INSERT into project_members
+
+DELETE /:projectId/members/:memberId
+- Remove from project_members
+
+GET /:projectId/epics
+- Return all epics for project with story count and progress
+
+POST /:projectId/epics
+- Body: { title, description, priority, startDate, targetDate, color }
+- INSERT into epics
+
+---
+
+FILE: src/routes/sprint.routes.js
+Mount at: /api/v1/sprints
+All routes: auth middleware + orgDb middleware
+
+BUILD THESE ENDPOINTS:
+
+GET /
+- Query params: ?projectId=&status=active
+- Return sprints with: name, dates, plannedPoints, completedPoints,
+  velocity, riskScore, completionPct, daysRemaining
+
+POST /
+- Body: { projectId, name, goal, startDate, endDate }
+- Auto-calculate sprint_number (MAX + 1 for project)
+- Calculate total_capacity_pts = SUM of all developer max_sprint_capacity
+  minus their existing load
+- INSERT into sprints with status='planning'
+- Return sprint with capacity breakdown per developer
+
+POST /:sprintId/plan
+- AI Sprint Auto-Planner endpoint
+- Body: { projectId, maxPoints? }
+- Fetch all backlog_items WHERE status='ready' AND project_id=projectId
+- Score each item: (priority_score * 0.5) + (business_value * 0.3) + (dependency_score * 0.2)
+- Select items until total story_points = team sprint capacity
+- UPDATE backlog_items.sprint_id for selected items
+- INSERT tasks for each backlog item
+- Trigger bulk auto-assignment: POST /api/v1/assignment/assign-bulk
+- UPDATE sprints.status = 'planning', planned_points
+- Return: { sprintId, selectedTasks, totalPoints, capacityUsed, teamBreakdown }
+
+PATCH /:sprintId/start
+- Check status is 'planning'
+- UPDATE sprints.status = 'active'
+- Take first sprint_progress_snapshots snapshot
+- Log to org_audit_log
+
+PATCH /:sprintId/complete
+- UPDATE sprints.status = 'completed'
+- Set completed_points = SUM of done tasks story points
+- Set actual_velocity
+- Reset developer_profiles.current_sprint_load = 0 for all sprint members
+- Trigger sprint merit score recalculation (call calculate_merit_score for each dev)
+- Call check_burnout_risk for each developer
+- Queue report generation job in Redis/Bull
+- Return sprint summary
+
+GET /:sprintId
+- Return full sprint with:
+  - All tasks grouped by status
+  - Developer capacity bars
+  - Latest progress snapshot
+  - Active delay alerts
+
+GET /:sprintId/burndown
+- Return sprint_progress_snapshots for the sprint
+- Format: [{ day, idealRemaining, actualRemaining, date }]
+- Used to render burndown chart
+
+GET /:sprintId/risk
+- Calculate current sprint risk score
+- Factors: velocity gap, blocked tasks count, team availability, days remaining
+- Return: { riskScore, riskLevel, factors[], recommendations[] }
+
+---
+
+FILE: src/routes/task.routes.js
+Mount at: /api/v1/tasks
+All routes: auth middleware + orgDb middleware
+
+BUILD THESE ENDPOINTS:
+
+GET /
+- Query: ?sprintId=&status=&assigneeId=&projectId=
+- Return tasks with: title, status, storyPoints, assignee, techTags, aiRiskScore
+- Include assignee name and avatar
+
+POST /
+- Body: { sprintId, projectId, title, description, type, priority,
+          storyPoints, techTags[], acceptanceCriteria, dueDate }
+- INSERT into tasks
+- Update backlog_items.status = 'in_sprint' if backlog_item_id provided
+- Auto-trigger assignment: POST /api/v1/assignment/assign internally
+- Update sprint planned_points
+- Sync to Jira if integration active
+
+PATCH /:taskId/status
+- Body: { status } → todo, in_progress, in_review, blocked, done
+- UPDATE tasks.status
+- If done: SET completed_at=NOW(), update sprint completed_points
+- If blocked: trigger delay alert check
+- INSERT task_comments with status change event
+- Sync status to Jira
+- Return updated task
+
+PATCH /:taskId
+- Body: { title?, description?, storyPoints?, techTags?, priority?, dueDate? }
+- UPDATE tasks
+- If storyPoints changed: adjust developer_profiles.current_sprint_load
+- Sync to Jira
+
+DELETE /:taskId
+- UPDATE status = 'cancelled'
+- Free up developer capacity: reduce current_sprint_load
+- Update sprint planned_points
+
+POST /:taskId/comments
+- Body: { content, commentType? }
+- INSERT into task_comments
+- Return comment with author info
+
+GET /:taskId/comments
+- Return all comments for task ordered by created_at
+
+POST /:taskId/time-log
+- Body: { hours, workDate, description }
+- INSERT into task_time_logs
+- UPDATE tasks.logged_hours += hours
+
+GET /board/:sprintId
+- Return tasks for Kanban board grouped by status
+- Format: { todo: [], in_progress: [], in_review: [], blocked: [], done: [] }
+- Each task includes: id, title, assignee, storyPoints, priority, techTags, aiRiskScore
+
+================================================================================
+████████████████████████████████████████████████████████████████████████████████
+PROMPT 06 — SPRINT MONITORING & DELAY PREDICTION ROUTES
+████████████████████████████████████████████████████████████████████████████████
+================================================================================
+
+Build the Sprint Monitoring system and Delay Prediction engine routes for the
+AI Sprint Manager. This runs as a scheduled job and also exposes API endpoints.
+
+---
+
+FILE: src/routes/monitoring.routes.js
+Mount at: /api/v1/monitoring
+All routes: auth middleware + orgDb middleware
+
+BUILD THESE ENDPOINTS:
+
+GET /sprint/:sprintId/velocity
+- Calculate current velocity: completed_points / elapsed_days
+- Calculate required velocity: remaining_points / remaining_days
+- Return: { currentVelocity, requiredVelocity, gapPct, onTrack, daysRemaining }
+
+GET /sprint/:sprintId/alerts
+- Return all delay_alerts for sprint
+- Filter: ?acknowledged=false
+- Include: alertType, severity, title, message, suggestion, createdAt
+
+PATCH /alerts/:alertId/acknowledge
+- Body: { actionTaken? }
+- UPDATE delay_alerts.acknowledged=TRUE, acknowledged_by, acknowledged_at
+- If suggestion_action = 'move_to_next_sprint':
+  - Optionally move target_task to next sprint if confirmed
+
+GET /burnout
+- Return all developers with burnout_risk_flag=TRUE
+- Include: name, consecutiveOverSprints, avgOverloadPct, alertLevel
+
+GET /capacity
+- Query v_team_capacity view
+- Return team capacity overview with utilization percentages
+
+---
+
+FILE: src/services/monitoringService.js
+
+Build a MonitoringService class with these methods:
+
+1. takeDailySnapshot(sprintId, orgPool)
+   - Calculate day_number (sprint start to today)
+   - ideal_points_remaining = planned_points - (planned_points/sprint_days * day_number)
+   - actual_points_remaining = planned_points - completed_points
+   - current_velocity = completed_points / day_number
+   - required_velocity = actual_points_remaining / remaining_days
+   - velocity_gap_pct = ((required_velocity - current_velocity) / required_velocity) * 100
+   - delay_risk_score = weighted combination of velocity_gap, blocked_count, team_availability
+   - delay_predicted_days = MAX(0, (actual_remaining/current_velocity) - remaining_days)
+   - INSERT into sprint_progress_snapshots
+   - Call checkDelayThreshold(sprintId, velocity_gap_pct, orgPool)
+
+2. checkDelayThreshold(sprintId, velocityGapPct, orgPool)
+   - Get threshold from org_settings.delay_alert_threshold (default 20%)
+   - If velocityGapPct > threshold:
+     - Find tasks most at risk (in_progress longest without update)
+     - INSERT into delay_alerts with severity based on gap %
+     - If gap > 40%: severity='critical', else 'warning'
+     - Generate suggestion: which task to move, who to reassign
+   - Check for tasks past due_date: INSERT individual task alerts
+
+3. runAllActiveSprintSnapshots()
+   - Query universal_db for all active orgs
+   - For each org: get org pool, query active sprints, call takeDailySnapshot
+   - This runs via Bull cron job every day at 9 AM UTC
+
+---
+
+FILE: src/services/schedulerService.js
+
+Build a Bull queue scheduler:
+
+1. Create Bull queue: 'sprint-monitoring'
+2. Add repeatable job: every day at 09:00 UTC
+   - Job: runAllActiveSprintSnapshots
+3. Create Bull queue: 'merit-recalculation'
+   - Process after each sprint completes
+4. Create Bull queue: 'report-generation'
+   - Process after each sprint completes
+5. Create Bull queue: 'model-retraining'
+   - Run every Sunday at 02:00 UTC
+6. Export queue instances for use in route handlers
+
+================================================================================
+████████████████████████████████████████████████████████████████████████████████
+PROMPT 07 — STANDUP, REPORTS & SKILL GAP ROUTES
+████████████████████████████████████████████████████████████████████████████████
+================================================================================
+
+Build the Standup Summarizer, Sprint Reporter, and Skill Gap Analyzer routes
+for the AI Sprint Manager. These call the Python AI service for LLM processing.
+
+---
+
+FILE: src/routes/standup.routes.js
+Mount at: /api/v1/standup
+All routes: auth middleware + orgDb middleware
+
+BUILD THESE ENDPOINTS:
+
+POST /submit
+- Body: { sprintId, rawInput, inputChannel? }
+- Get developer_id from authenticated user's member_id
+- INSERT into standup_entries
+- Call AI service: POST http://AI_SERVICE_URL/standup/process
+  with { rawInput, developerName, sprintId }
+- AI returns: { completedWork, plannedWork, blockers, summary, hasBlockers }
+- UPDATE standup_entries with extracted fields
+- If hasBlockers:
+  - INSERT blocker task_comment on relevant tasks
+  - Create delay_alert for each blocker
+- Return processed entry
+
+GET /summary/:sprintId/:date
+- Check if standup_summaries exists for sprint+date
+- If not: aggregate all standup_entries for that sprint+date
+  - Count who submitted vs who did not
+  - Call AI service: POST /standup/summarize with all entries
+  - AI returns: { teamSummary, keyBlockers, keyAchievements, actionItems }
+  - INSERT into standup_summaries
+- Return summary with per-member entries
+
+POST /summary/:sprintId/publish
+- Body: { date }
+- Get summary from standup_summaries
+- Post to Slack via Slack service (if configured)
+- UPDATE standup_summaries.slack_posted=TRUE
+- Return confirmation
+
+GET /:sprintId/history
+- Return all standup_entries for sprint grouped by date
+- Show which team members submitted each day
+
+---
+
+FILE: src/routes/report.routes.js
+Mount at: /api/v1/reports
+All routes: auth middleware + orgDb middleware
+
+BUILD THESE ENDPOINTS:
+
+POST /sprint/:sprintId/generate
+- Check sprint status is 'completed'
+- Check no existing report (or force=true in query)
+- Gather all report data:
+  - Sprint details, all tasks, all developer performance
+  - Burndown snapshot data
+  - Delay alerts history
+  - Assignment log outcomes
+  - Standup summaries
+- Call AI service: POST /report/generate with all data
+- AI returns: { executiveSummary, achievements, challenges, recommendations, retroNotes }
+- Build chart data:
+  - burndownData: from sprint_progress_snapshots
+  - velocityTrendData: last 5 sprints velocity
+  - developerContributionData: points per developer
+  - taskDistributionData: count by status/type
+- INSERT into sprint_reports
+- Return full report
+
+GET /sprint/:sprintId
+- Return sprint_reports for sprint
+- Include all chart data arrays for frontend rendering
+
+GET /sprint/:sprintId/export
+- Query: ?format=pdf
+- Call AI service: POST /report/export with report data
+- Return PDF file stream with Content-Type: application/pdf
+- Or return Confluence export URL
+
+GET /velocity
+- Query: ?projectId=&last=5 (last N sprints)
+- Return velocity trend data for chart
+- Include: sprintName, planned, completed, velocity per sprint
+
+GET /team-productivity
+- Return rolling 30-day team metrics
+- Per developer: tasksCompleted, pointsCompleted, completionRate, avgQuality
+
+---
+
+FILE: src/routes/skillgap.routes.js
+Mount at: /api/v1/skill-gap
+All routes: auth middleware + orgDb middleware
+
+BUILD THESE ENDPOINTS:
+
+GET /
+- Query v_skill_gap_frequency view
+- Return skills with: skillName, totalGaps, lastOccurred, businessImpact
+- Filter to last 90 days
+
+GET /report
+- Check if report exists for last 30 days
+- If not: generate new report
+  - Query skill_gap_log for last 30 days grouped by required_skill
+  - Find skills appearing 3+ times
+  - Call AI service: POST /skill-gap/analyze with gap data
+  - AI returns hiring and training recommendations
+  - INSERT into skill_gap_reports
+- Return full report with recommendations
+
+GET /suggestions
+- Quick endpoint returning top 5 most critical skill gaps
+- Each with: skill, frequency, estimatedHireTime, trainingAlternative
+
+================================================================================
+████████████████████████████████████████████████████████████████████████████████
+PROMPT 08 — JIRA & GITHUB INTEGRATION ROUTES
+████████████████████████████████████████████████████████████████████████████████
+================================================================================
+
+Build the Jira and GitHub integration services and webhook handlers for the
+AI Sprint Manager. These sync data bidirectionally with external tools.
+
+---
+
+FILE: src/services/jiraService.js
+
+Build a JiraService class:
+
+1. connect(baseUrl, email, apiToken, orgPool)
+   - Test connection: GET {baseUrl}/rest/api/3/myself
+   - INSERT or UPDATE jira_integration in org branch DB
+   - Return connection status
+
+2. syncBacklog(orgPool)
+   - GET {baseUrl}/rest/api/3/search?jql=project={key} AND sprint is EMPTY
+   - For each issue: INSERT or UPDATE backlog_items
+   - Map: summary→title, description→description, story_points→ai_estimated_points,
+     priority→priority, labels→tech_tags, issuetype→type
+   - INSERT into jira_sync_log
+
+3. syncActiveSprint(orgPool)
+   - GET {baseUrl}/rest/api/3/board/{boardId}/sprint?state=active
+   - Sync sprint issues to tasks table
+
+4. createIssue(taskData, orgPool)
+   - POST {baseUrl}/rest/api/3/issue
+   - Body: { fields: { project, summary, description, issuetype, priority, story_points } }
+   - UPDATE tasks.jira_issue_id with returned key
+
+5. updateAssignee(jiraIssueId, jiraAccountId, orgPool)
+   - PUT {baseUrl}/rest/api/3/issue/{issueId}/assignee
+   - UPDATE tasks.jira_synced=true
+
+6. updateStatus(jiraIssueId, transitionId)
+   - POST {baseUrl}/rest/api/3/issue/{issueId}/transitions
+   - Called when task status changes
+
+7. moveToSprint(jiraIssueId, jiraSprintId)
+   - POST {baseUrl}/rest/agile/1.0/sprint/{sprintId}/issue
+   - Called when delay predictor moves task to next sprint
+
+---
+
+FILE: src/routes/webhook.routes.js
+Mount at: /api/v1/webhooks
+No auth middleware (uses webhook secrets instead)
+
+POST /jira
+- Verify X-Atlassian-Token or compare webhook secret
+- Parse event type from body: { webhookEvent, issue, changelog }
+- INSERT into webhook_events (processed=false)
+- Handle these events:
+  - jira:issue_created → INSERT into backlog_items or tasks
+  - jira:issue_updated → UPDATE task status, assignee, story_points
+  - sprint_started → UPDATE sprint.status = 'active'
+  - sprint_completed → Trigger sprint completion flow
+  - jira:issue_deleted → UPDATE tasks.status = 'cancelled'
+- Mark webhook_events.processed=TRUE
+- Return 200 immediately, process async via Bull queue
+
+POST /github
+- Verify X-Hub-Signature-256 with GITHUB_WEBHOOK_SECRET
+- Parse event from X-GitHub-Event header
+- INSERT into webhook_events
+- Handle events:
+  - push → INSERT into github_events (commits)
+    - Parse commit message for task ID (e.g. "PROJ-123")
+    - Link commit to task, update task progress
+    - Update developer_profiles.total_commits++
+  - pull_request opened → INSERT github_events
+    - Link PR to task via branch name
+    - UPDATE tasks.status = 'in_review'
+  - pull_request closed+merged → INSERT github_events
+    - UPDATE tasks.status = 'done' if merged
+    - UPDATE developer_profiles.total_prs_merged++
+    - Calculate pr_review_hours from opened_at to merged_at
+  - pull_request_review → INSERT github_events
+    - Track review speed
+    - UPDATE reviewer's code review count
+  - Return 200
+
+---
+
+FILE: src/routes/integration.routes.js
+Mount at: /api/v1/integrations
+All routes: auth middleware + orgDb middleware + admin role
+
+BUILD THESE ENDPOINTS:
+
+POST /jira/connect
+- Body: { baseUrl, email, apiToken, projectKey }
+- Call JiraService.connect()
+- Run initial full sync in background queue
+- Return: { connected, projectName, issueCount }
+
+POST /jira/sync
+- Trigger manual full sync via Bull queue
+- Return: { jobId, status: 'queued' }
+
+GET /jira/status
+- Return jira_integration: connected, lastSyncAt, syncStatus, totalSynced
+
+POST /github/connect
+- Body: { githubOrg, repoName, accessToken }
+- Test token: GET https://api.github.com/repos/{org}/{repo}
+- INSERT into github_integration
+- Register webhook on repo via GitHub API
+- Return: { connected, repoFullName }
+
+GET /status
+- Return all integration statuses: jira, github, slack
+- Include last sync time and any errors
+
+================================================================================
+████████████████████████████████████████████████████████████████████████████████
+PROMPT 09 — PYTHON AI SERVICE (FastAPI)
+████████████████████████████████████████████████████████████████████████████████
+================================================================================
+
+Build the Python FastAPI AI service for the AI Sprint Manager. This service
+handles all LLM calls, ML model inference, and AI-heavy processing.
+
+---
+
+FILE: backend/ai-service/app/main.py
+
+FastAPI app with:
+- CORS for api-gateway origin only
+- Routes mounted from separate router files
+- Health check: GET /health
+- Startup event: load ML models from disk
+
+---
+
+FILE: backend/ai-service/app/routes/requirement_routes.py
+Mount at: /requirement
+
+POST /parse
+- Body: { rawText, projectContext? }
+- Call OpenAI/Claude API with system prompt:
+  "You are an Agile BA. Parse this requirement into:
+   title, scope, acceptance_criteria[], tech_tags[], complexity (low/medium/high)"
+- Return structured requirement object as JSON
+
+POST /generate-stories
+- Body: { requirement{}, sprintContext? }
+- Call LLM with prompt to generate 3-6 user stories
+- Each story: title, description, acceptanceCriteria[], techTags[], estimatedPoints
+- Return stories array
+
+---
+
+FILE: backend/ai-service/app/routes/estimation_routes.py
+Mount at: /estimation
+
+POST /story-points
+- Body: { title, description, techTags[], type, historicalData[] }
+- Build feature vector: title_length, desc_length, tech_count,
+  avg_similar_task_points, task_type_encoded
+- Load XGBoost model from disk
+- Predict story points, map to nearest Fibonacci: 1,2,3,5,8,13
+- Return: { predictedPoints, confidence, similarTasks[] }
+
+POST /retrain
+- Body: { trainingData: [{features, actualPoints}] }
+- Retrain XGBoost model with new data
+- Evaluate: MAE, RMSE
+- If better than current: save new model version
+- Return: { newVersion, mae, rmse, improved }
+
+---
+
+FILE: backend/ai-service/app/routes/standup_routes.py
+Mount at: /standup
+
+POST /process
+- Body: { rawInput, developerName, sprintContext? }
+- Call LLM: "Extract from this standup update:
+  completedWork, plannedWork, blockers[], hasMergeConflicts"
+- Return extracted structured data
+
+POST /summarize
+- Body: { entries: [{developerName, completedWork, plannedWork, blockers}] }
+- Call LLM: "Summarize this team standup into:
+  teamSummary, keyBlockers[], keyAchievements[], actionItems[]"
+- Return summary object
+
+---
+
+FILE: backend/ai-service/app/routes/report_routes.py
+Mount at: /report
+
+POST /generate
+- Body: { sprint{}, tasks[], developerPerformance[], alertHistory[] }
+- Build detailed prompt with all sprint data
+- Call LLM to generate:
+  executiveSummary, achievements, challenges, recommendations, retroNotes
+- Return narrative sections
+
+POST /export
+- Body: { reportData{}, format }
+- Generate PDF using ReportLab
+- Return PDF bytes
+
+---
+
+FILE: backend/ai-service/app/routes/skillgap_routes.py
+Mount at: /skill-gap
+
+POST /analyze
+- Body: { gapData: [{skill, count, affectedTasks}] }
+- Call LLM: "Given these skill gaps in a software team,
+  suggest: 1) hiring priorities 2) training courses 3) timeline estimates"
+- Return: { hiringSuggestions[], trainingSuggestions[], summary }
+
+---
+
+FILE: backend/ai-service/requirements.txt
+
+fastapi==0.111.0
+uvicorn[standard]==0.30.0
+openai==1.35.0
+anthropic==0.29.0
+langchain==0.2.5
+langchain-openai==0.1.9
+xgboost==2.0.3
+scikit-learn==1.5.0
+pandas==2.2.2
+numpy==1.26.4
+reportlab==4.2.0
+httpx==0.27.0
+pydantic==2.7.4
+python-dotenv==1.0.1
+psycopg2-binary==2.9.9
+
+================================================================================
+████████████████████████████████████████████████████████████████████████████████
+PROMPT 10 — DOCKER, ENV & FINAL WIRING
+████████████████████████████████████████████████████████████████████████████████
+================================================================================
+
+Wire together the entire AI Sprint Manager backend with Docker Compose, connect
+the Neon DB branch manager to the org provisioning flow, and finalize all
+configuration.
+
+---
+
+FILE: docker-compose.yml
+
+version: '3.9'
+services:
+
+  api-gateway:
+    build: ./backend/api-gateway
+    ports: ["4000:4000"]
+    environment:
+      - NODE_ENV=development
+      - UNIVERSAL_DATABASE_URL=${UNIVERSAL_DATABASE_URL}
+      - NEON_API_KEY=${NEON_API_KEY}
+      - NEON_PROJECT_ID=${NEON_PROJECT_ID}
+      - NEON_BASE_BRANCH_ID=${NEON_BASE_BRANCH_ID}
+      - JWT_SECRET=${JWT_SECRET}
+      - REDIS_URL=redis://redis:6379
+      - AI_SERVICE_URL=http://ai-service:8000
+    depends_on: [redis]
+    volumes: ["./backend/api-gateway:/app", "/app/node_modules"]
+
+  ai-service:
+    build: ./backend/ai-service
+    ports: ["8000:8000"]
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes: ["./backend/ai-service:/app"]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    volumes: ["redis_data:/data"]
+
+  worker:
+    build: ./backend/api-gateway
+    command: node src/workers/index.js
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - UNIVERSAL_DATABASE_URL=${UNIVERSAL_DATABASE_URL}
+      - NEON_API_KEY=${NEON_API_KEY}
+    depends_on: [redis]
+
+volumes:
+  redis_data:
+
+---
+
+FILE: src/workers/index.js
+
+Wire up all Bull queue processors:
+
+1. sprint-monitoring queue processor:
+   - Import MonitoringService
+   - Process 'daily-snapshot' job: call runAllActiveSprintSnapshots()
+
+2. merit-recalculation queue processor:
+   - Process 'recalculate-sprint' job
+   - Get orgPool for job.data.orgId
+   - Call calculate_merit_score stored function for each developer in sprint
+   - Call check_burnout_risk for each developer
+
+3. report-generation queue processor:
+   - Process 'generate-sprint-report' job
+   - Call reportService.generateSprintReport(sprintId, orgPool)
+
+4. jira-sync queue processor:
+   - Process 'full-sync' job
+   - Call JiraService.syncBacklog() and syncActiveSprint()
+
+5. model-retraining queue processor:
+   - Process 'retrain-models' job
+   - Gather last 10 sprints of prediction data
+   - POST to AI service /estimation/retrain
+   - Update ml_model_versions table
+
+---
+
+FINAL WIRING CHECKLIST — verify all of these are connected:
+
+Auth Flow:
+[ ] POST /register → creates global_user → creates org → triggers Neon branch → returns JWT
+[ ] POST /login → validates → creates session → returns JWT with orgId
+[ ] JWT middleware decodes orgId, userId → sets req.user
+[ ] orgDb middleware uses orgId → gets org pool from Neon connection string → sets req.orgDb
+
+Assignment Flow:
+[ ] POST /tasks creates task → calls internal assignment → updates Jira → notifies Slack
+[ ] Assignment reads developer_profiles from org branch pool
+[ ] Assignment result written to assignment_log in org branch
+
+Monitoring Flow:
+[ ] Bull cron fires daily → takes snapshot → checks threshold → inserts delay_alerts
+[ ] Webhooks from Jira and GitHub update task status in real time
+
+Sprint Complete Flow:
+[ ] PATCH /sprints/:id/complete → resets loads → queues merit recalc → queues report gen
+[ ] Merit recalc calls PostgreSQL stored function → updates merit scores
+[ ] Burnout check runs → flags developers → inserts burnout_alerts
+
+Neon Branch Lifecycle:
+[ ] Org signup → create branch → save connection string → org DB ready
+[ ] Org suspend → suspend branch endpoint → branch paused → no billing
+[ ] Org delete → delete branch → data removed
+
+================================================================================
+END OF ROUTE PROMPTS
+================================================================================
+Total Prompts:    10
+Total Routes:     ~65 API endpoints
+Total Services:   8 (Neon, DB Pool, Jira, GitHub, Monitoring, Standup, Report, Skill Gap)
+Total AI Routes:  6 (Requirement, Estimation, Standup, Report, SkillGap, Export)
+DB Architecture:  universal_db (Supabase) + Neon branch per org
+Queue Jobs:       5 (monitoring, merit, report, jira-sync, retraining)
+
+Run prompts in order 01 → 10 for a complete, working backend.
+================================================================================

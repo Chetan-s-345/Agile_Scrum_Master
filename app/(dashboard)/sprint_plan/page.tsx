@@ -29,7 +29,7 @@ export default function SprintPlannerPage() {
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
-      <div className="max-w-7xl mx-auto">
+      <div className="w-full">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">Sprint Planner</h1>

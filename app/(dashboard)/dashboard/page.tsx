@@ -1,10 +1,30 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { AlertCircle, TrendingUp, Users, CheckCircle, Clock } from 'lucide-react';
+import { getMe } from "@/lib/org-member-auth";
 
 export default function DashboardPage() {
+  const router = useRouter();
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const me = await getMe();
+      if (cancelled) return;
+      const hasOrg = Boolean(Array.isArray(me?.memberships) && me!.memberships!.length);
+      if (me?.user && !hasOrg) {
+        router.replace('/settings/org');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
   // Mock data
   const sprintData = [
     { week: 'W1', velocity: 24, required: 30 },
@@ -83,7 +103,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
-      <div className="max-w-7xl mx-auto">
+      <div className="w-full">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">Dashboard</h1>

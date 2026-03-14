@@ -6,12 +6,14 @@
 <br/>
 
 <!-- Badges Row 1 -->
+
 [![Made With Love](https://img.shields.io/badge/Made%20with-%E2%9D%A4-red?style=for-the-badge)](https://github.com/deekshithgowda85)
 [![AI Powered](https://img.shields.io/badge/AI-Powered-2563EB?style=for-the-badge&logo=openai&logoColor=white)](https://github.com/deekshithgowda85/ai-sprint-manager)
 [![License MIT](https://img.shields.io/badge/License-MIT-06B6D4?style=for-the-badge)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-10B981?style=for-the-badge)](CONTRIBUTING.md)
 
 <!-- Badges Row 2 -->
+
 [![Next.js](https://img.shields.io/badge/Next.js-14-black?style=for-the-badge&logo=nextdotjs)](https://nextjs.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Python-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgresql.org)
@@ -20,11 +22,12 @@
 <br/>
 
 <!-- Stats Badges -->
-![GitHub Stars](https://img.shields.io/github/stars/deekshithgowda85/Agile_Scrum_Master?style=social)
-![GitHub Forks](https://img.shields.io/github/forks/deekshithgowda85/Agile_Scrum_Master?style=social)
-![GitHub Watchers](https://img.shields.io/github/watchers/deekshithgowda85/Agile_Scrum_Master?style=social)
-![GitHub Issues](https://img.shields.io/github/issues/deekshithgowda85/Agile_Scrum_Masterai-sprint-manager?color=red)
-![GitHub Last Commit](https://img.shields.io/github/last-commit/deekshithgowda85/Agile_Scrum_Master?color=2563EB)
+
+![GitHub Stars](https://img.shields.io/github/stars/deekshithgowda85/ai-sprint-manager?style=social)
+![GitHub Forks](https://img.shields.io/github/forks/deekshithgowda85/ai-sprint-manager?style=social)
+![GitHub Watchers](https://img.shields.io/github/watchers/deekshithgowda85/ai-sprint-manager?style=social)
+![GitHub Issues](https://img.shields.io/github/issues/deekshithgowda85/ai-sprint-manager?color=red)
+![GitHub Last Commit](https://img.shields.io/github/last-commit/deekshithgowda85/ai-sprint-manager?color=2563EB)
 
 </div>
 
@@ -71,7 +74,9 @@ Jira Sync Agent updates everything automatically
 <td width="50%">
 
 ### 🎯 Auto Employee Selector
+
 Automatically assigns the **right developer** to every task based on:
+
 - ✅ Verified tech stack match
 - ✅ Real-time availability check
 - ✅ Merit score ranking
@@ -81,7 +86,9 @@ Automatically assigns the **right developer** to every task based on:
 <td width="50%">
 
 ### 📋 Sprint Auto-Planner
+
 Selects which backlog tasks go into the next sprint automatically:
+
 - ✅ Business priority scoring
 - ✅ Dependency mapping
 - ✅ Team capacity awareness
@@ -93,7 +100,9 @@ Selects which backlog tasks go into the next sprint automatically:
 <td width="50%">
 
 ### 🧩 Requirement-to-Story Converter
+
 PM writes one line → AI generates full Agile stories:
+
 - ✅ LLM-powered understanding
 - ✅ Auto-generated acceptance criteria
 - ✅ Sub-task breakdown
@@ -103,7 +112,9 @@ PM writes one line → AI generates full Agile stories:
 <td width="50%">
 
 ### 📏 Story Point Estimator
+
 Predicts task complexity using ML on your team's history:
+
 - ✅ XGBoost regression model
 - ✅ Fibonacci scale output (1–13)
 - ✅ Trained on your sprint data
@@ -115,7 +126,9 @@ Predicts task complexity using ML on your team's history:
 <td width="50%">
 
 ### ⚠️ Delay Predictor
+
 Warns about sprint delays **before** they happen:
+
 - ✅ Daily velocity monitoring
 - ✅ GitHub commit + PR tracking
 - ✅ Specific corrective suggestions
@@ -125,7 +138,9 @@ Warns about sprint delays **before** they happen:
 <td width="50%">
 
 ### 🔥 Burnout Detector
+
 Protects developers from overload:
+
 - ✅ Multi-sprint workload tracking
 - ✅ Auto-reduces assignment weight
 - ✅ Private manager alerts
@@ -137,7 +152,9 @@ Protects developers from overload:
 <td width="50%">
 
 ### 🎙️ Standup Summarizer
+
 Turns standups into structured logs automatically:
+
 - ✅ Slack channel integration
 - ✅ LLM blocker extraction
 - ✅ Auto Jira blocker tickets
@@ -147,7 +164,9 @@ Turns standups into structured logs automatically:
 <td width="50%">
 
 ### 📊 Auto Sprint Reporter
+
 Zero-effort sprint reports at every sprint end:
+
 - ✅ Velocity and burndown charts
 - ✅ Bottleneck analysis
 - ✅ Team productivity metrics
@@ -159,7 +178,9 @@ Zero-effort sprint reports at every sprint end:
 <td width="50%">
 
 ### 🏆 Merit Leaderboard
+
 Transparent, data-driven developer performance:
+
 - ✅ Auto-updated after every sprint
 - ✅ Trend tracking (up/down/stable)
 - ✅ Fair and bias-free scoring
@@ -169,7 +190,9 @@ Transparent, data-driven developer performance:
 <td width="50%">
 
 ### 🔄 Self-Learning Model
+
 The AI gets smarter after every sprint:
+
 - ✅ Automated model retraining
 - ✅ Prediction accuracy tracking
 - ✅ Model version management
@@ -282,6 +305,7 @@ New Task Created
 <div align="center">
 
 ### Frontend
+
 ![Next.js](https://img.shields.io/badge/Next.js_14-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)
@@ -289,23 +313,27 @@ New Task Created
 ![Zustand](https://img.shields.io/badge/Zustand-State-brown?style=for-the-badge)
 
 ### Backend
+
 ![Node.js](https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
 ![Python](https://img.shields.io/badge/Python_3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)
 
 ### AI & ML
+
 ![OpenAI](https://img.shields.io/badge/OpenAI_GPT--4-412991?style=for-the-badge&logo=openai&logoColor=white)
 ![LangChain](https://img.shields.io/badge/LangChain-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)
 ![scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?style=for-the-badge&logo=scikitlearn&logoColor=white)
 ![XGBoost](https://img.shields.io/badge/XGBoost-ML-blue?style=for-the-badge)
 
 ### Database & Storage
+
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-336791?style=for-the-badge&logo=postgresql&logoColor=white)
 ![Elasticsearch](https://img.shields.io/badge/Elasticsearch-005571?style=for-the-badge&logo=elasticsearch&logoColor=white)
 ![Prisma](https://img.shields.io/badge/Prisma-2D3748?style=for-the-badge&logo=prisma&logoColor=white)
 
 ### DevOps & Integrations
+
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)
 ![Jira](https://img.shields.io/badge/Jira-0052CC?style=for-the-badge&logo=jira&logoColor=white)
@@ -479,6 +507,7 @@ Content-Type: application/json
 ```
 
 **Response:**
+
 ```json
 {
   "assigned_to": {
@@ -604,14 +633,14 @@ git push origin feature/amazing-feature
 
 ### Commit Convention
 
-| Prefix | Use For |
-|---|---|
-| `feat:` | New feature |
-| `fix:` | Bug fix |
-| `docs:` | Documentation |
+| Prefix      | Use For          |
+| ----------- | ---------------- |
+| `feat:`     | New feature      |
+| `fix:`      | Bug fix          |
+| `docs:`     | Documentation    |
 | `refactor:` | Code refactoring |
-| `test:` | Tests |
-| `chore:` | Build or tooling |
+| `test:`     | Tests            |
+| `chore:`    | Build or tooling |
 
 ---
 
@@ -640,6 +669,7 @@ git push origin feature/amazing-feature
 <img src="https://avatars.githubusercontent.com/u/deekshithgowda85?v=4" width="100" style="border-radius:50%"/>
 
 ### Deekshith Gowda
+
 **Full Stack AI Developer**
 
 [![GitHub](https://img.shields.io/badge/GitHub-deekshithgowda85-181717?style=for-the-badge&logo=github)](https://github.com/deekshithgowda85)

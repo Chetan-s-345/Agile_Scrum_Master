@@ -98,9 +98,6 @@ export function Sidebar() {
         </nav>
 
       </aside>
-
-      {/* Content Padding */}
-      <div className="lg:ml-64" />
     </>
   );
 }
