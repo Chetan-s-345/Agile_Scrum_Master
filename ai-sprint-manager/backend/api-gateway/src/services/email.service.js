@@ -10,6 +10,44 @@ function isEmailConfigured() {
   return Boolean(env.BREVO_API_KEY && env.EMAIL_FROM);
 }
 
+function emailConfigState() {
+  return {
+    hasBrevoApiKey: Boolean(env.BREVO_API_KEY),
+    hasEmailFrom: Boolean(env.EMAIL_FROM),
+    from: env.EMAIL_FROM ? String(env.EMAIL_FROM) : null,
+    fromName: env.EMAIL_FROM_NAME ? String(env.EMAIL_FROM_NAME) : null,
+    replyTo: env.EMAIL_REPLY_TO ? String(env.EMAIL_REPLY_TO) : null,
+    nodeEnv: env.NODE_ENV,
+  };
+}
+
+function normalizeAxiosError(err) {
+  const status = err?.response?.status;
+  const data = err?.response?.data;
+  const message = err?.message || 'Email provider request failed';
+  return { status, data, message };
+}
+
+function makeEmailNotConfiguredError(context) {
+  const state = emailConfigState();
+  const missing = [
+    state.hasBrevoApiKey ? null : 'BREVO_API_KEY',
+    state.hasEmailFrom ? null : 'EMAIL_FROM',
+  ].filter(Boolean);
+
+  return Object.assign(
+    new Error(`Email service not configured (missing: ${missing.join(', ') || 'unknown'})`),
+    {
+      code: 'EMAIL_NOT_CONFIGURED',
+      statusCode: 500,
+      details: {
+        ...state,
+        context: context || null,
+      },
+    }
+  );
+}
+
 async function sendTransactionalEmail({
   to,
   subject,
@@ -18,10 +56,7 @@ async function sendTransactionalEmail({
   replyTo,
 }) {
   if (!isEmailConfigured()) {
-    if (env.NODE_ENV !== 'production') {
-      console.log('[dev] Email delivery skipped (BREVO_API_KEY/EMAIL_FROM not set):', { to, subject });
-    }
-    return { skipped: true };
+    throw makeEmailNotConfiguredError({ to, subject });
   }
 
   const sender = {
@@ -38,16 +73,39 @@ async function sendTransactionalEmail({
     ...(replyTo ? { replyTo } : {}),
   };
 
-  await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
-    headers: {
-      'api-key': env.BREVO_API_KEY,
-      'content-type': 'application/json',
-      accept: 'application/json',
-    },
-    timeout: 15000,
-  });
+  try {
+    const resp = await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
+      headers: {
+        'api-key': env.BREVO_API_KEY,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      timeout: 15000,
+    });
 
-  return { sent: true };
+    return {
+      sent: true,
+      provider: 'brevo',
+      messageId: resp?.data?.messageId || resp?.data?.message_id || null,
+    };
+  } catch (err) {
+    const norm = normalizeAxiosError(err);
+    throw Object.assign(
+      new Error(
+        `Brevo email send failed${norm.status ? ` (HTTP ${norm.status})` : ''}: ${norm.message}`
+      ),
+      {
+        code: 'EMAIL_SEND_FAILED',
+        statusCode: 502,
+        details: {
+          provider: 'brevo',
+          status: norm.status || null,
+          response: norm.data || null,
+        },
+        cause: err,
+      }
+    );
+  }
 }
 
 function buildVerifyEmailContent({ fullName, orgName, verifyUrl }) {
@@ -112,6 +170,10 @@ function buildInvitationContent({ orgName, role, invitedByName, acceptUrl }) {
 class EmailService {
   isConfigured() {
     return isEmailConfigured();
+  }
+
+  configState() {
+    return emailConfigState();
   }
 
   frontendUrl(path) {

@@ -16,6 +16,27 @@ export type OrgMember = {
   role: string;
 };
 
+export type OrgInvitation = {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  token?: string;
+  created_at?: string;
+  expires_at?: string;
+};
+
+export type EmailSendResult = {
+  sent: boolean;
+  provider?: string;
+  messageId?: string;
+  error?: string;
+  message?: string;
+  code?: string;
+  statusCode?: number | null;
+  details?: unknown;
+};
+
 export async function getMe(): Promise<MeResponse | null> {
   const resp = await fetch("/api/auth/me", { cache: "no-store" });
   if (!resp.ok) return null;
@@ -35,7 +56,10 @@ export async function listMembers(params?: { page?: number; limit?: number }): P
   return { members: Array.isArray(data.members) ? (data.members as OrgMember[]) : [] };
 }
 
-export async function inviteMember(payload: { email: string; role: string }): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+export async function inviteMember(payload: { email: string; role: string }): Promise<
+  | { ok: true; invitation?: OrgInvitation; email?: EmailSendResult }
+  | { ok: false; error: string; status: number }
+> {
   const resp = await fetch("/api/org/members/invite", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -44,11 +68,38 @@ export async function inviteMember(payload: { email: string; role: string }): Pr
   });
 
   const data = await resp.json().catch(() => null);
-  if (resp.ok) return { ok: true };
+  if (resp.ok) {
+    return {
+      ok: true,
+      invitation: (data?.invitation || data?.invite || undefined) as OrgInvitation | undefined,
+      email: (data?.email || undefined) as EmailSendResult | undefined,
+    };
+  }
   return {
     ok: false,
     status: resp.status,
     error: String(data?.error || "Invite failed"),
+  };
+}
+
+export async function listInvitations(): Promise<
+  | { ok: true; invitations: OrgInvitation[] }
+  | { ok: false; error: string; status: number }
+> {
+  const resp = await fetch("/api/org/invitations", { cache: "no-store" });
+  const data = await resp.json().catch(() => null);
+  if (resp.ok) {
+    const invitations = Array.isArray(data?.invitations)
+      ? (data.invitations as OrgInvitation[])
+      : Array.isArray(data?.items)
+        ? (data.items as OrgInvitation[])
+        : [];
+    return { ok: true, invitations };
+  }
+  return {
+    ok: false,
+    status: resp.status,
+    error: String((data && (data.error || data.message)) || "Failed to load invitations"),
   };
 }
 

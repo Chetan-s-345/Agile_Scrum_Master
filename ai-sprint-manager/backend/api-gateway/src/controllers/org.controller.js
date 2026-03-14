@@ -8,8 +8,9 @@ const { Pool, Client } = require('pg');
 
 const { env } = require('../config/env');
 const { db } = require('../config/database');
-const { NeonBranchManager } = require('../config/neon');
+const { NeonProjectManager } = require('../config/neon');
 const { emailService } = require('../services/email.service');
+const { logger } = require('../middleware/logger');
 const {
   updateSettingsSchema,
   listMembersQuerySchema,
@@ -205,7 +206,6 @@ async function getCurrentOrg(req, res, next) {
         logoUrl: org.logo_url,
         status: org.plan_status,
         trialEndsAt: org.trial_ends_at,
-        neonBranchId: org.neon_branch_id,
         dbProvisioned: org.db_provisioned,
       },
       plan: org.plan_slug ? { slug: org.plan_slug, name: org.plan_name } : null,
@@ -218,7 +218,7 @@ async function getCurrentOrg(req, res, next) {
 }
 
 async function createOrg(req, res, next) {
-  let createdBranchId = null;
+  let createdProjectId = null;
 
   try {
     if (!req.user?.userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -269,7 +269,7 @@ async function createOrg(req, res, next) {
 
       const mode = env.TENANT_DB_PROVISIONING_MODE;
       let connectionString = null;
-      let neonBranchId = null;
+      let neonProjectId = null;
 
       if (mode === 'manual') {
         connectionString = String(parsed.data.tenantDbConnectionString || '').trim();
@@ -299,30 +299,41 @@ async function createOrg(req, res, next) {
           });
         }
       } else {
-        const neon = new NeonBranchManager();
-        let branch;
+        const neon = new NeonProjectManager();
+        let project;
         try {
-          branch = await neon.createOrgBranch(org.id, org.slug);
-          createdBranchId = branch.branchId;
-          neonBranchId = branch.branchId;
+          project = await neon.createOrgProject(org.id, org.slug);
+          createdProjectId = project.projectId;
+          neonProjectId = project.projectId;
         } catch (e) {
           const status = e?.status || e?.cause?.status;
           if (status === 401 || status === 403) {
             throw Object.assign(
-              new Error('Neon API authentication failed. Check NEON_API_KEY and NEON_PROJECT_ID.'),
+              new Error('Neon API authentication failed. Check NEON_API_KEY.'),
               { statusCode: 500, cause: e }
             );
           }
           throw Object.assign(new Error('Database unavailable'), { statusCode: 503, cause: e });
         }
 
-        connectionString = branch.connectionString;
-        if (!connectionString) {
-          try {
-            connectionString = await neon.getOrgConnectionString(org.id);
-          } catch (e) {
-            throw Object.assign(new Error('Database unavailable'), { statusCode: 503, cause: e });
+        connectionString = project.connectionString;
+
+        // Project-per-org starts empty; apply tenant schema before seeding.
+        try {
+          await ensureTenantSchema(connectionString);
+        } catch (e) {
+          if (e?.code === '42501') {
+            throw Object.assign(
+              new Error(
+                'Tenant database user lacks permissions to initialize schema (needs CREATE EXTENSION/TABLE/INDEX).'
+              ),
+              { statusCode: 400, cause: e }
+            );
           }
+          throw Object.assign(new Error('Failed to initialize tenant database schema'), {
+            statusCode: 400,
+            cause: e,
+          });
         }
       }
 
@@ -334,7 +345,7 @@ async function createOrg(req, res, next) {
         if (e?.code === '42P01') {
           throw Object.assign(
             new Error(
-              'Tenant database is missing required schema. Ensure PART 2 (tenant schema) from init.sql has been applied to that database/branch.'
+              'Tenant database is missing required schema. Ensure PART 2 (tenant schema) from init.sql has been applied to that database.'
             ),
             { statusCode: 400, cause: e }
           );
@@ -344,7 +355,7 @@ async function createOrg(req, res, next) {
 
       await client.query(
         'UPDATE organizations SET neon_branch_id = $1, db_connection_string = $2, db_provisioned = TRUE WHERE id = $3',
-        [neonBranchId ? String(neonBranchId) : null, String(connectionString), org.id]
+        [neonProjectId ? String(neonProjectId) : null, String(connectionString), org.id]
       );
 
       await client.query(
@@ -389,10 +400,10 @@ async function createOrg(req, res, next) {
 
     return res.status(201).json(result);
   } catch (err) {
-    if (createdBranchId && env.TENANT_DB_PROVISIONING_MODE === 'neon') {
+    if (createdProjectId && env.TENANT_DB_PROVISIONING_MODE === 'neon') {
       try {
-        const neon = new NeonBranchManager();
-        await neon.deleteBranch(String(createdBranchId));
+        const neon = new NeonProjectManager();
+        await neon.deleteProject(String(createdProjectId));
       } catch {
         // best-effort cleanup
       }
@@ -458,6 +469,55 @@ async function updateSettings(req, res, next) {
     });
 
     return res.status(200).json({ ok: true });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function deleteOrg(req, res, next) {
+  try {
+    const orgId = req.user?.orgId;
+    if (!orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+    if (!requireRole(req, ['owner'])) return res.status(403).json({ error: 'Forbidden' });
+
+    const result = await db.transaction(db.universalPool, async (client) => {
+      const orgResp = await client.query(
+        'SELECT id, slug, name, is_active FROM organizations WHERE id = $1 LIMIT 1',
+        [String(orgId)]
+      );
+      const org = orgResp.rows[0];
+      if (!org) throw Object.assign(new Error('Organization not found'), { statusCode: 404 });
+      if (org.is_active === false) {
+        return { orgId: String(org.id), slug: String(org.slug), alreadyDeleted: true };
+      }
+
+      await client.query(
+        "UPDATE organizations SET is_active = FALSE, plan_status = 'cancelled', updated_at = NOW() WHERE id = $1",
+        [String(orgId)]
+      );
+
+      await client.query('UPDATE org_members SET is_active = FALSE WHERE org_id = $1', [String(orgId)]);
+      await client.query('UPDATE auth_sessions SET is_active = FALSE WHERE org_id = $1', [String(orgId)]);
+
+      // Best-effort: cancel pending invitations + subscriptions if schema supports it.
+      try {
+        await client.query("UPDATE invitations SET status = 'cancelled' WHERE org_id = $1 AND status = 'pending'", [String(orgId)]);
+      } catch {
+        // ignore
+      }
+      try {
+        await client.query(
+          "UPDATE subscriptions SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, NOW()) WHERE org_id = $1 AND status <> 'cancelled'",
+          [String(orgId)]
+        );
+      } catch {
+        // ignore
+      }
+
+      return { orgId: String(org.id), slug: String(org.slug), deleted: true };
+    });
+
+    return res.status(200).json({ ok: true, ...result });
   } catch (err) {
     return next(err);
   }
@@ -572,24 +632,99 @@ async function inviteMember(req, res, next) {
       invite.token
     )}`;
 
+    let emailResult = null;
+
     try {
-      await emailService.sendInvitationEmail({
+      emailResult = await emailService.sendInvitationEmail({
         toEmail: invite.email,
         orgName: orgInfo?.name,
         role: invite.role,
         invitedByName: inviterName,
         acceptUrl,
       });
+
+      try {
+        await db.universalPool.query(
+          `INSERT INTO global_audit_log (actor_user_id, org_id, action, resource_type, resource_id, metadata, ip_address, user_agent)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            String(req.user.userId),
+            String(req.user.orgId),
+            'email.invitation.sent',
+            'invitation',
+            invite.id,
+            {
+              to: invite.email,
+              provider: emailResult?.provider || 'brevo',
+              messageId: emailResult?.messageId || null,
+            },
+            req.ip,
+            req.get('user-agent') || null,
+          ]
+        );
+      } catch {
+        // best-effort
+      }
     } catch (e) {
+      logger.warn('email.invitation_send_failed', {
+        to: invite.email,
+        code: e?.code,
+        statusCode: e?.statusCode,
+        message: e?.message || String(e),
+      });
+
+      try {
+        await db.universalPool.query(
+          `INSERT INTO global_audit_log (actor_user_id, org_id, action, resource_type, resource_id, metadata, ip_address, user_agent)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            String(req.user.userId),
+            String(req.user.orgId),
+            'email.invitation.failed',
+            'invitation',
+            invite.id,
+            {
+              to: invite.email,
+              code: e?.code || null,
+              statusCode: e?.statusCode || null,
+              details: e?.details || null,
+              message: e?.message ? String(e.message) : String(e),
+            },
+            req.ip,
+            req.get('user-agent') || null,
+          ]
+        );
+      } catch {
+        // best-effort
+      }
+
       if (env.NODE_ENV !== 'production') {
         console.warn('[dev] Failed to send invitation email:', e?.message || e);
       }
+
+      emailResult = {
+        sent: false,
+        provider: 'brevo',
+        code: e?.code || null,
+        statusCode: e?.statusCode || null,
+        message: e?.message ? String(e.message) : 'Failed to send invitation email',
+      };
     }
 
-    return res.status(201).json({ invitation: invite });
+    return res.status(201).json({ invitation: invite, email: emailResult });
   } catch (err) {
     return next(err);
   }
+}
+
+async function emailStatus(req, res) {
+  if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+  if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
+
+  return res.status(200).json({
+    configured: emailService.isConfigured(),
+    config: emailService.configState(),
+  });
 }
 
 async function removeMember(req, res, next) {
@@ -754,6 +889,12 @@ async function acceptInvitation(req, res, next) {
           verifyUrl,
         });
       } catch (e) {
+        logger.warn('email.verify_send_failed_invite_accept', {
+          to: normalizedEmail,
+          code: e?.code,
+          statusCode: e?.statusCode,
+          message: e?.message || String(e),
+        });
         if (env.NODE_ENV !== 'production') {
           console.warn('[dev] Failed to send verification email (invite accept):', e?.message || e);
           console.log(`[dev] verify-email token for ${normalizedEmail}: ${verifyToken}`);
@@ -814,41 +955,37 @@ async function dbStatus(req, res, next) {
     if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
     if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
 
-    if (env.TENANT_DB_PROVISIONING_MODE !== 'neon') {
-      return res.status(400).json({ error: 'Neon provisioning mode is disabled' });
-    }
-
     const orgResp = await db.universalPool.query(
-      'SELECT neon_branch_id FROM organizations WHERE id = $1',
+      'SELECT db_provisioned, db_connection_string, neon_branch_id FROM organizations WHERE id = $1',
       [String(req.user.orgId)]
     );
-    const neonBranchId = orgResp.rows[0]?.neon_branch_id;
-    if (!neonBranchId) return res.status(404).json({ error: 'Neon branch not configured' });
+    const row = orgResp.rows[0];
+    if (!row) return res.status(404).json({ error: 'Organization not found' });
 
-    const neon = new NeonBranchManager();
-    const metrics = await neon.getBranchMetrics(String(neonBranchId));
-    const branches = await neon.listAllBranches();
-    const state = branches.find((b) => String(b.branchId) === String(neonBranchId))?.state || null;
+    const provider = env.TENANT_DB_PROVISIONING_MODE;
+    const provisioned = Boolean(row.db_provisioned);
+    const projectId = provider === 'neon' ? (row.neon_branch_id ? String(row.neon_branch_id) : null) : null;
 
-    const storageBytes =
-      metrics?.storageBytes ??
-      metrics?.storage_bytes ??
-      metrics?.metrics?.storage_bytes ??
-      metrics?.metrics?.storageBytes ??
-      null;
-    const computeTimeSeconds =
-      metrics?.computeTimeSeconds ??
-      metrics?.compute_time_seconds ??
-      metrics?.metrics?.compute_time_seconds ??
-      metrics?.metrics?.computeTimeSeconds ??
-      null;
+    let connected = false;
+    if (row.db_connection_string) {
+      try {
+        const pool = poolFromConnectionString(String(row.db_connection_string));
+        await pool.query('SELECT 1');
+        connected = true;
+        await pool.end();
+      } catch {
+        connected = false;
+      }
+    }
+
+    const status = connected ? 'connected' : provisioned ? 'provisioned' : 'not_provisioned';
 
     return res.status(200).json({
-      branchId: String(neonBranchId),
-      storageBytes,
-      computeTimeSeconds,
-      state,
-      raw: metrics,
+      provider,
+      status,
+      provisioned,
+      connected,
+      projectId,
     });
   } catch (err) {
     return next(err);
@@ -858,6 +995,8 @@ async function dbStatus(req, res, next) {
 module.exports = {
   createOrg,
   getCurrentOrg,
+  emailStatus,
+  deleteOrg,
   updateSettings,
   listMembers,
   inviteMember,

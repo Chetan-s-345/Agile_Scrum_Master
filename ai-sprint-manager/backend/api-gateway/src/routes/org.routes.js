@@ -13,6 +13,8 @@ router.use(authMiddleware);
 
 router.post('/', orgController.createOrg);
 router.get('/', orgController.getCurrentOrg);
+router.delete('/', orgController.deleteOrg);
+router.get('/email/status', orgController.emailStatus);
 router.patch('/settings', orgDbMiddleware, orgController.updateSettings);
 router.get('/members', orgDbMiddleware, orgController.listMembers);
 router.post('/members/invite', orgDbMiddleware, orgController.inviteMember);

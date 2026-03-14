@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
 function getGatewayBaseUrl() {
-  return process.env.API_GATEWAY_URL || "http://localhost:4000";
+  return process.env.API_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 }
 
 export async function GET() {

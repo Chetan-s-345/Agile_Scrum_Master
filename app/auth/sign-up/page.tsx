@@ -32,7 +32,7 @@ export default function SignUpPage() {
       if (response.ok) {
         const data = await response.json();
         if (data?.requiresOrgSetup) {
-          router.push("/settings/org");
+          router.push("/org");
         } else {
           router.push("/dashboard");
         }

@@ -80,8 +80,8 @@ CREATE TABLE organizations (
     trial_ends_at       TIMESTAMP,
     db_name             VARCHAR(100) UNIQUE,                 -- org_{id}_db
     db_host             VARCHAR(200),                        -- isolated DB host (for enterprise)
-    neon_branch_id      VARCHAR(200),                        -- Neon branch id for this org (multi-tenant isolation)
-    db_connection_string TEXT,                               -- Neon connection string for this org branch (RW endpoint)
+    neon_branch_id      VARCHAR(200),                        -- Neon project id for this org (legacy column name)
+    db_connection_string TEXT,                               -- Tenant DB connection string for this org
     db_provisioned      BOOLEAN DEFAULT FALSE,
     domain              VARCHAR(200),                        -- custom domain for SSO
     is_active           BOOLEAN DEFAULT TRUE,

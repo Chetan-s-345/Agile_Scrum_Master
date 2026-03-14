@@ -67,7 +67,7 @@ export function Navbar() {
 								{activeMembership?.org?.name || activeMembership?.org?.slug ? (
 									activeMembership.org.name || activeMembership.org.slug
 								) : (
-									<Link href="/settings/org" className="hover:underline">
+									<Link href="/org" className="hover:underline">
 										Create Org
 									</Link>
 								)}

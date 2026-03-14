@@ -3,7 +3,7 @@
 import { AlertTriangle, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { inviteMember, listMembers, type OrgMember } from "@/lib/org-member-auth";
+import { inviteMember, listInvitations, listMembers, type OrgInvitation, type OrgMember } from "@/lib/org-member-auth";
 
 type DeveloperListItem = {
   id: string;
@@ -48,6 +48,10 @@ export default function DevelopersPage() {
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteStatus, setInviteStatus] = useState<string | null>(null);
+
+  const [requests, setRequests] = useState<OrgInvitation[]>([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
+  const [requestsError, setRequestsError] = useState<string | null>(null);
 
   const [memberId, setMemberId] = useState("");
   const [primaryRole, setPrimaryRole] = useState("frontend");
@@ -106,6 +110,24 @@ export default function DevelopersPage() {
     }
 
     setLoading(false);
+
+    // Load sent requests (pending invites)
+    void loadRequests();
+  }
+
+  async function loadRequests() {
+    setRequestsLoading(true);
+    setRequestsError(null);
+    const inv = await listInvitations();
+    if (!inv.ok) {
+      // Most common: 403 when not owner/admin
+      setRequests([]);
+      setRequestsError(inv.status === 403 ? "Requires owner/admin." : inv.error);
+      setRequestsLoading(false);
+      return;
+    }
+    setRequests(Array.isArray(inv.invitations) ? inv.invitations : []);
+    setRequestsLoading(false);
   }
 
   useEffect(() => {
@@ -212,10 +234,25 @@ export default function DevelopersPage() {
       return;
     }
 
-    setInviteStatus("Invite sent.");
+    if (result.email && result.email.sent === false) {
+      setInviteError(String(result.email.error || result.email.message || "Invite created but email failed to send."));
+    } else if (result.email?.messageId) {
+      setInviteStatus(`Invite sent (messageId: ${result.email.messageId}).`);
+    } else {
+      setInviteStatus("Invite sent.");
+    }
+
     setInviteEmail("");
+    void loadRequests();
     setInviteLoading(false);
   }
+
+  const formatDateTime = (value?: string) => {
+    if (!value) return "-";
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return value;
+    return d.toLocaleString();
+  };
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
@@ -290,6 +327,63 @@ export default function DevelopersPage() {
                   {inviteLoading ? "Sending…" : "Send Invite"}
                 </button>
               </form>
+
+              <div className="mt-6 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-black p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-900 dark:text-white">Requests Sent</h4>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Pending invitations that haven’t been accepted yet.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void loadRequests()}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-800 transition text-xs"
+                  >
+                    Refresh
+                  </button>
+                </div>
+
+                {requestsError ? <p className="mt-3 text-sm text-red-600 dark:text-red-400">{requestsError}</p> : null}
+
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 dark:border-zinc-800 text-left text-slate-600 dark:text-slate-300">
+                        <th className="py-2 pr-4 font-medium">Email</th>
+                        <th className="py-2 pr-4 font-medium">Role</th>
+                        <th className="py-2 pr-4 font-medium">Created</th>
+                        <th className="py-2 pr-4 font-medium">Expires</th>
+                        <th className="py-2 pr-0 font-medium">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {requestsLoading ? (
+                        <tr>
+                          <td colSpan={5} className="py-3 text-slate-600 dark:text-slate-300">
+                            Loading…
+                          </td>
+                        </tr>
+                      ) : requests.length ? (
+                        requests.map((r) => (
+                          <tr key={r.id} className="border-b border-slate-100 dark:border-zinc-900">
+                            <td className="py-2 pr-4 text-slate-900 dark:text-white">{r.email}</td>
+                            <td className="py-2 pr-4 text-slate-700 dark:text-slate-200">{r.role}</td>
+                            <td className="py-2 pr-4 text-slate-700 dark:text-slate-200">{formatDateTime(r.created_at)}</td>
+                            <td className="py-2 pr-4 text-slate-700 dark:text-slate-200">{formatDateTime(r.expires_at)}</td>
+                            <td className="py-2 pr-0 text-slate-700 dark:text-slate-200">{r.status || "pending"}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={5} className="py-3 text-slate-600 dark:text-slate-300">
+                            No requests sent yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
 
             <div>
