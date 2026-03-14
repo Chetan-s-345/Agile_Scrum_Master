@@ -61,7 +61,7 @@ export default function TaskBoardPage() {
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
-      <div className="max-w-7xl mx-auto">
+      <div className="w-full">
         {/* Header */}
         <div className="mb-8 flex items-center justify-between">
           <div>

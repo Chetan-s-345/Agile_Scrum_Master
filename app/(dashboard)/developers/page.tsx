@@ -1,35 +1,398 @@
 "use client";
 
-import { TrendingUp, AlertTriangle } from 'lucide-react';
+import { AlertTriangle, TrendingUp } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { inviteMember, listMembers, type OrgMember } from "@/lib/org-member-auth";
+
+type DeveloperListItem = {
+  id: string;
+  fullName: string;
+  role: string | null;
+  techStack: string[];
+  meritScore: number;
+  currentLoad: number;
+  maxCapacity: number;
+  loadPct: number;
+  availabilityStatus: string;
+  burnoutRiskFlag: boolean;
+};
+
+type LeaderboardItem = {
+  rank: number;
+  name: string;
+  meritScore: number;
+  completionRate: number;
+  codeQuality: number;
+  prReviewSpeed: number;
+  peerRating: number;
+  trend: "improving" | "stable" | "declining" | string;
+};
 
 export default function DevelopersPage() {
-  const developers = [
-    { id: 1, name: 'Alice Johnson', role: 'Senior Engineer', merit: 92, skills: ['React', 'Node.js', 'Python'], capacity: 72, burnout: false },
-    { id: 2, name: 'Bob Smith', role: 'Full Stack', merit: 88, skills: ['React', 'Express', 'PostgreSQL'], capacity: 75, burnout: false },
-    { id: 3, name: 'Charlie Davis', role: 'Backend Lead', merit: 95, skills: ['Node.js', 'PostgreSQL', 'FastAPI'], capacity: 60, burnout: false },
-    { id: 4, name: 'Diana Wilson', role: 'Frontend Specialist', merit: 85, skills: ['React', 'Tailwind', 'TypeScript'], capacity: 95, burnout: true },
-    { id: 5, name: 'Eve Martinez', role: 'DevOps Engineer', merit: 90, skills: ['Docker', 'Kubernetes', 'AWS'], capacity: 50, burnout: false },
-  ];
+  const router = useRouter();
+
+  const [developers, setDevelopers] = useState<DeveloperListItem[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([]);
+  const [members, setMembers] = useState<OrgMember[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [createLoading, setCreateLoading] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createStatus, setCreateStatus] = useState<string | null>(null);
+
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("developer");
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteStatus, setInviteStatus] = useState<string | null>(null);
+
+  const [memberId, setMemberId] = useState("");
+  const [primaryRole, setPrimaryRole] = useState("frontend");
+  const [techStackRaw, setTechStackRaw] = useState("react, node, postgres");
+  const [maxSprintCapacity, setMaxSprintCapacity] = useState<number>(40);
+  const [yearsExperience, setYearsExperience] = useState<number>(2);
+  const [githubUsername, setGithubUsername] = useState("");
+  const [skillLevelsRaw, setSkillLevelsRaw] = useState('{"react":4,"node":3}');
+
+  const memberOptions = useMemo(() => {
+    return members.map((m) => ({
+      id: m.id,
+      label: `${m.fullName} (${m.email})`,
+    }));
+  }, [members]);
+
+  async function fetchJson<T>(path: string): Promise<{ ok: true; data: T } | { ok: false; status: number; error: string }> {
+    const resp = await fetch(path, { cache: "no-store" });
+    const data = await resp.json().catch(() => null);
+    if (resp.ok) return { ok: true, data: data as T };
+    const msg = (data && (data.error || data.message)) ? String(data.error || data.message) : "Request failed";
+    return { ok: false, status: resp.status, error: msg };
+  }
+
+  async function loadAll() {
+    setLoading(true);
+    setError(null);
+
+    const [devs, lb, mem] = await Promise.all([
+      fetchJson<{ items: DeveloperListItem[] }>("/api/developers"),
+      fetchJson<{ items: LeaderboardItem[] }>("/api/developers/leaderboard"),
+      listMembers({ limit: 200, page: 1 }),
+    ]);
+
+    const unauthorized = [devs, lb].find((r) => !r.ok && r.status === 401);
+    if (unauthorized) {
+      router.push("/auth/sign-in");
+      return;
+    }
+
+    if (!devs.ok) {
+      setError(devs.error);
+    } else {
+      setDevelopers(Array.isArray(devs.data.items) ? devs.data.items : []);
+    }
+
+    if (lb.ok) {
+      setLeaderboard(Array.isArray(lb.data.items) ? lb.data.items : []);
+    }
+
+    if (mem) {
+      setMembers(Array.isArray(mem.members) ? mem.members : []);
+      if (!memberId && Array.isArray(mem.members) && mem.members.length) {
+        setMemberId(mem.members[0].id);
+      }
+    }
+
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    void loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const getMeritColor = (merit: number) => {
-    if (merit >= 90) return 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200';
-    if (merit >= 80) return 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200';
-    return 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200';
+    if (merit >= 90) return "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200";
+    if (merit >= 80) return "bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200";
+    return "bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200";
   };
 
   const getCapacityColor = (capacity: number) => {
-    if (capacity < 75) return 'text-green-600 dark:text-green-400';
-    if (capacity < 90) return 'text-yellow-600 dark:text-yellow-400';
-    return 'text-red-600 dark:text-red-400';
+    if (capacity < 75) return "text-green-600 dark:text-green-400";
+    if (capacity < 90) return "text-yellow-600 dark:text-yellow-400";
+    return "text-red-600 dark:text-red-400";
   };
+
+  async function handleCreateDeveloper(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setCreateLoading(true);
+    setCreateError(null);
+    setCreateStatus(null);
+
+    const techStack = techStackRaw
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+
+    let skillLevels: Record<string, unknown> = {};
+    if (skillLevelsRaw.trim()) {
+      try {
+        skillLevels = JSON.parse(skillLevelsRaw);
+      } catch {
+        setCreateError("Skill Levels must be valid JSON (e.g. {\"react\":4,\"node\":3})");
+        setCreateLoading(false);
+        return;
+      }
+    }
+
+    try {
+      const resp = await fetch("/api/developers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          memberId,
+          techStack,
+          skillLevels,
+          primaryRole,
+          maxSprintCapacity,
+          yearsExperience,
+          githubUsername: githubUsername.trim() || undefined,
+        }),
+      });
+
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        setCreateError(String(data?.error || "Failed to add developer"));
+        return;
+      }
+
+      const developerId = String(data?.id || "");
+      if (!developerId) {
+        setCreateError("Developer created but response missing id");
+        return;
+      }
+
+      // Verification step: fetch the created profile.
+      const verifyResp = await fetch(`/api/developers/${encodeURIComponent(developerId)}`, { cache: "no-store" });
+      if (!verifyResp.ok) {
+        const v = await verifyResp.json().catch(() => null);
+        setCreateError(String(v?.error || "Developer created but verification failed"));
+        return;
+      }
+
+      await loadAll();
+      setCreateStatus("Developer added and verified.");
+    } catch (err) {
+      console.error(err);
+      setCreateError("Failed to add developer");
+    } finally {
+      setCreateLoading(false);
+    }
+  }
+
+  async function handleInvite(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setInviteLoading(true);
+    setInviteError(null);
+    setInviteStatus(null);
+
+    const email = inviteEmail.trim().toLowerCase();
+    if (!email) {
+      setInviteError("Email is required");
+      setInviteLoading(false);
+      return;
+    }
+
+    const result = await inviteMember({ email, role: inviteRole });
+    if (!result.ok) {
+      setInviteError(result.error);
+      setInviteLoading(false);
+      return;
+    }
+
+    setInviteStatus("Invite sent.");
+    setInviteEmail("");
+    setInviteLoading(false);
+  }
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
-      <div className="max-w-7xl mx-auto">
+      <div className="w-full">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">Developer Hub</h1>
           <p className="text-slate-600 dark:text-slate-300">Team Performance & Merit Leaderboard</p>
+        </div>
+
+        {/* Add Developer */}
+        <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6 mb-8">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white">Add Developer Profile</h2>
+            <button
+              type="button"
+              onClick={() => void loadAll()}
+              className="px-4 py-2 rounded-lg border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-800 transition"
+            >
+              Refresh
+            </button>
+          </div>
+
+          {error ? (
+            <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>
+          ) : null}
+          {createError ? (
+            <p className="mt-3 text-sm text-red-600 dark:text-red-400">{createError}</p>
+          ) : null}
+          {createStatus ? (
+            <p className="mt-3 text-sm text-green-700 dark:text-green-300">{createStatus}</p>
+          ) : null}
+
+          <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Invite Developer (Email Request)</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Sends an org invite email via backend. Requires owner/admin.
+              </p>
+
+              {inviteError ? (
+                <p className="mt-3 text-sm text-red-600 dark:text-red-400">{inviteError}</p>
+              ) : null}
+              {inviteStatus ? (
+                <p className="mt-3 text-sm text-green-700 dark:text-green-300">{inviteStatus}</p>
+              ) : null}
+
+              <form onSubmit={handleInvite} className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+                <input
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  type="email"
+                  placeholder="developer@example.com"
+                  className="md:col-span-2 w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-black px-3 py-2 text-slate-900 dark:text-white"
+                  required
+                />
+                <select
+                  value={inviteRole}
+                  onChange={(e) => setInviteRole(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-black px-3 py-2 text-slate-900 dark:text-white"
+                >
+                  <option value="developer">developer</option>
+                  <option value="manager">manager</option>
+                  <option value="admin">admin</option>
+                </select>
+
+                <button
+                  type="submit"
+                  disabled={inviteLoading}
+                  className="md:col-span-3 px-5 py-2.5 rounded-lg bg-black dark:bg-white text-white dark:text-black font-semibold disabled:opacity-60"
+                >
+                  {inviteLoading ? "Sending…" : "Send Invite"}
+                </button>
+              </form>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Create Profile (from Team Member)</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Uses an existing member, then verifies by fetching the created profile.
+              </p>
+
+              <form onSubmit={handleCreateDeveloper} className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Team Member</label>
+                  <select
+                    value={memberId}
+                    onChange={(e) => setMemberId(e.target.value)}
+                    required
+                    className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-black px-3 py-2 text-slate-900 dark:text-white"
+                  >
+                    {memberOptions.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Primary Role</label>
+                  <input
+                    value={primaryRole}
+                    onChange={(e) => setPrimaryRole(e.target.value)}
+                    placeholder="frontend"
+                    className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-black px-3 py-2 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Tech Stack (comma-separated)</label>
+                  <input
+                    value={techStackRaw}
+                    onChange={(e) => setTechStackRaw(e.target.value)}
+                    placeholder="react, node, postgres"
+                    className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-black px-3 py-2 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Max Sprint Capacity</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={maxSprintCapacity}
+                    onChange={(e) => setMaxSprintCapacity(Number(e.target.value))}
+                    className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-black px-3 py-2 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Years Experience</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={yearsExperience}
+                    onChange={(e) => setYearsExperience(Number(e.target.value))}
+                    className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-black px-3 py-2 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">GitHub Username (optional)</label>
+                  <input
+                    value={githubUsername}
+                    onChange={(e) => setGithubUsername(e.target.value)}
+                    placeholder="octocat"
+                    className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-black px-3 py-2 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Skill Levels (JSON)</label>
+                  <textarea
+                    value={skillLevelsRaw}
+                    onChange={(e) => setSkillLevelsRaw(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-black px-3 py-2 text-slate-900 dark:text-white font-mono text-sm"
+                  />
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Example: <span className="font-mono">{"{\"react\":4,\"node\":3}"}</span>
+                  </p>
+                </div>
+
+                <div className="md:col-span-2 flex items-center gap-3">
+                  <button
+                    type="submit"
+                    disabled={createLoading || loading}
+                    className="px-5 py-2.5 rounded-lg bg-black dark:bg-white text-white dark:text-black font-semibold disabled:opacity-60"
+                  >
+                    {createLoading ? "Adding..." : "Add Developer"}
+                  </button>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">Create requires role: admin/manager/owner.</span>
+                </div>
+              </form>
+            </div>
+          </div>
         </div>
 
         {/* Leaderboard Table */}
@@ -47,8 +410,15 @@ export default function DevelopersPage() {
                 </tr>
               </thead>
               <tbody>
-                {developers.map((dev, idx) => (
-                  <tr key={dev.id} className="border-b border-slate-200 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-slate-700 transition">
+                {loading ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-10 text-center text-sm text-slate-600 dark:text-slate-300">
+                      Loading developers…
+                    </td>
+                  </tr>
+                ) : developers.length ? (
+                  developers.map((dev, idx) => (
+                    <tr key={dev.id} className="border-b border-slate-200 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-slate-700 transition">
                     <td className="px-6 py-4">
                       <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 font-bold text-sm">
                         {idx + 1}
@@ -56,13 +426,13 @@ export default function DevelopersPage() {
                     </td>
                     <td className="px-6 py-4">
                       <div>
-                        <p className="font-semibold text-slate-900 dark:text-white">{dev.name}</p>
-                        <p className="text-xs text-slate-600 dark:text-slate-400">{dev.role}</p>
+                        <p className="font-semibold text-slate-900 dark:text-white">{dev.fullName}</p>
+                        <p className="text-xs text-slate-600 dark:text-slate-400">{dev.role || "-"}</p>
                       </div>
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex flex-wrap gap-1">
-                        {dev.skills.map((skill) => (
+                        {(dev.techStack || []).map((skill) => (
                           <span key={skill} className="px-2 py-1 bg-slate-100 dark:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs rounded">
                             {skill}
                           </span>
@@ -70,8 +440,8 @@ export default function DevelopersPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className={`inline-block px-3 py-1 rounded-full font-bold text-sm ${getMeritColor(dev.merit)}`}>
-                        {dev.merit}
+                      <div className={`inline-block px-3 py-1 rounded-full font-bold text-sm ${getMeritColor(dev.meritScore)}`}>
+                        {dev.meritScore}
                       </div>
                     </td>
                     <td className="px-6 py-4">
@@ -79,16 +449,16 @@ export default function DevelopersPage() {
                         <div className="w-32 bg-slate-200 dark:bg-slate-600 rounded-full h-2 mb-1">
                           <div 
                             className="bg-blue-500 h-2 rounded-full" 
-                            style={{ width: `${dev.capacity}%` }}
+                            style={{ width: `${Math.max(0, Math.min(100, dev.loadPct || 0))}%` }}
                           ></div>
                         </div>
-                        <span className={`text-xs font-semibold ${getCapacityColor(dev.capacity)}`}>
-                          {dev.capacity}%
+                        <span className={`text-xs font-semibold ${getCapacityColor(dev.loadPct || 0)}`}>
+                          {Math.round(dev.loadPct || 0)}%
                         </span>
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      {dev.burnout ? (
+                      {dev.burnoutRiskFlag ? (
                         <div className="flex items-center gap-1 text-red-600 dark:text-red-400">
                           <AlertTriangle className="w-4 h-4" />
                           <span className="text-xs font-medium">Burnout Risk</span>
@@ -100,7 +470,14 @@ export default function DevelopersPage() {
                       )}
                     </td>
                   </tr>
-                ))}
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-10 text-center text-sm text-slate-600 dark:text-slate-300">
+                      No developer profiles yet. Add one above.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -110,25 +487,16 @@ export default function DevelopersPage() {
         <div className="mb-8">
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">Team Performance</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-            {developers.map((dev) => (
-              <div key={dev.id} className="bg-white dark:bg-zinc-900 rounded-lg p-4 shadow-md border border-slate-200 dark:border-zinc-800 hover:shadow-lg transition">
+            {leaderboard.slice(0, 5).map((dev) => (
+              <div key={`${dev.rank}-${dev.name}`} className="bg-white dark:bg-zinc-900 rounded-lg p-4 shadow-md border border-slate-200 dark:border-zinc-800 hover:shadow-lg transition">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-semibold text-slate-900 dark:text-white text-sm">{dev.name.split(' ')[0]}</h3>
+                  <h3 className="font-semibold text-slate-900 dark:text-white text-sm">{dev.name.split(" ")[0]}</h3>
                   <TrendingUp className="w-4 h-4 text-green-600 dark:text-green-400" />
                 </div>
                 <div className="space-y-2">
                   <div>
                     <p className="text-xs text-slate-600 dark:text-slate-400">Merit Score</p>
-                    <p className="text-2xl font-bold text-slate-900 dark:text-white">{dev.merit}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-slate-600 dark:text-slate-400">Load</p>
-                    <div className="w-full bg-slate-200 dark:bg-slate-600 rounded-full h-1.5">
-                      <div 
-                        className={`h-1.5 rounded-full ${dev.burnout ? 'bg-red-500' : 'bg-blue-500'}`}
-                        style={{ width: `${dev.capacity}%` }}
-                      ></div>
-                    </div>
+                    <p className="text-2xl font-bold text-slate-900 dark:text-white">{dev.meritScore}</p>
                   </div>
                 </div>
               </div>

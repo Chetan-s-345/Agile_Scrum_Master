@@ -18,6 +18,7 @@ export default function SignInPage() {
     const formData = new FormData(e.currentTarget);
     const email = formData.get("email");
     const password = formData.get("password");
+    const orgSlug = formData.get("orgSlug");
 
     try {
       const response = await fetch("/api/auth/sign-in", {
@@ -25,15 +26,26 @@ export default function SignInPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, orgSlug: orgSlug || undefined }),
       });
 
       if (response.ok) {
         const data = await response.json();
-        localStorage.setItem("user", JSON.stringify(data.user));
-        router.push("/dashboard");
+        if (data?.requiresOrgSelection) {
+          const orgs: Array<{ slug?: string }> = Array.isArray(data.orgs) ? data.orgs : [];
+          const hint = orgs.length ? orgs.map((o) => o.slug).filter(Boolean).join(", ") : "";
+          alert(`Multiple organizations found. Please enter your org slug.${hint ? ` Available: ${hint}` : ""}`);
+          return;
+        }
+
+        if (data?.requiresOrgSetup) {
+          router.push("/settings/org");
+        } else {
+          router.push("/dashboard");
+        }
       } else {
-        alert("Failed to sign in");
+        const err = await response.json().catch(() => null);
+        alert(err?.error || "Failed to sign in");
       }
     } catch (error) {
       console.error(error);
@@ -60,6 +72,19 @@ export default function SignInPage() {
             type="email"
             required
             placeholder="Enter your email address"
+            className="w-full rounded-xl border border-zinc-800 bg-[#121212] px-4 py-3 text-[15px] text-white placeholder:text-zinc-500 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all duration-300"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <label htmlFor="orgSlug" className="block text-sm font-medium text-zinc-300">
+            Organization Slug (optional)
+          </label>
+          <input
+            id="orgSlug"
+            name="orgSlug"
+            type="text"
+            placeholder="e.g. acme"
             className="w-full rounded-xl border border-zinc-800 bg-[#121212] px-4 py-3 text-[15px] text-white placeholder:text-zinc-500 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all duration-300"
           />
         </div>
@@ -100,7 +125,7 @@ export default function SignInPage() {
               Keep me signed in
             </label>
           </div>
-          <Link href="#" className="text-sm font-medium text-purple-500 hover:text-purple-400 transition-colors">
+          <Link href="/auth/forgot-password" className="text-sm font-medium text-purple-500 hover:text-purple-400 transition-colors">
             Reset password
           </Link>
         </div>

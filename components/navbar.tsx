@@ -3,14 +3,42 @@ import * as React from "react";
 import Link from "next/link";
 import { Grid2x2PlusIcon, Sun, Moon } from "lucide-react";
 import { useTheme } from "./theme-provider";
+import { getMe, type MeResponse } from "@/lib/org-member-auth";
 
 export function Navbar() {
 	const [mounted, setMounted] = React.useState(false);
 	const { theme, toggleTheme } = useTheme();
+	const [me, setMe] = React.useState<MeResponse | null>(null);
+	const [meLoaded, setMeLoaded] = React.useState(false);
+
+	const activeMembership = React.useMemo(() => {
+		const memberships = Array.isArray(me?.memberships) ? me!.memberships! : [];
+		if (!memberships.length) return null;
+		const activeOrgId = me?.activeOrgId ? String(me.activeOrgId) : null;
+		if (activeOrgId) {
+			const m = memberships.find((x) => String(x?.org?.id || '') === activeOrgId);
+			if (m) return m;
+		}
+		return memberships[0];
+	}, [me]);
 
 	React.useEffect(() => {
-		// eslint-disable-next-line react-hooks/set-state-in-effect
 		setMounted(true);
+	}, []);
+
+	React.useEffect(() => {
+		let cancelled = false;
+		(async () => {
+			try {
+				const data = await getMe();
+				if (!cancelled) setMe(data);
+			} finally {
+				if (!cancelled) setMeLoaded(true);
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
 	}, []);
 
 	return (
@@ -25,8 +53,40 @@ export function Navbar() {
 				{/* Mobile Spacer to avoid overlap with sidebar toggle */}
 				<div className="lg:hidden w-8" />
 
-				{/* Desktop Spacer (to push theme toggle to right) */}
+				{/* Desktop Spacer (to push profile + theme toggle to right) */}
 				<div className="hidden lg:block flex-1" />
+
+				{/* Profile */}
+				{me?.user ? (
+					<div className="flex items-center gap-3 mr-2">
+						<div className="hidden sm:block text-right leading-tight">
+							<p className="text-sm font-semibold text-slate-900 dark:text-white">
+								{me.user.fullName || me.user.email}
+							</p>
+							<p className="text-xs text-slate-600 dark:text-slate-300">
+								{activeMembership?.org?.name || activeMembership?.org?.slug ? (
+									activeMembership.org.name || activeMembership.org.slug
+								) : (
+									<Link href="/settings/org" className="hover:underline">
+										Create Org
+									</Link>
+								)}
+							</p>
+						</div>
+						<div className="w-9 h-9 rounded-full border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900 flex items-center justify-center text-sm font-bold text-slate-900 dark:text-white">
+							{String(me.user.fullName || me.user.email || "U")
+								.trim()
+								.slice(0, 1)
+								.toUpperCase()}
+						</div>
+					</div>
+				) : meLoaded ? (
+					<div className="mr-2">
+						<Link href="/auth/sign-in" className="text-sm font-semibold text-slate-900 dark:text-white hover:underline">
+							Sign In
+						</Link>
+					</div>
+				) : null}
 
 				{/* Theme Toggle */}
 				<div className="flex items-center gap-2">

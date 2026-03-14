@@ -16,7 +16,7 @@ export default function SignUpPage() {
     setLoading(true);
 
     const formData = new FormData(e.currentTarget);
-    const name = formData.get("name");
+    const fullName = formData.get("name");
     const email = formData.get("email");
     const password = formData.get("password");
 
@@ -26,15 +26,19 @@ export default function SignUpPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({ fullName, email, password }),
       });
 
       if (response.ok) {
         const data = await response.json();
-        localStorage.setItem("user", JSON.stringify(data.user));
-        router.push("/dashboard");
+        if (data?.requiresOrgSetup) {
+          router.push("/settings/org");
+        } else {
+          router.push("/dashboard");
+        }
       } else {
-        alert("Failed to sign up");
+        const err = await response.json().catch(() => null);
+        alert(err?.error || "Failed to sign up");
       }
     } catch (error) {
       console.error(error);
