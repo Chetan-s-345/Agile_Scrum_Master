@@ -10,6 +10,7 @@ const { env } = require('../config/env');
 const { db } = require('../config/database');
 const { NeonBranchManager } = require('../config/neon');
 const { emailService } = require('../services/email.service');
+const { logger } = require('../middleware/logger');
 const {
   updateSettingsSchema,
   listMembersQuerySchema,
@@ -463,6 +464,55 @@ async function updateSettings(req, res, next) {
   }
 }
 
+async function deleteOrg(req, res, next) {
+  try {
+    const orgId = req.user?.orgId;
+    if (!orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+    if (!requireRole(req, ['owner'])) return res.status(403).json({ error: 'Forbidden' });
+
+    const result = await db.transaction(db.universalPool, async (client) => {
+      const orgResp = await client.query(
+        'SELECT id, slug, name, is_active FROM organizations WHERE id = $1 LIMIT 1',
+        [String(orgId)]
+      );
+      const org = orgResp.rows[0];
+      if (!org) throw Object.assign(new Error('Organization not found'), { statusCode: 404 });
+      if (org.is_active === false) {
+        return { orgId: String(org.id), slug: String(org.slug), alreadyDeleted: true };
+      }
+
+      await client.query(
+        "UPDATE organizations SET is_active = FALSE, plan_status = 'cancelled', updated_at = NOW() WHERE id = $1",
+        [String(orgId)]
+      );
+
+      await client.query('UPDATE org_members SET is_active = FALSE WHERE org_id = $1', [String(orgId)]);
+      await client.query('UPDATE auth_sessions SET is_active = FALSE WHERE org_id = $1', [String(orgId)]);
+
+      // Best-effort: cancel pending invitations + subscriptions if schema supports it.
+      try {
+        await client.query("UPDATE invitations SET status = 'cancelled' WHERE org_id = $1 AND status = 'pending'", [String(orgId)]);
+      } catch {
+        // ignore
+      }
+      try {
+        await client.query(
+          "UPDATE subscriptions SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, NOW()) WHERE org_id = $1 AND status <> 'cancelled'",
+          [String(orgId)]
+        );
+      } catch {
+        // ignore
+      }
+
+      return { orgId: String(org.id), slug: String(org.slug), deleted: true };
+    });
+
+    return res.status(200).json({ ok: true, ...result });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function listMembers(req, res, next) {
   try {
     if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
@@ -572,24 +622,99 @@ async function inviteMember(req, res, next) {
       invite.token
     )}`;
 
+    let emailResult = null;
+
     try {
-      await emailService.sendInvitationEmail({
+      emailResult = await emailService.sendInvitationEmail({
         toEmail: invite.email,
         orgName: orgInfo?.name,
         role: invite.role,
         invitedByName: inviterName,
         acceptUrl,
       });
+
+      try {
+        await db.universalPool.query(
+          `INSERT INTO global_audit_log (actor_user_id, org_id, action, resource_type, resource_id, metadata, ip_address, user_agent)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            String(req.user.userId),
+            String(req.user.orgId),
+            'email.invitation.sent',
+            'invitation',
+            invite.id,
+            {
+              to: invite.email,
+              provider: emailResult?.provider || 'brevo',
+              messageId: emailResult?.messageId || null,
+            },
+            req.ip,
+            req.get('user-agent') || null,
+          ]
+        );
+      } catch {
+        // best-effort
+      }
     } catch (e) {
+      logger.warn('email.invitation_send_failed', {
+        to: invite.email,
+        code: e?.code,
+        statusCode: e?.statusCode,
+        message: e?.message || String(e),
+      });
+
+      try {
+        await db.universalPool.query(
+          `INSERT INTO global_audit_log (actor_user_id, org_id, action, resource_type, resource_id, metadata, ip_address, user_agent)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            String(req.user.userId),
+            String(req.user.orgId),
+            'email.invitation.failed',
+            'invitation',
+            invite.id,
+            {
+              to: invite.email,
+              code: e?.code || null,
+              statusCode: e?.statusCode || null,
+              details: e?.details || null,
+              message: e?.message ? String(e.message) : String(e),
+            },
+            req.ip,
+            req.get('user-agent') || null,
+          ]
+        );
+      } catch {
+        // best-effort
+      }
+
       if (env.NODE_ENV !== 'production') {
         console.warn('[dev] Failed to send invitation email:', e?.message || e);
       }
+
+      emailResult = {
+        sent: false,
+        provider: 'brevo',
+        code: e?.code || null,
+        statusCode: e?.statusCode || null,
+        message: e?.message ? String(e.message) : 'Failed to send invitation email',
+      };
     }
 
-    return res.status(201).json({ invitation: invite });
+    return res.status(201).json({ invitation: invite, email: emailResult });
   } catch (err) {
     return next(err);
   }
+}
+
+async function emailStatus(req, res) {
+  if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+  if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
+
+  return res.status(200).json({
+    configured: emailService.isConfigured(),
+    config: emailService.configState(),
+  });
 }
 
 async function removeMember(req, res, next) {
@@ -754,6 +879,12 @@ async function acceptInvitation(req, res, next) {
           verifyUrl,
         });
       } catch (e) {
+        logger.warn('email.verify_send_failed_invite_accept', {
+          to: normalizedEmail,
+          code: e?.code,
+          statusCode: e?.statusCode,
+          message: e?.message || String(e),
+        });
         if (env.NODE_ENV !== 'production') {
           console.warn('[dev] Failed to send verification email (invite accept):', e?.message || e);
           console.log(`[dev] verify-email token for ${normalizedEmail}: ${verifyToken}`);
@@ -858,6 +989,8 @@ async function dbStatus(req, res, next) {
 module.exports = {
   createOrg,
   getCurrentOrg,
+  emailStatus,
+  deleteOrg,
   updateSettings,
   listMembers,
   inviteMember,

@@ -43,6 +43,8 @@ const EnvSchema = z
   REFRESH_EXPIRES_IN: z.string().default('30d'),
 
   REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
+  ENABLE_SCHEDULER: z.coerce.boolean().default(true),
+  ENABLE_WORKERS: z.coerce.boolean().default(true),
 
   AI_SERVICE_URL: z.string().url().default('http://localhost:8000'),
   OPENAI_API_KEY: z.string().optional(),

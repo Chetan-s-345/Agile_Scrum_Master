@@ -11,6 +11,7 @@ const { env } = require('../config/env');
 const { db } = require('../config/database');
 const { NeonBranchManager } = require('../config/neon');
 const { emailService } = require('./email.service');
+const { logger } = require('../middleware/logger');
 
 let _cachedTenantSchemaSql = null;
 
@@ -411,6 +412,12 @@ class AuthService {
           verifyUrl,
         });
       } catch (e) {
+        logger.warn('email.verify_send_failed', {
+          to: result.user.email,
+          code: e?.code,
+          statusCode: e?.statusCode,
+          message: e?.message || String(e),
+        });
         if (env.NODE_ENV !== 'production') {
           console.warn('[dev] Failed to send verification email:', e?.message || e);
           console.log(`[dev] verify-email token for ${result.user.email}: ${verifyToken}`);
@@ -632,6 +639,12 @@ class AuthService {
         resetUrl,
       });
     } catch (e) {
+      logger.warn('email.password_reset_send_failed', {
+        to: normalizedEmail,
+        code: e?.code,
+        statusCode: e?.statusCode,
+        message: e?.message || String(e),
+      });
       if (env.NODE_ENV !== 'production') {
         console.warn('[dev] Failed to send password reset email:', e?.message || e);
       }

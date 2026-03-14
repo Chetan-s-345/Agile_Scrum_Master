@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
+import { getApiGatewayBaseUrl } from "@/lib/api-gateway";
 
 function getGatewayBaseUrl() {
-  return process.env.API_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+  return getApiGatewayBaseUrl();
 }
 
 export async function POST(request: Request) {

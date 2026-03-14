@@ -1,5 +1,6 @@
 "use client";
 
+import Link from 'next/link';
 import { Settings, Save, AlertCircle } from 'lucide-react';
 import { useState } from 'react';
 
@@ -20,12 +21,55 @@ export default function SettingsPage() {
           <p className="text-slate-600 dark:text-slate-300">Configure project connections and preferences</p>
         </div>
 
+        {/* Quick links */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          <Link
+            href="/settings/org"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Organization</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">Org profile, preferences, and defaults.</div>
+          </Link>
+
+          <Link
+            href="/settings/team"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Team</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">Invite members and manage roles.</div>
+          </Link>
+
+          <Link
+            href="/settings/integrations"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Integrations</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">Connect Jira and trigger sync.</div>
+          </Link>
+
+          <Link
+            href="/settings/billing"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Billing</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">Plan and subscription status.</div>
+          </Link>
+        </div>
+
         {/* Jira Configuration */}
         <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6 mb-6">
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-6 flex items-center gap-2">
             <span className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 flex items-center justify-center text-sm font-bold">1</span>
             Jira Configuration
           </h2>
+
+          <div className="mb-4 text-sm text-slate-600 dark:text-slate-300">
+            Recommended: manage Jira connection in{' '}
+            <Link href="/settings/integrations" className="text-blue-600 dark:text-blue-400 hover:underline">
+              Settings → Integrations
+            </Link>
+            .
+          </div>
 
           <div className="space-y-4">
             <div>
@@ -64,10 +108,21 @@ export default function SettingsPage() {
               </p>
             </div>
 
-            <button className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition flex items-center gap-2">
-              <Save className="w-4 h-4" />
-              Test Connection
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/settings/integrations"
+                className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition inline-flex items-center gap-2"
+              >
+                <Save className="w-4 h-4" />
+                Manage Jira
+              </Link>
+              <button
+                type="button"
+                className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-white font-semibold py-2 px-4 rounded-lg transition"
+              >
+                Save (coming soon)
+              </button>
+            </div>
           </div>
         </div>
 

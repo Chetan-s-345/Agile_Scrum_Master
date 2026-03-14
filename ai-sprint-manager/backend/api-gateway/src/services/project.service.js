@@ -1,0 +1,392 @@
+function requireOrgDb(req) {
+  const pool = req.orgDb;
+  if (!pool) throw Object.assign(new Error('Org DB not attached'), { statusCode: 500 });
+  return pool;
+}
+
+function parseDateToIso(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const d = new Date(String(value));
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+async function getActorMemberId(orgPool, userId) {
+  const resp = await orgPool.query('SELECT id FROM team_members WHERE global_user_id = $1 LIMIT 1', [String(userId)]);
+  return resp.rows[0]?.id || null;
+}
+
+async function audit(orgPool, { actorMemberId, action, resourceType, resourceId, oldValue, newValue, ipAddress, userAgent }) {
+  await orgPool.query(
+    `INSERT INTO org_audit_log (actor_member_id, action, resource_type, resource_id, old_value, new_value, ip_address, user_agent)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      actorMemberId || null,
+      String(action),
+      resourceType || null,
+      resourceId || null,
+      oldValue || null,
+      newValue || null,
+      ipAddress || null,
+      userAgent || null,
+    ]
+  );
+}
+
+class ProjectService {
+  async list(req, { status }) {
+    const orgPool = requireOrgDb(req);
+
+    const where = [];
+    const params = [];
+
+    if (status) {
+      params.push(String(status));
+      where.push(`p.status = $${params.length}`);
+    }
+
+    const sql = `
+      SELECT
+        p.id,
+        p.name,
+        p.slug,
+        p.status,
+        p.tech_stack,
+        COALESCE(pm.member_count, 0)::int AS member_count,
+        COALESCE(cs.completed_sprints, 0)::int AS completed_sprints,
+        act.id AS active_sprint_id,
+        act.name AS active_sprint_name,
+        act.sprint_number AS active_sprint_number,
+        act.start_date AS active_sprint_start_date,
+        act.end_date AS active_sprint_end_date
+      FROM projects p
+      LEFT JOIN (
+        SELECT project_id, COUNT(*) AS member_count
+        FROM project_members
+        GROUP BY project_id
+      ) pm ON pm.project_id = p.id
+      LEFT JOIN (
+        SELECT project_id, COUNT(*) FILTER (WHERE status = 'completed') AS completed_sprints
+        FROM sprints
+        GROUP BY project_id
+      ) cs ON cs.project_id = p.id
+      LEFT JOIN LATERAL (
+        SELECT id, name, sprint_number, start_date, end_date
+        FROM sprints
+        WHERE project_id = p.id AND status = 'active'
+        ORDER BY start_date DESC
+        LIMIT 1
+      ) act ON TRUE
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY p.created_at DESC
+    `;
+
+    const resp = await orgPool.query(sql, params);
+    return resp.rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      slug: r.slug,
+      status: r.status,
+      memberCount: Number(r.member_count || 0),
+      activeSprint: r.active_sprint_id
+        ? {
+            id: r.active_sprint_id,
+            name: r.active_sprint_name,
+            sprintNumber: r.active_sprint_number,
+            startDate: r.active_sprint_start_date,
+            endDate: r.active_sprint_end_date,
+          }
+        : null,
+      completedSprints: Number(r.completed_sprints || 0),
+      techStack: r.tech_stack || [],
+    }));
+  }
+
+  async create(req, payload, context) {
+    const orgPool = requireOrgDb(req);
+
+    const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+    if (!actorMemberId) throw Object.assign(new Error('Team member not found'), { statusCode: 403 });
+
+    const slug = String(payload.slug);
+    const existing = await orgPool.query('SELECT id FROM projects WHERE slug = $1 LIMIT 1', [slug]);
+    if (existing.rows.length) throw Object.assign(new Error('Project slug already exists'), { statusCode: 409 });
+
+    let ownerId = actorMemberId;
+    if (payload.ownerId) {
+      const ownerResp = await orgPool.query('SELECT id FROM team_members WHERE id = $1 AND is_active = TRUE LIMIT 1', [String(payload.ownerId)]);
+      if (!ownerResp.rows.length) throw Object.assign(new Error('ownerId not found'), { statusCode: 404 });
+      ownerId = String(payload.ownerId);
+    }
+
+    await orgPool.query('BEGIN');
+    try {
+      const insertResp = await orgPool.query(
+        `INSERT INTO projects (name, slug, description, tech_stack, jira_project_key, github_repo, owner_id, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING *`,
+        [
+          String(payload.name),
+          slug,
+          payload.description || null,
+          payload.techStack || [],
+          payload.jiraProjectKey || null,
+          payload.githubRepo || null,
+          ownerId,
+          actorMemberId,
+        ]
+      );
+      const project = insertResp.rows[0];
+
+      // Ensure creator is a member
+      await orgPool.query(
+        `INSERT INTO project_members (project_id, member_id, role)
+         VALUES ($1,$2,$3)
+         ON CONFLICT (project_id, member_id) DO NOTHING`,
+        [String(project.id), actorMemberId, actorMemberId === ownerId ? 'owner' : 'admin']
+      );
+
+      // If owner differs, ensure owner is also a member
+      if (ownerId !== actorMemberId) {
+        await orgPool.query(
+          `INSERT INTO project_members (project_id, member_id, role)
+           VALUES ($1,$2,'owner')
+           ON CONFLICT (project_id, member_id) DO NOTHING`,
+          [String(project.id), ownerId]
+        );
+      }
+
+      await audit(orgPool, {
+        actorMemberId,
+        action: 'project.create',
+        resourceType: 'project',
+        resourceId: String(project.id),
+        oldValue: null,
+        newValue: project,
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent,
+      });
+
+      await orgPool.query('COMMIT');
+      return project;
+    } catch (e) {
+      try {
+        await orgPool.query('ROLLBACK');
+      } catch {
+        // ignore
+      }
+      throw e;
+    }
+  }
+
+  async get(req, projectId) {
+    const orgPool = requireOrgDb(req);
+
+    const projectResp = await orgPool.query('SELECT * FROM projects WHERE id = $1', [String(projectId)]);
+    const project = projectResp.rows[0];
+    if (!project) throw Object.assign(new Error('Project not found'), { statusCode: 404 });
+
+    const membersResp = await orgPool.query(
+      `SELECT pm.member_id, pm.role, pm.added_at, tm.full_name, tm.email, tm.avatar_url
+       FROM project_members pm
+       JOIN team_members tm ON tm.id = pm.member_id
+       WHERE pm.project_id = $1
+       ORDER BY pm.added_at ASC`,
+      [String(projectId)]
+    );
+
+    const epicCountResp = await orgPool.query('SELECT COUNT(*)::int AS count FROM epics WHERE project_id = $1', [String(projectId)]);
+
+    const sprintSummaryResp = await orgPool.query(
+      `SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE status = 'planning')::int AS planning,
+         COUNT(*) FILTER (WHERE status = 'active')::int AS active,
+         COUNT(*) FILTER (WHERE status = 'completed')::int AS completed
+       FROM sprints
+       WHERE project_id = $1`,
+      [String(projectId)]
+    );
+
+    const activeSprintResp = await orgPool.query(
+      `SELECT id, name, sprint_number, start_date, end_date, planned_points, completed_points
+       FROM sprints
+       WHERE project_id = $1 AND status = 'active'
+       ORDER BY start_date DESC
+       LIMIT 1`,
+      [String(projectId)]
+    );
+
+    return {
+      project,
+      members: membersResp.rows.map((m) => ({
+        memberId: m.member_id,
+        role: m.role,
+        addedAt: m.added_at,
+        fullName: m.full_name,
+        email: m.email,
+        avatarUrl: m.avatar_url,
+      })),
+      epicsCount: epicCountResp.rows[0]?.count || 0,
+      sprintsSummary: sprintSummaryResp.rows[0] || { total: 0, planning: 0, active: 0, completed: 0 },
+      activeSprint: activeSprintResp.rows[0] || null,
+    };
+  }
+
+  async update(req, projectId, patch, context) {
+    const orgPool = requireOrgDb(req);
+
+    const beforeResp = await orgPool.query('SELECT * FROM projects WHERE id = $1', [String(projectId)]);
+    const before = beforeResp.rows[0];
+    if (!before) throw Object.assign(new Error('Project not found'), { statusCode: 404 });
+
+    const sets = [];
+    const params = [];
+    const push = (col, val) => {
+      params.push(val);
+      sets.push(`${col} = $${params.length}`);
+    };
+
+    if (patch.name !== undefined) push('name', String(patch.name));
+    if (patch.description !== undefined) push('description', patch.description || null);
+    if (patch.status !== undefined) push('status', String(patch.status));
+    if (patch.techStack !== undefined) push('tech_stack', patch.techStack || []);
+    if (patch.targetEndDate !== undefined) {
+      const iso = parseDateToIso(patch.targetEndDate);
+      if (!iso) throw Object.assign(new Error('Invalid targetEndDate'), { statusCode: 400 });
+      push('target_end_date', iso);
+    }
+
+    push('updated_at', new Date());
+
+    const sql = `UPDATE projects SET ${sets.join(', ')} WHERE id = $${params.length + 1} RETURNING *`;
+    params.push(String(projectId));
+
+    const afterResp = await orgPool.query(sql, params);
+    const after = afterResp.rows[0];
+
+    const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+    await audit(orgPool, {
+      actorMemberId,
+      action: 'project.update',
+      resourceType: 'project',
+      resourceId: String(projectId),
+      oldValue: before,
+      newValue: after,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
+
+    return after;
+  }
+
+  async addMember(req, projectId, payload) {
+    const orgPool = requireOrgDb(req);
+
+    const memberResp = await orgPool.query('SELECT id FROM team_members WHERE id = $1 AND is_active = TRUE LIMIT 1', [String(payload.memberId)]);
+    if (!memberResp.rows.length) throw Object.assign(new Error('Member not found'), { statusCode: 404 });
+
+    try {
+      const resp = await orgPool.query(
+        `INSERT INTO project_members (project_id, member_id, role)
+         VALUES ($1,$2,$3)
+         RETURNING *`,
+        [String(projectId), String(payload.memberId), String(payload.role || 'developer')]
+      );
+      return resp.rows[0];
+    } catch (e) {
+      if (String(e?.code) === '23505') {
+        throw Object.assign(new Error('Member already in project'), { statusCode: 409 });
+      }
+      throw e;
+    }
+  }
+
+  async removeMember(req, projectId, memberId) {
+    const orgPool = requireOrgDb(req);
+    const resp = await orgPool.query(
+      `DELETE FROM project_members WHERE project_id = $1 AND member_id = $2`,
+      [String(projectId), String(memberId)]
+    );
+    if (!resp.rowCount) throw Object.assign(new Error('Member not in project'), { statusCode: 404 });
+    return { ok: true };
+  }
+
+  async listEpics(req, projectId) {
+    const orgPool = requireOrgDb(req);
+
+    const resp = await orgPool.query(
+      `SELECT
+         e.*, 
+         COALESCE(b.total_stories, 0)::int AS story_count,
+         COALESCE(b.done_stories, 0)::int AS done_count
+       FROM epics e
+       LEFT JOIN (
+         SELECT epic_id,
+                COUNT(*) AS total_stories,
+                COUNT(*) FILTER (WHERE status = 'done') AS done_stories
+         FROM backlog_items
+         WHERE epic_id IS NOT NULL
+         GROUP BY epic_id
+       ) b ON b.epic_id = e.id
+       WHERE e.project_id = $1
+       ORDER BY e.created_at DESC`,
+      [String(projectId)]
+    );
+
+    return resp.rows.map((e) => {
+      const total = Number(e.story_count || 0);
+      const done = Number(e.done_count || 0);
+      const progress = total > 0 ? Math.round((done / total) * 10000) / 100 : 0;
+      return {
+        id: e.id,
+        projectId: e.project_id,
+        title: e.title,
+        description: e.description,
+        status: e.status,
+        priority: e.priority,
+        startDate: e.start_date,
+        targetDate: e.target_date,
+        color: e.color,
+        storyCount: total,
+        progressPct: progress,
+        createdAt: e.created_at,
+        updatedAt: e.updated_at,
+      };
+    });
+  }
+
+  async createEpic(req, projectId, payload) {
+    const orgPool = requireOrgDb(req);
+
+    const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+    if (!actorMemberId) throw Object.assign(new Error('Team member not found'), { statusCode: 403 });
+
+    const startIso = payload.startDate ? parseDateToIso(payload.startDate) : null;
+    const targetIso = payload.targetDate ? parseDateToIso(payload.targetDate) : null;
+    if (payload.startDate && !startIso) throw Object.assign(new Error('Invalid startDate'), { statusCode: 400 });
+    if (payload.targetDate && !targetIso) throw Object.assign(new Error('Invalid targetDate'), { statusCode: 400 });
+
+    const resp = await orgPool.query(
+      `INSERT INTO epics (project_id, title, description, priority, start_date, target_date, color, owner_id)
+       VALUES ($1,$2,$3,$4,$5::date,$6::date,$7,$8)
+       RETURNING *`,
+      [
+        String(projectId),
+        String(payload.title),
+        payload.description || null,
+        payload.priority || null,
+        startIso,
+        targetIso,
+        payload.color || null,
+        actorMemberId,
+      ]
+    );
+
+    return resp.rows[0];
+  }
+}
+
+const projectService = new ProjectService();
+
+module.exports = { projectService, ProjectService };

@@ -8,6 +8,10 @@ const morgan = require('morgan');
 const { env } = require('./config/env');
 const { logger, morganStream } = require('./middleware/logger');
 const { errorHandler } = require('./middleware/errorHandler');
+const { ensureRepeatableJobs } = require('./services/schedulerService');
+const { startSprintMonitoringWorker } = require('./workers/sprintMonitoring.worker');
+const { startJiraSyncWorker } = require('./workers/jiraSync.worker');
+const { pingRedis } = require('./services/queue.service');
 
 const authRoutes = require('./routes/auth.routes');
 const orgRoutes = require('./routes/org.routes');
@@ -18,6 +22,8 @@ const taskRoutes = require('./routes/task.routes');
 const assignmentRoutes = require('./routes/assignment.routes');
 const reportRoutes = require('./routes/report.routes');
 const webhookRoutes = require('./routes/webhook.routes');
+const monitoringRoutes = require('./routes/monitoring.routes');
+const integrationRoutes = require('./routes/integration.routes');
 
 const app = express();
 
@@ -45,11 +51,54 @@ app.use('/api/v1/tasks', taskRoutes);
 app.use('/api/v1/assignment', assignmentRoutes);
 app.use('/api/v1/reports', reportRoutes);
 app.use('/api/v1/webhooks', webhookRoutes);
+app.use('/api/v1/monitoring', monitoringRoutes);
+app.use('/api/v1/integrations', integrationRoutes);
 
 app.use(errorHandler);
 
 app.listen(env.PORT, () => {
   logger.info({ port: env.PORT }, 'API gateway listening');
+});
+
+// Background features (queues/workers) require Redis.
+(async () => {
+  const needsRedis = Boolean(env.ENABLE_SCHEDULER || env.ENABLE_WORKERS);
+  if (!needsRedis) return;
+
+  const redisOk = await pingRedis({ timeoutMs: 750 });
+  if (!redisOk) {
+    logger.warn(
+      {
+        redisUrl: env.REDIS_URL,
+        ENABLE_SCHEDULER: env.ENABLE_SCHEDULER,
+        ENABLE_WORKERS: env.ENABLE_WORKERS,
+      },
+      'Redis unavailable; skipping scheduler/workers'
+    );
+    return;
+  }
+
+  if (env.ENABLE_SCHEDULER) {
+    ensureRepeatableJobs().catch((err) => {
+      logger.error({ err }, 'Failed to ensure repeatable jobs');
+    });
+  }
+
+  if (env.ENABLE_WORKERS) {
+    try {
+      startSprintMonitoringWorker();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start sprint monitoring worker');
+    }
+
+    try {
+      startJiraSyncWorker();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start jira sync worker');
+    }
+  }
+})().catch((err) => {
+  logger.error({ err }, 'Failed to initialize background services');
 });
 
 module.exports = { app };

@@ -1,250 +1,335 @@
 "use client";
 
-import * as React from "react";
-import { Building2, Users, MailPlus } from "lucide-react";
-import { createOrg, getMe, inviteMember, listMembers, type MeResponse, type OrgMember } from "@/lib/org-member-auth";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { AlertCircle, RefreshCw, Save, Trash2 } from "lucide-react";
 
-export default function OrgSetupPage() {
-  const [me, setMe] = React.useState<MeResponse | null>(null);
-  const [meLoaded, setMeLoaded] = React.useState(false);
+type Org = {
+  id: string;
+  name: string;
+  slug: string;
+  timezone?: string | null;
+  logoUrl?: string | null;
+  status?: string | null;
+  trialEndsAt?: string | null;
+  dbProvisioned?: boolean | null;
+  neonBranchId?: string | null;
+};
 
-  const [orgName, setOrgName] = React.useState("");
-  const [orgSlug, setOrgSlug] = React.useState("");
-  const [tenantDbConnectionString, setTenantDbConnectionString] = React.useState("");
+type CurrentOrgResp = {
+  org?: Org;
+  plan?: { slug: string; name: string } | null;
+  subscription?: Record<string, unknown> | null;
+  memberCount?: number;
+  error?: string;
+};
 
-  const [creating, setCreating] = React.useState(false);
-  const [createError, setCreateError] = React.useState<string | null>(null);
+type DbStatusResp = {
+  state?: string;
+  branchId?: string;
+  storageBytes?: number | null;
+  computeTimeSeconds?: number | null;
+  error?: string;
+};
 
-  const [members, setMembers] = React.useState<OrgMember[]>([]);
-  const [membersLoaded, setMembersLoaded] = React.useState(false);
+function extractError(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  if ("error" in data) {
+    const err = (data as { error?: unknown }).error;
+    return typeof err === "string" && err ? err : null;
+  }
+  return null;
+}
 
-  const [inviteEmail, setInviteEmail] = React.useState("");
-  const [inviteRole, setInviteRole] = React.useState("member");
-  const [inviting, setInviting] = React.useState(false);
-  const [inviteError, setInviteError] = React.useState<string | null>(null);
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
+  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
+  const text = await resp.text().catch(() => "");
+  let data: T | null = null;
+  try {
+    data = text ? (JSON.parse(text) as T) : null;
+  } catch {
+    data = null;
+  }
+  return { ok: resp.ok, status: resp.status, data };
+}
 
-  const hasOrg = Boolean(Array.isArray(me?.memberships) && me!.memberships!.length);
+export default function OrgSettingsPage() {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
-  const refreshMe = React.useCallback(async () => {
-    const data = await getMe();
-    setMe(data);
-    setMeLoaded(true);
-    return data;
-  }, []);
+  const [org, setOrg] = useState<Org | null>(null);
+  const [plan, setPlan] = useState<CurrentOrgResp["plan"]>(null);
+  const [dbStatus, setDbStatus] = useState<DbStatusResp | null>(null);
+  const [memberCount, setMemberCount] = useState<number | null>(null);
 
-  const refreshMembers = React.useCallback(async () => {
-    setMembersLoaded(false);
-    const data = await listMembers({ page: 1, limit: 200 });
-    setMembers(Array.isArray(data?.members) ? data!.members : []);
-    setMembersLoaded(true);
-  }, []);
+  const [name, setName] = useState("");
+  const [timezone, setTimezone] = useState("UTC");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [notificationJson, setNotificationJson] = useState("{}\n");
 
-  React.useEffect(() => {
-    let cancelled = false;
+  const confirmSlug = useMemo(() => org?.slug || "", [org?.slug]);
+  const [typedSlug, setTypedSlug] = useState("");
+
+  async function load() {
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    const [orgResp, dbResp] = await Promise.all([
+      fetchJson<CurrentOrgResp>("/api/org"),
+      fetchJson<DbStatusResp>("/api/org/db-status"),
+    ]);
+
+    if (!orgResp.ok) {
+      setOrg(null);
+      setPlan(null);
+      setMemberCount(null);
+      setDbStatus(dbResp.ok ? dbResp.data : null);
+      setError(extractError(orgResp.data) || `Failed to load org (${orgResp.status})`);
+      setLoading(false);
+      return;
+    }
+
+    const nextOrg = orgResp.data?.org ?? null;
+    setOrg(nextOrg);
+    setPlan(orgResp.data?.plan ?? null);
+    setMemberCount(typeof orgResp.data?.memberCount === "number" ? orgResp.data.memberCount : null);
+    setDbStatus(dbResp.ok ? dbResp.data : null);
+
+    setName(nextOrg?.name || "");
+    setTimezone(nextOrg?.timezone || "UTC");
+    setLogoUrl(nextOrg?.logoUrl || "");
+    setLoading(false);
+  }
+
+  useEffect(() => {
     (async () => {
-      const data = await getMe();
-      if (cancelled) return;
-      setMe(data);
-      setMeLoaded(true);
-
-      if (Array.isArray(data?.memberships) && data.memberships.length) {
-        const m = await listMembers({ page: 1, limit: 200 });
-        if (cancelled) return;
-        setMembers(Array.isArray(m?.members) ? m!.members : []);
-        setMembersLoaded(true);
-      }
+      await load();
     })();
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
-  const onCreateOrg = async (e: React.FormEvent) => {
+  async function saveSettings(e: React.FormEvent) {
     e.preventDefault();
-    setCreateError(null);
-    setCreating(true);
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
 
+    let notification_settings: unknown = undefined;
     try {
-      const result = await createOrg({
-        orgName,
-        orgSlug,
-        tenantDbConnectionString: tenantDbConnectionString || undefined,
-      });
-
-      if (!result.ok) {
-        setCreateError(result.error);
-        return;
-      }
-
-      const updatedMe = await refreshMe();
-      if (Array.isArray(updatedMe?.memberships) && updatedMe.memberships.length) {
-        await refreshMembers();
-      }
-    } finally {
-      setCreating(false);
+      notification_settings = notificationJson.trim() ? JSON.parse(notificationJson) : undefined;
+    } catch {
+      setSaving(false);
+      setError("Notification settings must be valid JSON");
+      return;
     }
-  };
 
-  const onInvite = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setInviteError(null);
-    setInviting(true);
+    const resp = await fetchJson<unknown>("/api/org/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: name.trim() || undefined,
+        timezone: timezone.trim() || undefined,
+        logo_url: logoUrl.trim() || undefined,
+        notification_settings,
+      }),
+    });
 
-    try {
-      const result = await inviteMember({ email: inviteEmail, role: inviteRole });
-      if (!result.ok) {
-        setInviteError(result.error);
-        return;
-      }
-      setInviteEmail("");
-      await refreshMembers();
-    } finally {
-      setInviting(false);
+    setSaving(false);
+    if (!resp.ok) {
+      setError(extractError(resp.data) || `Save failed (${resp.status})`);
+      return;
     }
-  };
+
+    setSuccess("Saved");
+    await load();
+  }
+
+  async function deleteOrg() {
+    if (!org?.slug) return;
+    if (typedSlug.trim() !== org.slug) {
+      setError(`Type ${org.slug} to confirm deletion.`);
+      return;
+    }
+
+    setDeleting(true);
+    setError(null);
+    setSuccess(null);
+
+    const resp = await fetchJson<unknown>("/api/org", { method: "DELETE" });
+    setDeleting(false);
+
+    if (!resp.ok) {
+      setError(extractError(resp.data) || `Delete failed (${resp.status})`);
+      return;
+    }
+
+    window.location.href = "/org";
+  }
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
-      <div className="w-full">
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2 flex items-center gap-2">
-            <Building2 className="w-8 h-8" />
-            Organization
-          </h1>
-          <p className="text-slate-600 dark:text-slate-300">
-            Create your organization and invite team members after signing in.
-          </p>
+      <div className="max-w-5xl mx-auto">
+        <div className="flex items-start justify-between gap-4 mb-6">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Organization</h1>
+            <p className="text-slate-600 dark:text-slate-300">Update org profile and preferences.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={load}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm font-semibold text-slate-900 dark:text-white disabled:opacity-60"
+            >
+              <RefreshCw className="w-4 h-4" /> Refresh
+            </button>
+            <Link
+              href="/settings"
+              className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm font-semibold text-slate-900 dark:text-white hover:bg-slate-50 dark:hover:bg-zinc-800"
+            >
+              Back to Settings
+            </Link>
+          </div>
         </div>
 
-        {!meLoaded ? (
-          <div className="text-slate-600 dark:text-slate-300">Loading…</div>
-        ) : !me?.user ? (
-          <div className="text-slate-600 dark:text-slate-300">You’re not signed in.</div>
-        ) : !hasOrg ? (
-          <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6 mb-8">
-            <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Create Organization</h2>
-            <p className="text-sm text-slate-600 dark:text-slate-300 mb-6">
-              If the backend is in manual tenant DB mode, provide a per-org Postgres connection string.
-            </p>
-
-            <form className="space-y-4" onSubmit={onCreateOrg}>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Organization Name</label>
-                <input
-                  value={orgName}
-                  onChange={(e) => setOrgName(e.target.value)}
-                  className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g. Acme Inc"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Organization Slug</label>
-                <input
-                  value={orgSlug}
-                  onChange={(e) => setOrgSlug(e.target.value)}
-                  className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g. acme"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Tenant DB Connection String</label>
-                <textarea
-                  value={tenantDbConnectionString}
-                  onChange={(e) => setTenantDbConnectionString(e.target.value)}
-                  rows={3}
-                  className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="postgresql://user:pass@host/db?sslmode=require"
-                />
-              </div>
-
-              {createError ? (
-                <div className="text-sm text-red-600 dark:text-red-400">{createError}</div>
-              ) : null}
-
-              <button
-                type="submit"
-                disabled={creating}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition disabled:opacity-70"
-              >
-                {creating ? "Creating…" : "Create Organization"}
-              </button>
-            </form>
+        {error ? (
+          <div className="mb-6 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950 px-4 py-3 text-sm text-red-800 dark:text-red-200">
+            {error}
           </div>
-        ) : (
-          <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6 mb-8">
-            <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2 flex items-center gap-2">
-              <Users className="w-6 h-6" />
-              Members
-            </h2>
-            <p className="text-sm text-slate-600 dark:text-slate-300 mb-6">Invite teammates to join your organization.</p>
+        ) : null}
+        {success ? (
+          <div className="mb-6 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950 px-4 py-3 text-sm text-green-800 dark:text-green-200">
+            {success}
+          </div>
+        ) : null}
 
-            <form className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end" onSubmit={onInvite}>
-              <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Email</label>
-                <input
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  type="email"
-                  required
-                  className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="teammate@company.com"
+        {loading ? (
+          <div className="text-slate-600 dark:text-slate-300">Loading…</div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+              <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Plan</div>
+                <div className="mt-2 text-slate-900 dark:text-white font-bold">{plan?.name || "—"}</div>
+                <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">{plan?.slug || ""}</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Members</div>
+                <div className="mt-2 text-slate-900 dark:text-white font-bold">{memberCount ?? "—"}</div>
+                <Link href="/settings/team" className="mt-2 inline-block text-sm font-semibold text-blue-600 dark:text-blue-400 hover:underline">
+                  Manage team
+                </Link>
+              </div>
+              <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Database</div>
+                <div className="mt-2 text-slate-900 dark:text-white font-bold">{dbStatus?.state || "—"}</div>
+                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Branch: {dbStatus?.branchId || "—"}</div>
+              </div>
+            </div>
+
+            <form onSubmit={saveSettings} className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
+              <div className="text-lg font-semibold text-slate-900 dark:text-white">Profile</div>
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                <label>
+                  <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Name</div>
+                  <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 px-3 py-2 text-sm text-slate-900 dark:text-white outline-none"
+                    placeholder="Acme Inc"
+                  />
+                </label>
+                <label>
+                  <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Slug</div>
+                  <input
+                    value={org?.slug || ""}
+                    readOnly
+                    className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-100 dark:bg-zinc-800 px-3 py-2 text-sm text-slate-700 dark:text-slate-200 outline-none"
+                  />
+                </label>
+                <label>
+                  <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Timezone</div>
+                  <input
+                    value={timezone}
+                    onChange={(e) => setTimezone(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 px-3 py-2 text-sm text-slate-900 dark:text-white outline-none"
+                    placeholder="UTC"
+                  />
+                </label>
+                <label>
+                  <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Logo URL</div>
+                  <input
+                    value={logoUrl}
+                    onChange={(e) => setLogoUrl(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 px-3 py-2 text-sm text-slate-900 dark:text-white outline-none"
+                    placeholder="https://..."
+                  />
+                </label>
+              </div>
+
+              <div className="mt-6">
+                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Notification settings (JSON)</div>
+                <textarea
+                  value={notificationJson}
+                  onChange={(e) => setNotificationJson(e.target.value)}
+                  rows={8}
+                  className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 px-3 py-2 text-sm text-slate-900 dark:text-white outline-none font-mono"
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Role</label>
-                <select
-                  value={inviteRole}
-                  onChange={(e) => setInviteRole(e.target.value)}
-                  className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="member">member</option>
-                  <option value="admin">admin</option>
-                </select>
-              </div>
-
-              {inviteError ? (
-                <div className="md:col-span-3 text-sm text-red-600 dark:text-red-400">{inviteError}</div>
-              ) : null}
-
-              <div className="md:col-span-3">
+              <div className="mt-5 flex flex-wrap gap-2">
                 <button
                   type="submit"
-                  disabled={inviting}
-                  className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition disabled:opacity-70"
+                  disabled={saving}
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-60"
                 >
-                  <MailPlus className="w-4 h-4" />
-                  {inviting ? "Sending…" : "Send Invite"}
+                  <Save className="w-4 h-4" /> {saving ? "Saving…" : "Save"}
                 </button>
+                <Link
+                  href="/settings/integrations"
+                  className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-2 text-sm font-semibold text-slate-900 dark:text-white hover:bg-slate-50 dark:hover:bg-zinc-800"
+                >
+                  Manage integrations
+                </Link>
               </div>
             </form>
 
-            <div className="mt-8">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-3">Current Members</h3>
-              {!membersLoaded ? (
-                <div className="text-slate-600 dark:text-slate-300">Loading members…</div>
-              ) : members.length ? (
-                <div className="divide-y divide-slate-200 dark:divide-zinc-800 rounded-lg border border-slate-200 dark:border-zinc-800 overflow-hidden">
-                  {members.map((m) => (
-                    <div key={m.id} className="flex items-center justify-between px-4 py-3 bg-white dark:bg-zinc-950">
-                      <div>
-                        <div className="font-semibold text-slate-900 dark:text-white">{m.fullName}</div>
-                        <div className="text-sm text-slate-600 dark:text-slate-300">{m.email}</div>
-                      </div>
-                      <div className="text-sm font-semibold text-slate-700 dark:text-slate-300">{m.role}</div>
-                    </div>
-                  ))}
+            <div className="mt-6 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-6">
+              <div className="flex items-start gap-3">
+                <div className="mt-1">
+                  <AlertCircle className="w-5 h-5 text-red-700 dark:text-red-300" />
                 </div>
-              ) : (
-                <div className="text-slate-600 dark:text-slate-300">No members found.</div>
-              )}
+                <div className="flex-1">
+                  <div className="text-lg font-semibold text-red-900 dark:text-red-100">Danger Zone</div>
+                  <div className="mt-1 text-sm text-red-800 dark:text-red-200">
+                    Delete this organization. This action is not reversible.
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 items-end">
+                    <label>
+                      <div className="text-sm font-semibold text-red-900 dark:text-red-100 mb-2">Type org slug to confirm</div>
+                      <input
+                        value={typedSlug}
+                        onChange={(e) => setTypedSlug(e.target.value)}
+                        className="w-full rounded-lg border border-red-200 dark:border-red-900 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-slate-900 dark:text-white outline-none"
+                        placeholder={confirmSlug}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={deleteOrg}
+                      disabled={deleting || !confirmSlug}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 hover:bg-red-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-60"
+                    >
+                      <Trash2 className="w-4 h-4" /> {deleting ? "Deleting…" : "Delete organization"}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
+          </>
         )}
       </div>
     </div>

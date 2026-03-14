@@ -10,6 +10,8 @@ import {
   Users, 
   TouchpadOff, 
   BarChart3, 
+  Activity,
+  Flag,
   Settings,
   Menu,
   X
@@ -19,9 +21,11 @@ import { useState } from "react";
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Sprint Plan", href: "/sprint_plan", icon: Zap },
+  { name: "Sprints", href: "/sprint", icon: Flag },
   { name: "Tasks", href: "/tasks", icon: ListTodo },
   { name: "Developers", href: "/developers", icon: Users },
   { name: "Assignment", href: "/assign", icon: TouchpadOff },
+  { name: "Monitoring", href: "/monitoring", icon: Activity },
   { name: "Reports", href: "/reports", icon: BarChart3 },
   { name: "Settings", href: "/settings", icon: Settings },
 ];

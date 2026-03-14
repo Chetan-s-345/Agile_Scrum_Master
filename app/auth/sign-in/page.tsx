@@ -39,7 +39,7 @@ export default function SignInPage() {
         }
 
         if (data?.requiresOrgSetup) {
-          router.push("/settings/org");
+          router.push("/org");
         } else {
           router.push("/dashboard");
         }
