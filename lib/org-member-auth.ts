@@ -89,7 +89,12 @@ export async function listInvitations(): Promise<
   const resp = await fetch("/api/org/invitations", { cache: "no-store" });
   const data = await resp.json().catch(() => null);
   if (resp.ok) {
-    return { ok: true, invitations: Array.isArray(data?.invitations) ? (data.invitations as OrgInvitation[]) : [] };
+    const invitations = Array.isArray(data?.invitations)
+      ? (data.invitations as OrgInvitation[])
+      : Array.isArray(data?.items)
+        ? (data.items as OrgInvitation[])
+        : [];
+    return { ok: true, invitations };
   }
   return {
     ok: false,

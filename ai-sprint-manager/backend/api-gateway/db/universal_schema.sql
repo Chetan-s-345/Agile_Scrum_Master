@@ -1,5 +1,5 @@
 -- Universal (control-plane) schema
--- Stores users, orgs, memberships, and the Neon per-org branch connection info.
+-- Stores users, orgs, memberships, and the Neon per-org project connection info.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS citext;

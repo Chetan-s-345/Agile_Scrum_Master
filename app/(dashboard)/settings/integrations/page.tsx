@@ -132,7 +132,7 @@ export default function IntegrationsSettingsPage() {
               type="button"
               onClick={syncNow}
               disabled={saving}
-              className="rounded-lg bg-green-600 hover:bg-green-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-60"
+              className="rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-200 text-white dark:text-black px-4 py-2 text-sm font-semibold disabled:opacity-60"
             >
               Sync now
             </button>
@@ -218,7 +218,7 @@ export default function IntegrationsSettingsPage() {
             <button
               type="submit"
               disabled={saving || !baseUrl || !email || !apiToken || !projectKey}
-              className="mt-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-60"
+              className="mt-2 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-200 text-white dark:text-black px-4 py-2 text-sm font-semibold disabled:opacity-60"
             >
               {saving ? "Saving…" : "Connect Jira"}
             </button>

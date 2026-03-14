@@ -8,7 +8,7 @@ const { Pool, Client } = require('pg');
 
 const { env } = require('../config/env');
 const { db } = require('../config/database');
-const { NeonBranchManager } = require('../config/neon');
+const { NeonProjectManager } = require('../config/neon');
 const { emailService } = require('../services/email.service');
 const { logger } = require('../middleware/logger');
 const {
@@ -206,7 +206,6 @@ async function getCurrentOrg(req, res, next) {
         logoUrl: org.logo_url,
         status: org.plan_status,
         trialEndsAt: org.trial_ends_at,
-        neonBranchId: org.neon_branch_id,
         dbProvisioned: org.db_provisioned,
       },
       plan: org.plan_slug ? { slug: org.plan_slug, name: org.plan_name } : null,
@@ -219,7 +218,7 @@ async function getCurrentOrg(req, res, next) {
 }
 
 async function createOrg(req, res, next) {
-  let createdBranchId = null;
+  let createdProjectId = null;
 
   try {
     if (!req.user?.userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -270,7 +269,7 @@ async function createOrg(req, res, next) {
 
       const mode = env.TENANT_DB_PROVISIONING_MODE;
       let connectionString = null;
-      let neonBranchId = null;
+      let neonProjectId = null;
 
       if (mode === 'manual') {
         connectionString = String(parsed.data.tenantDbConnectionString || '').trim();
@@ -300,30 +299,41 @@ async function createOrg(req, res, next) {
           });
         }
       } else {
-        const neon = new NeonBranchManager();
-        let branch;
+        const neon = new NeonProjectManager();
+        let project;
         try {
-          branch = await neon.createOrgBranch(org.id, org.slug);
-          createdBranchId = branch.branchId;
-          neonBranchId = branch.branchId;
+          project = await neon.createOrgProject(org.id, org.slug);
+          createdProjectId = project.projectId;
+          neonProjectId = project.projectId;
         } catch (e) {
           const status = e?.status || e?.cause?.status;
           if (status === 401 || status === 403) {
             throw Object.assign(
-              new Error('Neon API authentication failed. Check NEON_API_KEY and NEON_PROJECT_ID.'),
+              new Error('Neon API authentication failed. Check NEON_API_KEY.'),
               { statusCode: 500, cause: e }
             );
           }
           throw Object.assign(new Error('Database unavailable'), { statusCode: 503, cause: e });
         }
 
-        connectionString = branch.connectionString;
-        if (!connectionString) {
-          try {
-            connectionString = await neon.getOrgConnectionString(org.id);
-          } catch (e) {
-            throw Object.assign(new Error('Database unavailable'), { statusCode: 503, cause: e });
+        connectionString = project.connectionString;
+
+        // Project-per-org starts empty; apply tenant schema before seeding.
+        try {
+          await ensureTenantSchema(connectionString);
+        } catch (e) {
+          if (e?.code === '42501') {
+            throw Object.assign(
+              new Error(
+                'Tenant database user lacks permissions to initialize schema (needs CREATE EXTENSION/TABLE/INDEX).'
+              ),
+              { statusCode: 400, cause: e }
+            );
           }
+          throw Object.assign(new Error('Failed to initialize tenant database schema'), {
+            statusCode: 400,
+            cause: e,
+          });
         }
       }
 
@@ -335,7 +345,7 @@ async function createOrg(req, res, next) {
         if (e?.code === '42P01') {
           throw Object.assign(
             new Error(
-              'Tenant database is missing required schema. Ensure PART 2 (tenant schema) from init.sql has been applied to that database/branch.'
+              'Tenant database is missing required schema. Ensure PART 2 (tenant schema) from init.sql has been applied to that database.'
             ),
             { statusCode: 400, cause: e }
           );
@@ -345,7 +355,7 @@ async function createOrg(req, res, next) {
 
       await client.query(
         'UPDATE organizations SET neon_branch_id = $1, db_connection_string = $2, db_provisioned = TRUE WHERE id = $3',
-        [neonBranchId ? String(neonBranchId) : null, String(connectionString), org.id]
+        [neonProjectId ? String(neonProjectId) : null, String(connectionString), org.id]
       );
 
       await client.query(
@@ -390,10 +400,10 @@ async function createOrg(req, res, next) {
 
     return res.status(201).json(result);
   } catch (err) {
-    if (createdBranchId && env.TENANT_DB_PROVISIONING_MODE === 'neon') {
+    if (createdProjectId && env.TENANT_DB_PROVISIONING_MODE === 'neon') {
       try {
-        const neon = new NeonBranchManager();
-        await neon.deleteBranch(String(createdBranchId));
+        const neon = new NeonProjectManager();
+        await neon.deleteProject(String(createdProjectId));
       } catch {
         // best-effort cleanup
       }
@@ -945,41 +955,37 @@ async function dbStatus(req, res, next) {
     if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
     if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
 
-    if (env.TENANT_DB_PROVISIONING_MODE !== 'neon') {
-      return res.status(400).json({ error: 'Neon provisioning mode is disabled' });
-    }
-
     const orgResp = await db.universalPool.query(
-      'SELECT neon_branch_id FROM organizations WHERE id = $1',
+      'SELECT db_provisioned, db_connection_string, neon_branch_id FROM organizations WHERE id = $1',
       [String(req.user.orgId)]
     );
-    const neonBranchId = orgResp.rows[0]?.neon_branch_id;
-    if (!neonBranchId) return res.status(404).json({ error: 'Neon branch not configured' });
+    const row = orgResp.rows[0];
+    if (!row) return res.status(404).json({ error: 'Organization not found' });
 
-    const neon = new NeonBranchManager();
-    const metrics = await neon.getBranchMetrics(String(neonBranchId));
-    const branches = await neon.listAllBranches();
-    const state = branches.find((b) => String(b.branchId) === String(neonBranchId))?.state || null;
+    const provider = env.TENANT_DB_PROVISIONING_MODE;
+    const provisioned = Boolean(row.db_provisioned);
+    const projectId = provider === 'neon' ? (row.neon_branch_id ? String(row.neon_branch_id) : null) : null;
 
-    const storageBytes =
-      metrics?.storageBytes ??
-      metrics?.storage_bytes ??
-      metrics?.metrics?.storage_bytes ??
-      metrics?.metrics?.storageBytes ??
-      null;
-    const computeTimeSeconds =
-      metrics?.computeTimeSeconds ??
-      metrics?.compute_time_seconds ??
-      metrics?.metrics?.compute_time_seconds ??
-      metrics?.metrics?.computeTimeSeconds ??
-      null;
+    let connected = false;
+    if (row.db_connection_string) {
+      try {
+        const pool = poolFromConnectionString(String(row.db_connection_string));
+        await pool.query('SELECT 1');
+        connected = true;
+        await pool.end();
+      } catch {
+        connected = false;
+      }
+    }
+
+    const status = connected ? 'connected' : provisioned ? 'provisioned' : 'not_provisioned';
 
     return res.status(200).json({
-      branchId: String(neonBranchId),
-      storageBytes,
-      computeTimeSeconds,
-      state,
-      raw: metrics,
+      provider,
+      status,
+      provisioned,
+      connected,
+      projectId,
     });
   } catch (err) {
     return next(err);

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Filter, RefreshCw } from "lucide-react";
+import Link from "next/link";
 
 type SprintListItem = {
   id: string;
@@ -253,7 +254,8 @@ export default function TaskBoardPage() {
           </div>
           <button
             onClick={() => setShowCreateTask((v) => !v)}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition flex items-center gap-2 disabled:opacity-60"
+            title={!selectedSprintId ? "Create/select a sprint first" : ""}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             disabled={!selectedSprintId || loading}
           >
             <Plus className="w-5 h-5" />
@@ -278,7 +280,16 @@ export default function TaskBoardPage() {
               ))}
             </select>
             {!sprints.length && (
-              <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">No active/planning sprints found.</p>
+              <div className="mt-2 text-xs text-slate-600 dark:text-slate-400">
+                <p>No active/planning sprints found.</p>
+                <p className="mt-1">
+                  Create one in{" "}
+                  <Link href="/sprint_plan" className="text-blue-600 dark:text-blue-400 underline">
+                    Sprint Planner
+                  </Link>
+                  {" "}then come back to add tasks.
+                </p>
+              </div>
             )}
           </div>
 
@@ -385,7 +396,8 @@ export default function TaskBoardPage() {
               </div>
               <button
                 onClick={() => setShowCreateTask(true)}
-                className="w-full mt-4 py-2 border-2 border-dashed border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400 rounded-lg hover:bg-white hover:dark:bg-slate-700 transition text-sm font-medium"
+                title={!selectedSprintId ? "Create/select a sprint first" : ""}
+                className="w-full mt-4 py-2 border-2 border-dashed border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400 rounded-lg hover:bg-white hover:dark:bg-slate-700 transition text-sm font-medium disabled:cursor-not-allowed"
                 disabled={!selectedSprintId || loading}
               >
                 + Add Task

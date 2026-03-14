@@ -1,7 +1,6 @@
 const { Pool } = require('pg');
 const { env } = require('./env');
 const { logger } = require('../middleware/logger');
-const { NeonBranchManager } = require('./neon');
 
 function poolFromConnectionString(connectionString, { max } = {}) {
   return new Pool({
@@ -17,7 +16,6 @@ class DatabasePoolManager {
     this.universalPool = poolFromConnectionString(env.UNIVERSAL_DATABASE_URL, { max: 20 });
     this.orgPools = new Map();
     this._orgColumns = null;
-    this.neon = env.TENANT_DB_PROVISIONING_MODE === 'neon' ? new NeonBranchManager() : null;
   }
 
   async _loadOrgColumns() {
@@ -49,18 +47,6 @@ class DatabasePoolManager {
       conn = orgRow?.rows?.[0]?.db_connection_string || null;
     }
 
-    // Optional fallback: derive connection string from Neon (only in neon mode).
-    if (!conn && this.neon) {
-      conn = await this.neon.getOrgConnectionString(key);
-
-      // Best-effort persist for next time if the universal schema supports it.
-      if (hasConnCol) {
-        await this.universalPool.query(
-          'UPDATE organizations SET db_connection_string = $1 WHERE id = $2 AND (db_connection_string IS NULL OR db_connection_string = \'\')',
-          [conn, key]
-        );
-      }
-    }
 
     if (!conn) {
       throw Object.assign(new Error('Org DB connection string not found. In manual mode, you must store organizations.db_connection_string for this org.'), {

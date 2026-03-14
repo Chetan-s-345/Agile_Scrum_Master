@@ -1,6 +1,6 @@
 const { db } = require('../config/database');
 const { env } = require('../config/env');
-const { NeonBranchManager } = require('../config/neon');
+const { NeonProjectManager } = require('../config/neon');
 
 function slugify(value) {
   return String(value || '')
@@ -13,7 +13,7 @@ function slugify(value) {
 
 class OrgService {
   constructor() {
-    this.neon = env.TENANT_DB_PROVISIONING_MODE === 'neon' ? new NeonBranchManager() : null;
+    this.neon = env.TENANT_DB_PROVISIONING_MODE === 'neon' ? new NeonProjectManager() : null;
     this._orgColumns = null;
   }
 
@@ -31,7 +31,7 @@ class OrgService {
     return cols.has(columnName);
   }
 
-  async createOrgWithNeonBranch({ name, slug }) {
+  async createOrgWithNeonProject({ name, slug }) {
     if (!this.neon) {
       throw Object.assign(new Error('Neon provisioning is disabled on this server'), { statusCode: 400 });
     }
@@ -48,8 +48,8 @@ class OrgService {
     const org = created.rows[0];
 
     try {
-      const branch = await this.neon.createOrgBranch(org.id, org.slug);
-      const connectionString = branch.connectionString;
+      const project = await this.neon.createOrgProject(org.id, org.slug);
+      const connectionString = project.connectionString;
 
       const hasNeonBranchId = await this._orgHasColumn('neon_branch_id');
       const hasConn = await this._orgHasColumn('db_connection_string');
@@ -63,7 +63,7 @@ class OrgService {
         let i = 1;
         if (hasNeonBranchId) {
           sets.push(`neon_branch_id = $${i++}`);
-          params.push(branch.branchId);
+          params.push(project.projectId);
         }
         if (hasConn) {
           sets.push(`db_connection_string = $${i++}`);
@@ -80,7 +80,7 @@ class OrgService {
         let i = 1;
         if (hasDbHost) {
           sets.push(`db_host = $${i++}`);
-          params.push(branch.host);
+          params.push(project.host);
         }
         if (hasDbName) {
           sets.push(`db_name = $${i++}`);
@@ -96,7 +96,7 @@ class OrgService {
         }
       }
 
-      return { ...org, neonBranchId: branch.branchId, dbConnectionString: connectionString };
+      return { ...org, neonProjectId: project.projectId, dbConnectionString: connectionString };
     } catch (err) {
       await db.universalPool.query('DELETE FROM organizations WHERE id = $1', [org.id]);
       throw err;

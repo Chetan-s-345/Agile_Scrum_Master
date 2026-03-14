@@ -17,6 +17,12 @@ type Invitation = {
 
 type InvitationsResp = { items?: Invitation[]; error?: string };
 
+type InviteResp = {
+  invitation?: unknown;
+  email?: { sent?: boolean; message?: string; code?: string | null; statusCode?: number | null } | null;
+  error?: string;
+};
+
 function extractError(data: unknown): string | null {
   if (!data || typeof data !== "object") return null;
   if ("error" in data) {
@@ -48,9 +54,9 @@ export default function TeamSettingsPage() {
   const [role, setRole] = useState("member");
   const [inviting, setInviting] = useState(false);
 
-  async function load() {
+  async function load(opts?: { preserveError?: boolean }) {
     setLoading(true);
-    setError(null);
+    if (!opts?.preserveError) setError(null);
 
     const [mResp, iResp] = await Promise.all([
       fetchJson<MembersResp>("/api/org/members?page=1&limit=200"),
@@ -80,7 +86,7 @@ export default function TeamSettingsPage() {
     setInviting(true);
     setError(null);
 
-    const resp = await fetchJson<unknown>("/api/org/members/invite", {
+    const resp = await fetchJson<InviteResp>("/api/org/members/invite", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, role }),
@@ -93,8 +99,13 @@ export default function TeamSettingsPage() {
       return;
     }
 
+    const warning = resp.data?.email && resp.data.email.sent === false
+      ? (resp.data.email.message || "Invitation created but email was not sent.")
+      : null;
+
     setEmail("");
-    await load();
+    await load({ preserveError: true });
+    if (warning) setError(warning);
   }
 
   return (
@@ -140,7 +151,7 @@ export default function TeamSettingsPage() {
               <button
                 type="submit"
                 disabled={inviting}
-                className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-60"
+                className="rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-200 text-white dark:text-black px-4 py-2 text-sm font-semibold disabled:opacity-60"
               >
                 {inviting ? "Sending…" : "Send invite"}
               </button>

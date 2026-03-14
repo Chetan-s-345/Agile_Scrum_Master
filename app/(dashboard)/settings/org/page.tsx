@@ -13,7 +13,6 @@ type Org = {
   status?: string | null;
   trialEndsAt?: string | null;
   dbProvisioned?: boolean | null;
-  neonBranchId?: string | null;
 };
 
 type CurrentOrgResp = {
@@ -25,10 +24,11 @@ type CurrentOrgResp = {
 };
 
 type DbStatusResp = {
-  state?: string;
-  branchId?: string;
-  storageBytes?: number | null;
-  computeTimeSeconds?: number | null;
+  provider?: string;
+  status?: string;
+  provisioned?: boolean;
+  connected?: boolean;
+  projectId?: string | null;
   error?: string;
 };
 
@@ -200,7 +200,7 @@ export default function OrgSettingsPage() {
           </div>
         ) : null}
         {success ? (
-          <div className="mb-6 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950 px-4 py-3 text-sm text-green-800 dark:text-green-200">
+          <div className="mb-6 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900 px-4 py-3 text-sm text-slate-800 dark:text-slate-200">
             {success}
           </div>
         ) : null}
@@ -218,14 +218,16 @@ export default function OrgSettingsPage() {
               <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
                 <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Members</div>
                 <div className="mt-2 text-slate-900 dark:text-white font-bold">{memberCount ?? "—"}</div>
-                <Link href="/settings/team" className="mt-2 inline-block text-sm font-semibold text-blue-600 dark:text-blue-400 hover:underline">
+                <Link href="/settings/team" className="mt-2 inline-block text-sm font-semibold text-slate-900 dark:text-slate-200 underline underline-offset-4">
                   Manage team
                 </Link>
               </div>
               <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
                 <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Database</div>
-                <div className="mt-2 text-slate-900 dark:text-white font-bold">{dbStatus?.state || "—"}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Branch: {dbStatus?.branchId || "—"}</div>
+                <div className="mt-2 text-slate-900 dark:text-white font-bold">{dbStatus?.status || "—"}</div>
+                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Provider: {dbStatus?.provider || "—"} · Connected: {dbStatus?.connected ? "yes" : "no"}
+                </div>
               </div>
             </div>
 
@@ -283,7 +285,7 @@ export default function OrgSettingsPage() {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-60"
+                  className="inline-flex items-center gap-2 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-200 text-white dark:text-black px-4 py-2 text-sm font-semibold disabled:opacity-60"
                 >
                   <Save className="w-4 h-4" /> {saving ? "Saving…" : "Save"}
                 </button>

@@ -16,7 +16,7 @@ const EnvSchema = z
 
   // Tenant DB strategy
   // - manual: user provides per-org Postgres connection string
-  // - neon: API gateway provisions a Neon branch per org
+  // - neon: API gateway provisions a Neon project per org
   TENANT_DB_PROVISIONING_MODE: z.enum(['manual', 'neon']).default('manual'),
 
   // Transactional email (Brevo)
@@ -29,11 +29,11 @@ const EnvSchema = z
 
   // Neon API (required only when TENANT_DB_PROVISIONING_MODE=neon)
   NEON_API_KEY: optionalNonEmptyString,
+
+  // Optional: legacy env vars from previous "branch per org" design.
+  // They are intentionally not required anymore.
   NEON_PROJECT_ID: optionalNonEmptyString,
   NEON_BASE_BRANCH_ID: optionalNonEmptyString,
-
-  // Optional: used when Neon API needs database/role names to generate a connection URI.
-  // If omitted, we try to derive them from UNIVERSAL_DATABASE_URL.
   NEON_DATABASE_NAME: optionalNonEmptyString,
   NEON_ROLE_NAME: optionalNonEmptyString,
 
@@ -59,20 +59,6 @@ const EnvSchema = z
 
     if (!val.NEON_API_KEY) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['NEON_API_KEY'], message: 'Required when TENANT_DB_PROVISIONING_MODE=neon' });
-    }
-    if (!val.NEON_PROJECT_ID) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['NEON_PROJECT_ID'],
-        message: 'Required when TENANT_DB_PROVISIONING_MODE=neon',
-      });
-    }
-    if (!val.NEON_BASE_BRANCH_ID) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['NEON_BASE_BRANCH_ID'],
-        message: 'Required when TENANT_DB_PROVISIONING_MODE=neon',
-      });
     }
   });
 
