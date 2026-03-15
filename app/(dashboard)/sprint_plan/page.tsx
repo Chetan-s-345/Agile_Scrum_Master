@@ -55,6 +55,19 @@ type PlanResult = {
   teamBreakdown: TeamBreakdownItem[];
 };
 
+type AgenticBuildResult = {
+  sprintId: string;
+  projectId: string;
+  sprintName: string;
+  createdTasks: Array<Record<string, unknown>>;
+  assignmentResults: Array<Record<string, unknown>>;
+  agentic?: {
+    sprintGoal?: string | null;
+    summary?: unknown;
+    risks?: unknown[];
+  };
+};
+
 export default function SprintPlannerPage() {
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [planningSprints, setPlanningSprints] = useState<SprintListItem[]>([]);
@@ -64,6 +77,10 @@ export default function SprintPlannerPage() {
   const [loading, setLoading] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [agenticDetails, setAgenticDetails] = useState("");
+  const [agenticBuilding, setAgenticBuilding] = useState(false);
+  const [agenticResult, setAgenticResult] = useState<AgenticBuildResult | null>(null);
 
   const [showCreateSprint, setShowCreateSprint] = useState(false);
   const [newSprintName, setNewSprintName] = useState("");
@@ -149,6 +166,34 @@ export default function SprintPlannerPage() {
     }
   }
 
+  async function runAgenticBuilder() {
+    if (!selectedProjectId || !selectedSprintId) return;
+    const details = agenticDetails.trim();
+    if (!details) {
+      setError("Please enter project details for the agentic builder.");
+      return;
+    }
+
+    setError(null);
+    setAgenticBuilding(true);
+    try {
+      const resp = await fetch(`/api/sprints/${encodeURIComponent(selectedSprintId)}/agentic-build`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: selectedProjectId, projectDetails: details }),
+        cache: "no-store",
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Agentic sprint build failed"));
+      setAgenticResult(data as AgenticBuildResult);
+    } catch (e) {
+      setAgenticResult(null);
+      setError(e instanceof Error ? e.message : "Agentic sprint build failed");
+    } finally {
+      setAgenticBuilding(false);
+    }
+  }
+
   async function createSprint() {
     if (!selectedProjectId) return;
     setError(null);
@@ -192,6 +237,7 @@ export default function SprintPlannerPage() {
 
   useEffect(() => {
     setPlanResult(null);
+    setAgenticResult(null);
     if (selectedProjectId) void loadPlanningSprints(selectedProjectId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
@@ -213,6 +259,46 @@ export default function SprintPlannerPage() {
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">Sprint Planner</h1>
           <p className="text-slate-600 dark:text-slate-300">Plan next sprint from backlog with AI assistance</p>
+        </div>
+
+        {/* Agentic Builder */}
+        <div className="mb-6 bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Agentic Sprint Builder</h2>
+          <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">
+            Paste project details. AI will generate sprint tasks and assign developers automatically.
+          </p>
+
+          <textarea
+            className="w-full min-h-32 bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded-lg border border-slate-200 dark:border-zinc-800"
+            value={agenticDetails}
+            onChange={(e) => setAgenticDetails(e.target.value)}
+            placeholder="Example: Build Jira integration with OAuth, sync sprints/tasks, add dashboard and alerts..."
+            disabled={loading || planning || agenticBuilding}
+          />
+
+          <div className="mt-4 flex gap-2">
+            <button
+              onClick={() => void runAgenticBuilder()}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 disabled:opacity-60"
+              disabled={!selectedProjectId || !selectedSprintId || agenticBuilding}
+            >
+              <Check className="w-4 h-4" />
+              {agenticBuilding ? "Building…" : "Build Sprint (Agentic)"}
+            </button>
+          </div>
+
+          {agenticResult && (
+            <div className="mt-4 p-4 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg">
+              <p className="text-sm text-slate-700 dark:text-slate-200">
+                Created {agenticResult.createdTasks?.length ?? 0} tasks and applied {agenticResult.assignmentResults?.length ?? 0} assignments.
+              </p>
+              {agenticResult.agentic?.sprintGoal && (
+                <p className="mt-2 text-sm text-slate-700 dark:text-slate-200">
+                  <b>Goal:</b> {agenticResult.agentic.sprintGoal}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Controls */}

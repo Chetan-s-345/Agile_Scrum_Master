@@ -10,6 +10,13 @@ const assignSchema = z.object({
   priority: z.string().min(1).optional(),
 });
 
+const assignExplicitSchema = z.object({
+  taskId: uuidSchema,
+  sprintId: uuidSchema,
+  developerId: uuidSchema,
+  reason: z.string().min(1).optional(),
+});
+
 const assignBulkSchema = z.object({
   tasks: z
     .array(
@@ -48,6 +55,7 @@ const listLogQuerySchema = z.object({
 
 module.exports = {
   assignSchema,
+  assignExplicitSchema,
   assignBulkSchema,
   reassignSchema,
   suggestParamsSchema,

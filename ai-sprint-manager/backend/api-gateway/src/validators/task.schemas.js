@@ -21,6 +21,7 @@ const createTaskSchema = z.object({
   acceptanceCriteria: z.string().optional(),
   dueDate: z.string().min(1).optional(),
   backlogItemId: uuidSchema.optional(),
+  autoAssign: z.boolean().default(true),
 });
 
 const updateStatusSchema = z.object({

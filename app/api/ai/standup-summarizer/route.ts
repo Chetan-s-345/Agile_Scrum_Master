@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAuthTokenFromCookies } from "@/lib/api-gateway";
-import { proxyToAiServiceSse } from "@/lib/ai-service";
+import { getAuthTokenFromCookies, proxyToApiGatewaySse } from "@/lib/api-gateway";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,9 +9,10 @@ export async function POST(request: Request) {
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await request.json().catch(() => null);
-  return proxyToAiServiceSse({
-    upstreamPath: "/groq/standup-summarizer/stream",
+  return proxyToApiGatewaySse({
+    upstreamPath: "/api/v1/ai/standup-summarizer/stream",
     method: "POST",
+    token,
     body: body ?? {},
   });
 }

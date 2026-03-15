@@ -1,8 +1,15 @@
 import Groq from "groq-sdk";
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+function getGroqClient() {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "GROQ_API_KEY environment variable is missing. Set GROQ_API_KEY in your Next.js server env (e.g. .env.local or .env) before calling Groq."
+    );
+  }
+
+  return new Groq({ apiKey });
+}
 
 export type GroqChatOptions = {
   system?: string;
@@ -19,9 +26,7 @@ export async function groqChat({
   temperature = 0.2,
   maxTokens = 700,
 }: GroqChatOptions): Promise<string> {
-  if (!process.env.GROQ_API_KEY) {
-    throw new Error("GROQ_API_KEY is not set");
-  }
+  const groq = getGroqClient();
 
   const messages: Array<{ role: "system" | "user"; content: string }> = [];
   if (system) messages.push({ role: "system", content: system });

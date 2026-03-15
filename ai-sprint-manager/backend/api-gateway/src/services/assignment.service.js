@@ -240,6 +240,73 @@ class AssignmentService {
     };
   }
 
+  async assignToDeveloper(req, { taskId, sprintId, developerId, reason }) {
+    const orgPool = requireOrgDb(req);
+
+    const taskResp = await orgPool.query(
+      `SELECT id, sprint_id, story_points, assignee_id
+       FROM tasks
+       WHERE id = $1 AND sprint_id = $2`,
+      [String(taskId), String(sprintId)]
+    );
+    const task = taskResp.rows[0];
+    if (!task) throw Object.assign(new Error('Task not found'), { statusCode: 404 });
+
+    const points = Number(task.story_points || 0);
+    const oldAssignee = task.assignee_id ? String(task.assignee_id) : null;
+    const newAssignee = String(developerId);
+
+    const assignmentReason = reason || 'Explicit assignment from agentic sprint plan.';
+
+    await orgPool.query('BEGIN');
+    try {
+      await orgPool.query(
+        `UPDATE tasks
+         SET assignee_id = $1, assigned_by = 'ai_agentic', assigned_at = NOW(), updated_at = NOW()
+         WHERE id = $2 AND sprint_id = $3`,
+        [newAssignee, String(taskId), String(sprintId)]
+      );
+
+      if (oldAssignee && oldAssignee !== newAssignee) {
+        await orgPool.query(
+          `UPDATE developer_profiles
+           SET current_sprint_load = GREATEST(0, current_sprint_load - $2), updated_at = NOW()
+           WHERE id = $1`,
+          [oldAssignee, points]
+        );
+      }
+
+      if (!oldAssignee || oldAssignee !== newAssignee) {
+        await orgPool.query(
+          `UPDATE developer_profiles
+           SET current_sprint_load = current_sprint_load + $2, updated_at = NOW()
+           WHERE id = $1`,
+          [newAssignee, points]
+        );
+      }
+
+      await orgPool.query(
+        `INSERT INTO assignment_log (
+          task_id, developer_id, assigned_by,
+          total_candidates, filtered_by_tech, filtered_by_availability,
+          assignment_reason
+        ) VALUES ($1,$2,'ai_agentic',$3,$4,$5,$6)`,
+        [String(taskId), newAssignee, 0, 0, 0, assignmentReason]
+      );
+
+      await orgPool.query('COMMIT');
+    } catch (e) {
+      try {
+        await orgPool.query('ROLLBACK');
+      } catch {
+        // ignore
+      }
+      throw e;
+    }
+
+    return { assigned: true, taskId: String(taskId), developerId: newAssignee, reason: assignmentReason };
+  }
+
   async suggest(req, taskId) {
     const orgPool = requireOrgDb(req);
 
