@@ -38,10 +38,16 @@ jobs:
             const fs = require('fs');
             const path = require('path');
 
-            const sourceFile = String(core.getInput('sourceFile') || 'ISSUES_JIRA_GAP_AND_AI_ROADMAP.md');
-            const dryRun = String(core.getInput('dryRun') || 'true').toLowerCase() === 'true';
-            const createLabels = String(core.getInput('createLabels') || 'true').toLowerCase() === 'true';
-            const maxIssues = Math.max(1, Number(core.getInput('maxIssues') || 200));
+            // IMPORTANT:
+            // This script runs inside actions/github-script, so `core.getInput()` would read inputs
+            // for the github-script action itself (not the workflow_dispatch inputs).
+            // workflow_dispatch inputs are available on the event payload.
+            const wfInputs = (context && context.payload && context.payload.inputs) ? context.payload.inputs : {};
+
+            const sourceFile = String(wfInputs.sourceFile || 'ISSUES_JIRA_GAP_AND_AI_ROADMAP.md');
+            const dryRun = String(wfInputs.dryRun ?? 'false').toLowerCase() === 'true';
+            const createLabels = String(wfInputs.createLabels ?? 'true').toLowerCase() === 'true';
+            const maxIssues = Math.max(1, Number(wfInputs.maxIssues || 200));
 
             core.notice(`Mode: ${dryRun ? 'DRY RUN (no issues will be created)' : 'REAL RUN (issues will be created)'}`);
             core.notice(`Source file: ${sourceFile}; createLabels=${createLabels}; maxIssues=${maxIssues}`);
