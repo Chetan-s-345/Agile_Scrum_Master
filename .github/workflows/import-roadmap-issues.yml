@@ -10,7 +10,7 @@ on:
       dryRun:
         description: "If true, only prints what would be created"
         required: true
-        default: "true"
+        default: "false"
       createLabels:
         description: "If true, creates missing labels"
         required: true
@@ -42,6 +42,9 @@ jobs:
             const dryRun = String(core.getInput('dryRun') || 'true').toLowerCase() === 'true';
             const createLabels = String(core.getInput('createLabels') || 'true').toLowerCase() === 'true';
             const maxIssues = Math.max(1, Number(core.getInput('maxIssues') || 200));
+
+            core.notice(`Mode: ${dryRun ? 'DRY RUN (no issues will be created)' : 'REAL RUN (issues will be created)'}`);
+            core.notice(`Source file: ${sourceFile}; createLabels=${createLabels}; maxIssues=${maxIssues}`);
 
             const repoFull = process.env.GITHUB_REPOSITORY;
             const [owner, repo] = repoFull.split('/');
