@@ -1,0 +1,278 @@
+name: Import roadmap issues
+
+on:
+  workflow_dispatch:
+    inputs:
+      sourceFile:
+        description: "Path to roadmap markdown file"
+        required: true
+        default: "ISSUES_JIRA_GAP_AND_AI_ROADMAP.md"
+      dryRun:
+        description: "If true, only prints what would be created"
+        required: true
+        default: "true"
+      createLabels:
+        description: "If true, creates missing labels"
+        required: true
+        default: "true"
+      maxIssues:
+        description: "Safety limit (max issues to create in one run)"
+        required: true
+        default: "200"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Import issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const sourceFile = String(core.getInput('sourceFile') || 'ISSUES_JIRA_GAP_AND_AI_ROADMAP.md');
+            const dryRun = String(core.getInput('dryRun') || 'true').toLowerCase() === 'true';
+            const createLabels = String(core.getInput('createLabels') || 'true').toLowerCase() === 'true';
+            const maxIssues = Math.max(1, Number(core.getInput('maxIssues') || 200));
+
+            const repoFull = process.env.GITHUB_REPOSITORY;
+            const [owner, repo] = repoFull.split('/');
+
+            const repoRoot = process.env.GITHUB_WORKSPACE || process.cwd();
+            const filePath = path.join(repoRoot, sourceFile);
+
+            if (!fs.existsSync(filePath)) {
+              core.setFailed(`Roadmap file not found: ${sourceFile}`);
+              return;
+            }
+
+            const text = fs.readFileSync(filePath, 'utf8');
+            const lines = text.split(/\r?\n/);
+
+            function parseIssues(lines) {
+              const issues = [];
+              let currentEpic = null;
+              let current = null;
+
+              const epicRe = /^##\s+Epic:\s*(.+?)\s*$/;
+              const issueRe = /^###\s+([A-Z0-9][A-Z0-9_-]*)\s+—\s+(.+?)\s*$/;
+
+              function flush() {
+                if (!current) return;
+                // Trim trailing blank lines
+                while (current.bodyLines.length && String(current.bodyLines[current.bodyLines.length - 1]).trim() === '') {
+                  current.bodyLines.pop();
+                }
+                issues.push(current);
+                current = null;
+              }
+
+              for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+
+                const epicMatch = line.match(epicRe);
+                if (epicMatch) {
+                  currentEpic = epicMatch[1].trim();
+                  continue;
+                }
+
+                const issueMatch = line.match(issueRe);
+                if (issueMatch) {
+                  flush();
+                  current = {
+                    key: issueMatch[1].trim(),
+                    title: issueMatch[2].trim(),
+                    epic: currentEpic,
+                    bodyLines: [],
+                  };
+                  continue;
+                }
+
+                if (current) {
+                  // The markdown uses --- as an issue delimiter.
+                  if (String(line).trim() === '---') {
+                    flush();
+                    continue;
+                  }
+                  current.bodyLines.push(line);
+                }
+              }
+
+              flush();
+              return issues;
+            }
+
+            function extractField(bodyLines, fieldName) {
+              // Matches: **Labels:** a, b
+              const re = new RegExp(`^\\*\\*${fieldName}:\\*\\*\\s*(.+?)\\s*$`, 'i');
+              for (const l of bodyLines) {
+                const m = String(l).match(re);
+                if (m) return m[1];
+              }
+              return null;
+            }
+
+            function normalizeFreeLabel(name) {
+              // Used for labels authored in the markdown (keep relatively intact, just normalize case/spacing)
+              return String(name).trim().toLowerCase();
+            }
+
+            function slugifyLabelSegment(value) {
+              return String(value)
+                .trim()
+                .toLowerCase()
+                .replace(/\s+/g, '-')
+                .replace(/[^a-z0-9_-]/g, '')
+                .replace(/-+/g, '-')
+                .replace(/^-|-$/g, '');
+            }
+
+            function derivedLabel(prefix, value) {
+              const seg = slugifyLabelSegment(value);
+              return seg ? `${prefix}:${seg}` : null;
+            }
+
+            function labelColor(name) {
+              // Deterministic 6-hex color from label name
+              let hash = 0;
+              for (let i = 0; i < name.length; i++) {
+                hash = ((hash << 5) - hash) + name.charCodeAt(i);
+                hash |= 0;
+              }
+              const c = (hash >>> 0).toString(16).padStart(8, '0').slice(0, 6);
+              return c;
+            }
+
+            async function ensureLabel(label) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: label });
+                return;
+              } catch (e) {
+                if (e.status !== 404) throw e;
+              }
+
+              await github.rest.issues.createLabel({
+                owner,
+                repo,
+                name: label,
+                color: labelColor(label),
+                description: 'Auto-created by roadmap import workflow',
+              });
+            }
+
+            async function findExistingIssueByKey(key) {
+              const marker = `roadmap-issue-key: ${key}`;
+
+              // Preferred: Search API (fast)
+              try {
+                const q = `repo:${owner}/${repo} "${marker}" in:body`;
+                const search = await github.rest.search.issuesAndPullRequests({ q, per_page: 5 });
+                const hit = (search.data.items || [])[0];
+                return hit ? hit.number : null;
+              } catch (e) {
+                core.warning(`Search API failed; falling back to listing issues. (${e.message || e})`);
+              }
+
+              // Fallback: list issues and scan bodies (slower)
+              let page = 1;
+              while (page <= 10) {
+                const resp = await github.rest.issues.listForRepo({ owner, repo, state: 'all', per_page: 100, page });
+                const items = resp.data || [];
+                for (const it of items) {
+                  if (typeof it.body === 'string' && it.body.includes(marker)) return it.number;
+                }
+                if (items.length < 100) break;
+                page++;
+              }
+              return null;
+            }
+
+            const parsed = parseIssues(lines);
+            core.info(`Parsed ${parsed.length} issue blocks from ${sourceFile}`);
+
+            let createdCount = 0;
+            let skippedCount = 0;
+
+            for (const it of parsed) {
+              const issueTitle = `${it.key} — ${it.title}`;
+
+              const existing = await findExistingIssueByKey(it.key);
+              if (existing) {
+                core.info(`SKIP (exists #${existing}): ${issueTitle}`);
+                skippedCount++;
+                continue;
+              }
+
+              const labelsRaw = extractField(it.bodyLines, 'Labels') || '';
+              const typeRaw = extractField(it.bodyLines, 'Type');
+              const priorityRaw = extractField(it.bodyLines, 'Priority');
+
+              const labels = [];
+              labels.push('roadmap');
+              labels.push('roadmap-import');
+
+              const epicLabel = it.epic ? derivedLabel('epic', it.epic) : null;
+              if (epicLabel) labels.push(epicLabel);
+
+              const typeLabel = typeRaw ? derivedLabel('type', typeRaw) : null;
+              if (typeLabel) labels.push(typeLabel);
+
+              const priorityLabel = priorityRaw ? derivedLabel('priority', priorityRaw) : null;
+              if (priorityLabel) labels.push(priorityLabel);
+
+              for (const l of labelsRaw.split(',')) {
+                const v = normalizeFreeLabel(l);
+                if (v) labels.push(v);
+              }
+
+              // De-dupe
+              const uniqueLabels = [...new Set(labels)].slice(0, 50);
+
+              let body = '';
+              body += `<!-- roadmap-issue-key: ${it.key} -->\n`;
+              if (it.epic) body += `**Epic:** ${it.epic}\n\n`;
+              body += it.bodyLines.join('\n').trim();
+
+              if (dryRun) {
+                core.info(`[DRY RUN] CREATE: ${issueTitle}`);
+                core.info(`[DRY RUN] Labels: ${uniqueLabels.join(', ')}`);
+                createdCount++;
+                if (createdCount >= maxIssues) {
+                  core.warning(`Reached maxIssues=${maxIssues} in dryRun; stopping.`);
+                  break;
+                }
+                continue;
+              }
+
+              if (createLabels) {
+                for (const l of uniqueLabels) {
+                  await ensureLabel(l);
+                }
+              }
+
+              const created = await github.rest.issues.create({
+                owner,
+                repo,
+                title: issueTitle,
+                body,
+                labels: uniqueLabels,
+              });
+
+              core.info(`CREATED #${created.data.number}: ${issueTitle}`);
+              createdCount++;
+
+              if (createdCount >= maxIssues) {
+                core.warning(`Reached maxIssues=${maxIssues}; stopping.`);
+                break;
+              }
+            }
+
+            core.notice(`Done. Created=${createdCount}, Skipped=${skippedCount}, dryRun=${dryRun}`);
