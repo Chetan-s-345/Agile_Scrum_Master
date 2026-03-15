@@ -134,6 +134,38 @@ jobs:
               return String(name).trim().toLowerCase();
             }
 
+            const MAX_LABEL_LENGTH = 50;
+
+            function stableHash6(value) {
+              // Small deterministic hash for long labels (not crypto)
+              let hash = 0;
+              const s = String(value);
+              for (let i = 0; i < s.length; i++) {
+                hash = ((hash << 5) - hash) + s.charCodeAt(i);
+                hash |= 0;
+              }
+              return (hash >>> 0).toString(16).padStart(8, '0').slice(0, 6);
+            }
+
+            function normalizeLabelName(name) {
+              const raw = String(name || '').trim();
+              if (!raw) return null;
+              if (raw.length <= MAX_LABEL_LENGTH) return raw;
+
+              // Keep prefix (e.g., "epic:") when present, and shorten the segment.
+              const hash = stableHash6(raw);
+              const colonIdx = raw.indexOf(':');
+              const prefix = colonIdx > 0 ? raw.slice(0, colonIdx + 1) : '';
+              const segment = colonIdx > 0 ? raw.slice(colonIdx + 1) : raw;
+
+              // Reserve 1 for '-' and 6 for hash.
+              const reserved = prefix.length + 1 + 6;
+              const maxSegLen = Math.max(1, MAX_LABEL_LENGTH - reserved);
+              const segTrimmed = segment.slice(0, maxSegLen).replace(/-+$/g, '');
+              const normalized = `${prefix}${segTrimmed}-${hash}`;
+              return normalized.length <= MAX_LABEL_LENGTH ? normalized : normalized.slice(0, MAX_LABEL_LENGTH);
+            }
+
             function slugifyLabelSegment(value) {
               return String(value)
                 .trim()
@@ -146,7 +178,7 @@ jobs:
 
             function derivedLabel(prefix, value) {
               const seg = slugifyLabelSegment(value);
-              return seg ? `${prefix}:${seg}` : null;
+              return seg ? normalizeLabelName(`${prefix}:${seg}`) : null;
             }
 
             function labelColor(name) {
@@ -275,12 +307,12 @@ jobs:
               if (priorityLabel) labels.push(priorityLabel);
 
               for (const l of labelsRaw.split(',')) {
-                const v = normalizeFreeLabel(l);
+                const v = normalizeLabelName(normalizeFreeLabel(l));
                 if (v) labels.push(v);
               }
 
               // De-dupe
-              const uniqueLabels = [...new Set(labels)].slice(0, 50);
+              const uniqueLabels = [...new Set(labels.map(normalizeLabelName).filter(Boolean))].slice(0, 50);
 
               let body = '';
               body += `<!-- roadmap-issue-key: ${it.key} -->\n`;
