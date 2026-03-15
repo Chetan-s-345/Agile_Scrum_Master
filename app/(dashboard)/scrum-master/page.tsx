@@ -392,6 +392,12 @@ export default function AgenticScrumMasterPage() {
                   const taskId = asString(getProp(a, "taskId"));
                   const developerId = asString(getProp(a, "developerId"));
                   const ok = Boolean(getProp(a, "ok"));
+                  const reason =
+                    asString(getProp(a, "reason")) ||
+                    asString(getProp(a, "data.auto.reason")) ||
+                    asString(getProp(a, "data.auto.suggestion")) ||
+                    asString(getProp(a, "data.auto.error")) ||
+                    asString(getProp(a, "data.explicit.error"));
                   const developerName = developerNameById.get(developerId) || (developerId ? `Developer ${developerId.slice(0, 6)}` : "Developer");
                   return (
                     <div
@@ -406,6 +412,9 @@ export default function AgenticScrumMasterPage() {
                         {ticketId ? ` • Ticket: ${ticketId.slice(0, 8)}` : null}
                         {developerId ? ` • Dev: ${developerId.slice(0, 8)}` : null}
                       </p>
+                      {!ok && reason ? (
+                        <p className="mt-1 text-xs text-red-700 dark:text-red-300">Reason: {reason}</p>
+                      ) : null}
                     </div>
                   );
                 })}

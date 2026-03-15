@@ -404,6 +404,55 @@ class TaskService {
     }
   }
 
+  async removePermanent(req, taskId) {
+    const orgPool = requireOrgDb(req);
+
+    const beforeResp = await orgPool.query('SELECT * FROM tasks WHERE id = $1', [String(taskId)]);
+    const before = beforeResp.rows[0];
+    if (!before) throw Object.assign(new Error('Task not found'), { statusCode: 404 });
+
+    await orgPool.query('BEGIN');
+    try {
+      await orgPool.query('DELETE FROM tasks WHERE id = $1', [String(taskId)]);
+
+      if (before.assignee_id) {
+        await orgPool.query(
+          `UPDATE developer_profiles
+           SET current_sprint_load = GREATEST(0, current_sprint_load - $2), updated_at = NOW()
+           WHERE id = $1`,
+          [String(before.assignee_id), Number(before.story_points || 0)]
+        );
+      }
+
+      await orgPool.query(
+        `UPDATE sprints
+         SET planned_points = (
+           SELECT COALESCE(SUM(story_points), 0)::int FROM tasks WHERE sprint_id = $1 AND status <> 'cancelled'
+         ), updated_at = NOW()
+         WHERE id = $1`,
+        [String(before.sprint_id)]
+      );
+
+      await orgPool.query('COMMIT');
+
+      await queueJiraTaskSync(req, {
+        taskId: String(taskId),
+        action: 'delete',
+        projectId: String(before.project_id),
+        sprintId: String(before.sprint_id),
+      });
+
+      return { ok: true, deleted: true };
+    } catch (e) {
+      try {
+        await orgPool.query('ROLLBACK');
+      } catch {
+        // ignore
+      }
+      throw e;
+    }
+  }
+
   async addComment(req, taskId, payload) {
     const orgPool = requireOrgDb(req);
 

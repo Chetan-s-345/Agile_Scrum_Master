@@ -90,6 +90,36 @@ async function completeSprint(req, res, next) {
   }
 }
 
+async function archiveSprint(req, res, next) {
+  try {
+    const parsedId = uuidSchema.safeParse(req.params.sprintId);
+    if (!parsedId.success) return res.status(400).json({ error: 'Invalid sprintId' });
+
+    const result = await sprintService.archive(req, parsedId.data, {
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function deleteSprint(req, res, next) {
+  try {
+    const parsedId = uuidSchema.safeParse(req.params.sprintId);
+    if (!parsedId.success) return res.status(400).json({ error: 'Invalid sprintId' });
+
+    const result = await sprintService.remove(req, parsedId.data, {
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function getSprint(req, res, next) {
   try {
     const parsedId = uuidSchema.safeParse(req.params.sprintId);
@@ -132,6 +162,8 @@ module.exports = {
   planSprint,
   startSprint,
   completeSprint,
+  archiveSprint,
+  deleteSprint,
   getSprint,
   burndown,
   risk,

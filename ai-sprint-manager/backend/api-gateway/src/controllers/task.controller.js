@@ -95,7 +95,10 @@ async function deleteTask(req, res, next) {
     const parsedId = uuidSchema.safeParse(req.params.taskId);
     if (!parsedId.success) return res.status(400).json({ error: 'Invalid taskId' });
 
-    const result = await taskService.cancel(req, parsedId.data);
+    const hardDelete = String(req.query?.hard || '').toLowerCase() === 'true';
+    const result = hardDelete
+      ? await taskService.removePermanent(req, parsedId.data)
+      : await taskService.cancel(req, parsedId.data);
     return res.status(200).json(result);
   } catch (err) {
     return next(err);

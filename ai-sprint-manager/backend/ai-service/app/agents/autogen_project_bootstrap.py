@@ -24,6 +24,98 @@ def _require_autogen():
 _FINAL_JSON_RE = re.compile(r"FINAL_BACKLOG_JSON\s*:\s*(\{.*\})\s*$", re.S)
 
 
+def _extract_section_bullets(text: str, heading: str) -> List[str]:
+    pattern = re.compile(rf"{re.escape(heading)}\s*:\s*(.*?)(?:\n\n[A-Z][^\n]*:|\Z)", re.S)
+    m = pattern.search(text)
+    if not m:
+        return []
+
+    body = m.group(1)
+    out: List[str] = []
+    for line in body.splitlines():
+        line = line.strip()
+        if not line.startswith("-"):
+            continue
+        item = line.lstrip("-").strip()
+        if item:
+            out.append(item)
+    return out
+
+
+def _fallback_generated_tickets(*, project_details: str, max_tickets: int) -> List[AgenticSprintGeneratedTicket]:
+    features = _extract_section_bullets(project_details, "Features")
+    rules = _extract_section_bullets(project_details, "Rules")
+
+    candidates: List[Tuple[str, str, int, str, List[str], List[str]]] = []
+
+    for f in features:
+        candidates.append(
+            (
+                f,
+                (
+                    f"Implement: {f}\n\n"
+                    "Acceptance Criteria:\n"
+                    "- Feature works end-to-end for valid inputs.\n"
+                    "- Validation and error messages are shown for invalid inputs.\n"
+                    "- Covered by at least one backend and one UI test scenario."
+                ),
+                5,
+                "P1",
+                ["react", "node", "postgres"],
+                ["feature", "fallback-generated"],
+            )
+        )
+
+    for r in rules:
+        candidates.append(
+            (
+                f"Enforce rule: {r}",
+                (
+                    f"Implement rule: {r}\n\n"
+                    "Acceptance Criteria:\n"
+                    "- Rule is enforced consistently across API and UI flows.\n"
+                    "- Violations return clear actionable errors.\n"
+                    "- Regression scenario added for this rule."
+                ),
+                3,
+                "P2",
+                ["node", "postgres"],
+                ["rule", "fallback-generated"],
+            )
+        )
+
+    if not candidates:
+        candidates = [
+            (
+                "Project bootstrap and architecture skeleton",
+                (
+                    "Create baseline project skeleton from provided brief.\n\n"
+                    "Acceptance Criteria:\n"
+                    "- App builds and runs locally.\n"
+                    "- Core routes and DB connectivity are wired.\n"
+                    "- Setup instructions are documented."
+                ),
+                5,
+                "P1",
+                ["react", "node", "postgres"],
+                ["fallback-generated"],
+            )
+        ]
+
+    trimmed = candidates[: max(1, int(max_tickets))]
+    return [
+        AgenticSprintGeneratedTicket(
+            title=title,
+            description=description,
+            story_points=story_points,
+            priority=priority,
+            required_skills=skills,
+            labels=labels,
+        )
+        for title, description, story_points, priority, skills, labels in trimmed
+    ]
+
+
 def _extract_final_json(text: str) -> Optional[Dict[str, Any]]:
     m = _FINAL_JSON_RE.search(text.strip())
     if not m:
@@ -172,7 +264,8 @@ def run_project_bootstrap_conversation(
                 break
 
     if not final_json:
-        return [], [], None, transcript
+        fallback_tickets = _fallback_generated_tickets(project_details=project_details, max_tickets=max_tickets)
+        return fallback_tickets, list(range(len(fallback_tickets))), sprint_name, transcript
 
     raw_tickets = final_json.get("tickets") or []
     selected = final_json.get("selected_ticket_indices") or []
@@ -185,6 +278,9 @@ def run_project_bootstrap_conversation(
         except Exception:
             # Skip invalid items
             continue
+
+    if not tickets:
+        tickets = _fallback_generated_tickets(project_details=project_details, max_tickets=max_tickets)
 
     selected_indices: List[int] = []
     for i in selected:
@@ -199,7 +295,12 @@ def run_project_bootstrap_conversation(
     seen = set()
     selected_indices = [i for i in selected_indices if not (i in seen or seen.add(i))]
 
-    return tickets, selected_indices, str(sprint_goal) if sprint_goal else None, transcript
+    # Fallback: if model produced tickets but forgot to select scope, take top N tickets.
+    if tickets and not selected_indices:
+        n = max(1, min(int(max_tickets), len(tickets)))
+        selected_indices = list(range(n))
+
+    return tickets, selected_indices, str(sprint_goal) if sprint_goal else sprint_name, transcript
 
 
 def stable_ticket_id(title: str) -> str:

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Users, Check, RefreshCw, Plus } from 'lucide-react';
+import { Users, Check, RefreshCw, Plus, Archive, Trash2 } from 'lucide-react';
 
 type ProjectListItem = {
   id: string;
@@ -55,19 +55,6 @@ type PlanResult = {
   teamBreakdown: TeamBreakdownItem[];
 };
 
-type AgenticBuildResult = {
-  sprintId: string;
-  projectId: string;
-  sprintName: string;
-  createdTasks: Array<Record<string, unknown>>;
-  assignmentResults: Array<Record<string, unknown>>;
-  agentic?: {
-    sprintGoal?: string | null;
-    summary?: unknown;
-    risks?: unknown[];
-  };
-};
-
 export default function SprintPlannerPage() {
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [planningSprints, setPlanningSprints] = useState<SprintListItem[]>([]);
@@ -78,16 +65,17 @@ export default function SprintPlannerPage() {
   const [planning, setPlanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [agenticDetails, setAgenticDetails] = useState("");
-  const [agenticBuilding, setAgenticBuilding] = useState(false);
-  const [agenticResult, setAgenticResult] = useState<AgenticBuildResult | null>(null);
-
   const [showCreateSprint, setShowCreateSprint] = useState(false);
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectDescription, setNewProjectDescription] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
   const [newSprintName, setNewSprintName] = useState("");
   const [newSprintGoal, setNewSprintGoal] = useState("");
   const [newSprintStartDate, setNewSprintStartDate] = useState("");
   const [newSprintEndDate, setNewSprintEndDate] = useState("");
   const [creatingSprint, setCreatingSprint] = useState(false);
+  const [actingOnSprint, setActingOnSprint] = useState(false);
 
   const capacityUsedPct = useMemo(() => {
     const v = Number(planResult?.capacityUsed ?? 0);
@@ -166,34 +154,6 @@ export default function SprintPlannerPage() {
     }
   }
 
-  async function runAgenticBuilder() {
-    if (!selectedProjectId || !selectedSprintId) return;
-    const details = agenticDetails.trim();
-    if (!details) {
-      setError("Please enter project details for the agentic builder.");
-      return;
-    }
-
-    setError(null);
-    setAgenticBuilding(true);
-    try {
-      const resp = await fetch(`/api/sprints/${encodeURIComponent(selectedSprintId)}/agentic-build`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: selectedProjectId, projectDetails: details }),
-        cache: "no-store",
-      });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Agentic sprint build failed"));
-      setAgenticResult(data as AgenticBuildResult);
-    } catch (e) {
-      setAgenticResult(null);
-      setError(e instanceof Error ? e.message : "Agentic sprint build failed");
-    } finally {
-      setAgenticBuilding(false);
-    }
-  }
-
   async function createSprint() {
     if (!selectedProjectId) return;
     setError(null);
@@ -230,6 +190,85 @@ export default function SprintPlannerPage() {
     }
   }
 
+  async function createProject() {
+    if (!newProjectName.trim()) return;
+    setError(null);
+    setCreatingProject(true);
+    try {
+      const resp = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newProjectName.trim(),
+          description: newProjectDescription.trim() || undefined,
+        }),
+        cache: "no-store",
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to create project"));
+
+      const createdProjectId = String(data?.project?.id || "");
+      await loadProjects();
+      if (createdProjectId) setSelectedProjectId(createdProjectId);
+
+      setShowCreateProject(false);
+      setNewProjectName("");
+      setNewProjectDescription("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create project");
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
+  async function archiveSelectedSprint() {
+    if (!selectedSprintId) return;
+    const yes = window.confirm("Archive this sprint? It will be removed from planning view.");
+    if (!yes) return;
+
+    setError(null);
+    setActingOnSprint(true);
+    try {
+      const resp = await fetch(`/api/sprints/${encodeURIComponent(selectedSprintId)}/archive`, {
+        method: "PATCH",
+        cache: "no-store",
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to archive sprint"));
+
+      setPlanResult(null);
+      await loadPlanningSprints(selectedProjectId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to archive sprint");
+    } finally {
+      setActingOnSprint(false);
+    }
+  }
+
+  async function deleteSelectedSprint() {
+    if (!selectedSprintId) return;
+    const yes = window.confirm("Delete this sprint? This action cannot be undone.");
+    if (!yes) return;
+
+    setError(null);
+    setActingOnSprint(true);
+    try {
+      const resp = await fetch(`/api/sprints/${encodeURIComponent(selectedSprintId)}`, {
+        method: "DELETE",
+        cache: "no-store",
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to delete sprint"));
+
+      setPlanResult(null);
+      await loadPlanningSprints(selectedProjectId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete sprint");
+    } finally {
+      setActingOnSprint(false);
+    }
+  }
+
   useEffect(() => {
     void loadProjects();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -237,7 +276,6 @@ export default function SprintPlannerPage() {
 
   useEffect(() => {
     setPlanResult(null);
-    setAgenticResult(null);
     if (selectedProjectId) void loadPlanningSprints(selectedProjectId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
@@ -261,46 +299,6 @@ export default function SprintPlannerPage() {
           <p className="text-slate-600 dark:text-slate-300">Plan next sprint from backlog with AI assistance</p>
         </div>
 
-        {/* Agentic Builder */}
-        <div className="mb-6 bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
-          <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Agentic Sprint Builder</h2>
-          <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">
-            Paste project details. AI will generate sprint tasks and assign developers automatically.
-          </p>
-
-          <textarea
-            className="w-full min-h-32 bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded-lg border border-slate-200 dark:border-zinc-800"
-            value={agenticDetails}
-            onChange={(e) => setAgenticDetails(e.target.value)}
-            placeholder="Example: Build Jira integration with OAuth, sync sprints/tasks, add dashboard and alerts..."
-            disabled={loading || planning || agenticBuilding}
-          />
-
-          <div className="mt-4 flex gap-2">
-            <button
-              onClick={() => void runAgenticBuilder()}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 disabled:opacity-60"
-              disabled={!selectedProjectId || !selectedSprintId || agenticBuilding}
-            >
-              <Check className="w-4 h-4" />
-              {agenticBuilding ? "Building…" : "Build Sprint (Agentic)"}
-            </button>
-          </div>
-
-          {agenticResult && (
-            <div className="mt-4 p-4 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg">
-              <p className="text-sm text-slate-700 dark:text-slate-200">
-                Created {agenticResult.createdTasks?.length ?? 0} tasks and applied {agenticResult.assignmentResults?.length ?? 0} assignments.
-              </p>
-              {agenticResult.agentic?.sprintGoal && (
-                <p className="mt-2 text-sm text-slate-700 dark:text-slate-200">
-                  <b>Goal:</b> {agenticResult.agentic.sprintGoal}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-
         {/* Controls */}
         <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-4">
@@ -320,6 +318,14 @@ export default function SprintPlannerPage() {
             {!projects.length && (
               <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">No projects found.</p>
             )}
+            <button
+              onClick={() => setShowCreateProject((v) => !v)}
+              className="w-full mt-3 bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-4 py-2 rounded-lg border border-slate-200 dark:border-zinc-800 flex items-center justify-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-700 transition"
+              disabled={loading || planning || creatingProject}
+            >
+              <Plus className="w-4 h-4" />
+              {showCreateProject ? "Cancel" : "Create Project"}
+            </button>
           </div>
 
           <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-4">
@@ -369,14 +375,75 @@ export default function SprintPlannerPage() {
               <button
                 onClick={() => void runPlanner()}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 disabled:opacity-60"
-                disabled={!selectedProjectId || !selectedSprintId || planning}
+                disabled={!selectedProjectId || !selectedSprintId || planning || actingOnSprint}
               >
                 <Check className="w-4 h-4" />
                 {planning ? "Planning…" : "Run Planner"}
               </button>
             </div>
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={() => void archiveSelectedSprint()}
+                className="flex-1 bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-800 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 hover:bg-amber-100 dark:hover:bg-amber-900 transition disabled:opacity-60"
+                disabled={!selectedSprintId || loading || planning || actingOnSprint}
+              >
+                <Archive className="w-4 h-4" />
+                Archive Sprint
+              </button>
+              <button
+                onClick={() => void deleteSelectedSprint()}
+                className="flex-1 bg-red-50 text-red-700 border border-red-200 dark:bg-red-950 dark:text-red-200 dark:border-red-800 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 hover:bg-red-100 dark:hover:bg-red-900 transition disabled:opacity-60"
+                disabled={!selectedSprintId || loading || planning || actingOnSprint}
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete Sprint
+              </button>
+            </div>
           </div>
         </div>
+
+        {showCreateProject && (
+          <div className="mb-6 bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4">Create Project</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Name</label>
+                <input
+                  className="w-full bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded-lg border border-slate-200 dark:border-zinc-800"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  placeholder="New Project"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Description (optional)</label>
+                <input
+                  className="w-full bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded-lg border border-slate-200 dark:border-zinc-800"
+                  value={newProjectDescription}
+                  onChange={(e) => setNewProjectDescription(e.target.value)}
+                  placeholder="Customer onboarding and workflow automation"
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={() => void createProject()}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition disabled:opacity-60"
+                disabled={!newProjectName.trim() || creatingProject}
+              >
+                {creatingProject ? "Creating…" : "Create Project"}
+              </button>
+              <button
+                onClick={() => setShowCreateProject(false)}
+                className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-4 py-2 rounded-lg border border-slate-200 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-slate-700 transition"
+                disabled={creatingProject}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {showCreateSprint && (
           <div className="mb-6 bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">

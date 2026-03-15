@@ -17,7 +17,7 @@ const slugSchema = z
 
 const createProjectSchema = z.object({
   name: z.string().min(1),
-  slug: slugSchema,
+  slug: slugSchema.optional(),
   description: z.string().optional(),
   techStack: z.array(z.string().min(1)).default([]),
   jiraProjectKey: z.string().min(1).optional(),

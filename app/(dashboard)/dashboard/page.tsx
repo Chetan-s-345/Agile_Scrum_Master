@@ -45,6 +45,13 @@ type SprintRisk = {
   recommendations?: string[];
 };
 
+type ProjectListItem = {
+  id: string;
+  name: string;
+  slug?: string;
+  status?: string;
+};
+
 function daysBetweenInclusive(startIso?: string, endIso?: string) {
   if (!startIso || !endIso) return 0;
   const start = new Date(`${startIso}T00:00:00Z`).getTime();
@@ -66,6 +73,12 @@ export default function DashboardPage() {
   const [risk, setRisk] = useState<SprintRisk | null>(null);
   const [delayAlerts, setDelayAlerts] = useState<Array<{ severity: string; title: string; message: string }>>([]);
   const [taskCounts, setTaskCounts] = useState<{ total: number; done: number }>({ total: 0, done: 0 });
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
+  const [projectActionId, setProjectActionId] = useState<string | null>(null);
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectDescription, setNewProjectDescription] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -199,6 +212,83 @@ export default function DashboardPage() {
     };
   }, []);
 
+  async function loadProjects() {
+    const resp = await fetch("/api/projects", { cache: "no-store" });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) throw new Error(String(data?.error || "Failed to load projects"));
+    setProjects(Array.isArray(data?.items) ? (data.items as ProjectListItem[]) : []);
+  }
+
+  async function archiveProject(projectId: string) {
+    if (!confirm("Archive this project?")) return;
+    setError(null);
+    setProjectActionId(projectId);
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "archived" }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to archive project"));
+      await loadProjects();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to archive project");
+    } finally {
+      setProjectActionId(null);
+    }
+  }
+
+  async function deleteProject(projectId: string) {
+    if (!confirm("Delete this project permanently? This cannot be undone.")) return;
+    setError(null);
+    setProjectActionId(projectId);
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+        method: "DELETE",
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to delete project"));
+      await loadProjects();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete project");
+    } finally {
+      setProjectActionId(null);
+    }
+  }
+
+  async function createProject() {
+    if (!newProjectName.trim()) return;
+    setError(null);
+    setCreatingProject(true);
+    try {
+      const resp = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newProjectName.trim(),
+          description: newProjectDescription.trim() || undefined,
+        }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to create project"));
+      await loadProjects();
+      setShowCreateProject(false);
+      setNewProjectName("");
+      setNewProjectDescription("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create project");
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadProjects().catch(() => {
+      // keep dashboard usable even if projects load fails
+    });
+  }, []);
+
   const capacityPct = useMemo(() => {
     if (!teamCapacity.length) return 0;
     const totals = teamCapacity.reduce(
@@ -307,6 +397,83 @@ export default function DashboardPage() {
               </p>
             </Link>
           ))}
+        </div>
+
+        <div className="mb-8 bg-white dark:bg-zinc-900 rounded-lg p-6 shadow-md border border-slate-200 dark:border-zinc-800">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white">Projects</h2>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowCreateProject((v) => !v)}
+                className="text-sm px-3 py-1 rounded border border-slate-200 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800"
+                disabled={Boolean(projectActionId) || creatingProject}
+              >
+                {showCreateProject ? "Cancel" : "Create Project"}
+              </button>
+              <button
+                onClick={() => void loadProjects()}
+                className="text-sm px-3 py-1 rounded border border-slate-200 dark:border-zinc-700 hover:bg-slate-50 dark:hover:bg-zinc-800"
+                disabled={Boolean(projectActionId) || creatingProject}
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          {showCreateProject ? (
+            <div className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-2">
+              <input
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                placeholder="Project name"
+                className="rounded border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm"
+              />
+              <input
+                value={newProjectDescription}
+                onChange={(e) => setNewProjectDescription(e.target.value)}
+                placeholder="Description (optional)"
+                className="rounded border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm"
+              />
+              <button
+                onClick={() => void createProject()}
+                disabled={!newProjectName.trim() || creatingProject}
+                className="rounded bg-blue-600 text-white px-3 py-2 text-sm font-semibold hover:bg-blue-700 disabled:opacity-60"
+              >
+                {creatingProject ? "Creating..." : "Create"}
+              </button>
+            </div>
+          ) : null}
+
+          {!projects.length ? (
+            <p className="text-sm text-slate-600 dark:text-slate-400">No projects found.</p>
+          ) : (
+            <div className="space-y-3">
+              {projects.map((p) => (
+                <div key={p.id} className="flex items-center justify-between gap-3 p-3 rounded border border-slate-200 dark:border-zinc-800">
+                  <div>
+                    <p className="font-medium text-slate-900 dark:text-white">{p.name}</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">{p.slug || "-"} • {String(p.status || "active")}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => void archiveProject(p.id)}
+                      disabled={projectActionId === p.id}
+                      className="text-xs px-3 py-1 rounded border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950 disabled:opacity-60"
+                    >
+                      Archive
+                    </button>
+                    <button
+                      onClick={() => void deleteProject(p.id)}
+                      disabled={projectActionId === p.id}
+                      className="text-xs px-3 py-1 rounded border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-950 disabled:opacity-60"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Stats Cards */}

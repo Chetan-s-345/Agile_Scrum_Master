@@ -34,6 +34,16 @@ async function audit(orgPool, { actorMemberId, action, resourceType, resourceId,
 }
 
 class ProjectService {
+  buildSlug(name) {
+    return String(name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+  }
+
   async list(req, { status }) {
     const orgPool = requireOrgDb(req);
 
@@ -105,10 +115,17 @@ class ProjectService {
   async create(req, payload, context) {
     const orgPool = requireOrgDb(req);
 
-    const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
-    if (!actorMemberId) throw Object.assign(new Error('Team member not found'), { statusCode: 403 });
+    let actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+    if (!actorMemberId) {
+      const fallbackResp = await orgPool.query(
+        'SELECT id FROM team_members WHERE is_active = TRUE ORDER BY created_at ASC LIMIT 1'
+      );
+      actorMemberId = fallbackResp.rows[0]?.id || null;
+    }
+    if (!actorMemberId) throw Object.assign(new Error('No active team member found in organization'), { statusCode: 403 });
 
-    const slug = String(payload.slug);
+    const slugInput = payload.slug ? String(payload.slug) : this.buildSlug(payload.name);
+    const slug = String(slugInput || 'project');
     const existing = await orgPool.query('SELECT id FROM projects WHERE slug = $1 LIMIT 1', [slug]);
     if (existing.rows.length) throw Object.assign(new Error('Project slug already exists'), { statusCode: 409 });
 
@@ -278,6 +295,70 @@ class ProjectService {
     });
 
     return after;
+  }
+
+  async remove(req, projectId, context) {
+    const orgPool = requireOrgDb(req);
+
+    const beforeResp = await orgPool.query('SELECT * FROM projects WHERE id = $1', [String(projectId)]);
+    const before = beforeResp.rows[0];
+    if (!before) throw Object.assign(new Error('Project not found'), { statusCode: 404 });
+
+    await orgPool.query('BEGIN');
+    try {
+      await orgPool.query('DELETE FROM projects WHERE id = $1', [String(projectId)]);
+
+      const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+      await audit(orgPool, {
+        actorMemberId,
+        action: 'project.delete',
+        resourceType: 'project',
+        resourceId: String(projectId),
+        oldValue: before,
+        newValue: null,
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent,
+      });
+
+      await orgPool.query('COMMIT');
+      return { ok: true };
+    } catch (e) {
+      try {
+        await orgPool.query('ROLLBACK');
+      } catch {
+        // ignore
+      }
+
+      // If the project has related rows (tasks/sprints/etc), archive instead of hard-failing.
+      if (String(e?.code || '') === '23503') {
+        const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+        const archivedResp = await orgPool.query(
+          `UPDATE projects SET status = 'archived', updated_at = NOW() WHERE id = $1 RETURNING *`,
+          [String(projectId)]
+        );
+        const archived = archivedResp.rows[0];
+
+        await audit(orgPool, {
+          actorMemberId,
+          action: 'project.archive',
+          resourceType: 'project',
+          resourceId: String(projectId),
+          oldValue: before,
+          newValue: archived,
+          ipAddress: context.ipAddress,
+          userAgent: context.userAgent,
+        });
+
+        return {
+          ok: true,
+          archived: true,
+          deleted: false,
+          reason: 'Project has linked records and was archived instead of deleted.',
+        };
+      }
+
+      throw e;
+    }
   }
 
   async addMember(req, projectId, payload) {

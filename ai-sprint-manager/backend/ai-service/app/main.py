@@ -1,7 +1,12 @@
+from pathlib import Path
+
 from fastapi import FastAPI
+from dotenv import load_dotenv
 
 from app.routes import agentic_sprint_router, groq_features_router, ml_router, sprint_planning_router
 from app.services.db import close_pool, ensure_ml_schema
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 app = FastAPI(title="AI Sprint Manager - AI Service")
 

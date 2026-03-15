@@ -195,6 +195,44 @@ export default function TaskBoardPage() {
     }
   }
 
+  async function archiveTask(taskId: string) {
+    if (!confirm("Archive this task?")) return;
+    setError(null);
+    setUpdatingTaskId(taskId);
+    try {
+      const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+        method: "DELETE",
+        cache: "no-store",
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to archive task"));
+      if (selectedSprintId) await loadBoard(selectedSprintId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to archive task");
+    } finally {
+      setUpdatingTaskId(null);
+    }
+  }
+
+  async function deleteTaskPermanent(taskId: string) {
+    if (!confirm("Delete this task permanently? This cannot be undone.")) return;
+    setError(null);
+    setUpdatingTaskId(taskId);
+    try {
+      const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}?hard=true`, {
+        method: "DELETE",
+        cache: "no-store",
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to delete task"));
+      if (selectedSprintId) await loadBoard(selectedSprintId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete task");
+    } finally {
+      setUpdatingTaskId(null);
+    }
+  }
+
   const TaskCard = ({ task }: { task: BoardTask }) => (
     <div className="bg-white dark:bg-zinc-900 rounded-lg p-4 shadow-sm border border-slate-200 dark:border-zinc-800 mb-3 hover:shadow-md transition">
       <div className="flex items-start justify-between mb-2 gap-2">
@@ -207,28 +245,46 @@ export default function TaskBoardPage() {
         <span className="text-xs text-slate-600 dark:text-slate-400">#{String(task.id).slice(0, 8)}</span>
         <span className="font-bold text-blue-600 dark:text-blue-400">{Number(task.storyPoints || 0)}pt</span>
       </div>
-      <div className="mt-3 pt-3 border-t border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-2">
+      <div className="mt-3 pt-3 border-t border-slate-200 dark:border-zinc-800 flex flex-col items-stretch gap-2">
         <p className="text-xs text-slate-600 dark:text-slate-400 flex-1">
           {task.assignee?.name ? `👤 ${task.assignee.name}` : "Unassigned"}
         </p>
-        <select
-          className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-2 py-1 rounded border border-slate-200 dark:border-zinc-800 text-xs"
-          value={""}
-          onChange={(e) => {
-            const next = e.target.value as keyof Board;
-            if (!next) return;
-            void updateTaskStatus(String(task.id), next);
-            e.currentTarget.value = "";
-          }}
-          disabled={updatingTaskId === task.id}
-        >
-          <option value="">Move…</option>
-          <option value="todo">To Do</option>
-          <option value="in_progress">In Progress</option>
-          <option value="in_review">In Review</option>
-          <option value="blocked">Blocked</option>
-          <option value="done">Done</option>
-        </select>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            className="flex-1 min-w-24 bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-2 py-1 rounded border border-slate-200 dark:border-zinc-800 text-xs"
+            value={""}
+            onChange={(e) => {
+              const next = e.target.value as keyof Board;
+              if (!next) return;
+              void updateTaskStatus(String(task.id), next);
+              e.currentTarget.value = "";
+            }}
+            disabled={updatingTaskId === task.id}
+          >
+            <option value="">Move…</option>
+            <option value="todo">To Do</option>
+            <option value="in_progress">In Progress</option>
+            <option value="in_review">In Review</option>
+            <option value="blocked">Blocked</option>
+            <option value="done">Done</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => void archiveTask(String(task.id))}
+            className="px-2 py-1 rounded border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 text-xs hover:bg-amber-50 dark:hover:bg-amber-950"
+            disabled={updatingTaskId === task.id}
+          >
+            Archive
+          </button>
+          <button
+            type="button"
+            onClick={() => void deleteTaskPermanent(String(task.id))}
+            className="px-2 py-1 rounded border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 text-xs hover:bg-red-50 dark:hover:bg-red-950"
+            disabled={updatingTaskId === task.id}
+          >
+            Delete
+          </button>
+        </div>
       </div>
     </div>
   );

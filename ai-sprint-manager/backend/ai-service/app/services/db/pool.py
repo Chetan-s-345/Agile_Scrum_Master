@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Any, Optional
 
-import asyncpg
+try:
+    import asyncpg
+except ModuleNotFoundError:  # pragma: no cover - depends on local runtime setup
+    asyncpg = None  # type: ignore[assignment]
 
-_pool: Optional[asyncpg.Pool] = None
+_pool: Optional[Any] = None
 
 
 def _get_database_url() -> str:
@@ -17,6 +20,11 @@ def _get_database_url() -> str:
 
 async def get_pool() -> asyncpg.Pool:
     global _pool
+    if asyncpg is None:
+        raise RuntimeError(
+            "Missing dependency 'asyncpg'. Install ai-service dependencies with: "
+            "pip install -r ai-sprint-manager/backend/ai-service/requirements.txt"
+        )
     if _pool is None:
         _pool = await asyncpg.create_pool(dsn=_get_database_url(), min_size=1, max_size=5)
     return _pool

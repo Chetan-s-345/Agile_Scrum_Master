@@ -79,6 +79,21 @@ async function updateProject(req, res, next) {
   }
 }
 
+async function deleteProject(req, res, next) {
+  try {
+    const parsedId = uuidSchema.safeParse(req.params.projectId);
+    if (!parsedId.success) return res.status(400).json({ error: 'Invalid projectId' });
+
+    const result = await projectService.remove(req, parsedId.data, {
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function addMember(req, res, next) {
   try {
     const parsedId = uuidSchema.safeParse(req.params.projectId);
@@ -138,6 +153,7 @@ module.exports = {
   createProject,
   getProject,
   updateProject,
+  deleteProject,
   addMember,
   removeMember,
   listEpics,

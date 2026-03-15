@@ -136,6 +136,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ spr
     sprint_capacity_points: Number.isFinite(Number(d.maxCapacity)) ? Number(d.maxCapacity) : undefined,
   }));
 
+  const assignableDevelopers = devItems
+    .map((d) => ({
+      id: String(d.id || ""),
+      currentLoad: Number.isFinite(Number(d.currentLoad)) ? Number(d.currentLoad) : 0,
+      maxCapacity: Number.isFinite(Number(d.maxCapacity)) ? Number(d.maxCapacity) : 0,
+    }))
+    .filter((d) => d.id)
+    .sort((a, b) => (b.maxCapacity - b.currentLoad) - (a.maxCapacity - a.currentLoad));
+
   // Ask AI service (via gateway) to generate tickets + plan assignments
   const aiPayload = {
     sprint_name: sprintName,
@@ -149,15 +158,60 @@ export async function POST(request: Request, { params }: { params: Promise<{ spr
     method: "POST",
     body: JSON.stringify(aiPayload),
   });
-  if (!aiResp.ok) return NextResponse.json(aiResp.raw || { error: "Agentic sprint build failed" }, { status: aiResp.status });
+  if (!aiResp.ok) {
+    const raw = aiResp.raw as Record<string, unknown> | null;
+    const upstreamError =
+      (typeof raw?.error === "string" && raw.error) ||
+      (typeof raw?.detail === "string" && raw.detail) ||
+      (typeof raw?.message === "string" && raw.message) ||
+      "Agentic sprint build failed";
+
+    return NextResponse.json(
+      {
+        error: upstreamError,
+        upstream: raw,
+      },
+      { status: aiResp.status }
+    );
+  }
 
   const generated = Array.isArray(aiResp.data?.generated_tickets) ? aiResp.data.generated_tickets : [];
-  const selectedIds = Array.isArray(aiResp.data?.selected_ticket_ids) ? aiResp.data.selected_ticket_ids : [];
+  const selectedIdsRaw = Array.isArray(aiResp.data?.selected_ticket_ids) ? aiResp.data.selected_ticket_ids : [];
+
+  if (!generated.length) {
+    return NextResponse.json(
+      {
+        error: "AI did not generate any tickets. Try more specific project details and rerun.",
+        upstream: aiResp.data,
+      },
+      { status: 422 }
+    );
+  }
+
+  const fallbackSelectedIds = generated
+    .slice(0, Math.max(1, Number(aiPayload.max_tickets || 12)))
+    .map((t) => String(t.id || ""))
+    .filter(Boolean);
+
+  const selectedIds = (selectedIdsRaw.length ? selectedIdsRaw : fallbackSelectedIds)
+    .map((id) => String(id || ""))
+    .filter(Boolean);
+
+  if (!selectedIds.length) {
+    return NextResponse.json(
+      {
+        error: "AI generated tickets but none had usable IDs for task creation.",
+        upstream: aiResp.data,
+      },
+      { status: 422 }
+    );
+  }
 
   const byId = new Map<string, AgenticTicket>(generated.map((t) => [String(t.id || ""), t]));
 
   const createdTasks: Array<Record<string, unknown>> = [];
   const ticketIdToTaskId = new Map<string, string>();
+  const taskTicketMeta = new Map<string, AgenticTicket>();
 
   for (const ticketId of selectedIds) {
     const t = byId.get(String(ticketId));
@@ -198,12 +252,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ spr
     const createdTask = taskResp.data?.task;
     const createdTaskId = String(createdTask?.id || "");
 
-    if (createdTaskId) ticketIdToTaskId.set(String(ticketId), createdTaskId);
+    if (createdTaskId) {
+      ticketIdToTaskId.set(String(ticketId), createdTaskId);
+      taskTicketMeta.set(createdTaskId, t);
+    }
     createdTasks.push((createdTask as Record<string, unknown>) || taskCreateBody);
   }
 
   const assignments = Array.isArray(aiResp.data?.final_plan?.assignments) ? aiResp.data.final_plan.assignments : [];
   const assignmentResults: Array<Record<string, unknown>> = [];
+  const assignedTaskIds = new Set<string>();
 
   for (const a of assignments) {
     const ticketId = String(a.ticket_id || "");
@@ -217,6 +275,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ spr
     });
 
     assignmentResults.push({ ticketId, taskId, developerId, ok: assignResp.ok, status: assignResp.status, data: assignResp.raw as unknown });
+    if (assignResp.ok) assignedTaskIds.add(taskId);
     if (!assignResp.ok) {
       return NextResponse.json(
         {
@@ -231,6 +290,70 @@ export async function POST(request: Request, { params }: { params: Promise<{ spr
     }
   }
 
+  // Fallback: if AI did not provide assignment plan, auto-assign created tasks via assignment engine.
+  if (!assignments.length) {
+    for (const task of createdTasks) {
+      const taskId = String((task as { id?: unknown }).id || "");
+      if (!taskId || assignedTaskIds.has(taskId)) continue;
+
+      const src = taskTicketMeta.get(taskId);
+      const storyPoints = Number.isFinite(Number(src?.story_points)) ? Math.max(0, Math.round(Number(src?.story_points))) : 3;
+      const techTags = (Array.isArray(src?.required_skills) ? src.required_skills : []).map(String);
+
+      const autoAssignResp = await gatewayFetchJson<Record<string, unknown>>(token, `/api/v1/assignment/assign`, {
+        method: "POST",
+        body: JSON.stringify({
+          taskId,
+          sprintId,
+          techTags,
+          storyPoints,
+          priority: priorityToGatewayPriority(src?.priority),
+        }),
+      });
+
+      const autoAssigned = autoAssignResp.ok && ((autoAssignResp.data as { assigned?: unknown } | null)?.assigned !== false);
+      const autoReason =
+        (autoAssignResp.raw as { reason?: unknown; error?: unknown; suggestion?: unknown } | null)?.reason ||
+        (autoAssignResp.raw as { error?: unknown } | null)?.error ||
+        (autoAssignResp.raw as { suggestion?: unknown } | null)?.suggestion ||
+        null;
+
+      let explicitAssigned = false;
+      let explicitResp: { ok: boolean; status: number; raw: unknown } | null = null;
+      if (!autoAssigned && assignableDevelopers.length) {
+        const explicitDeveloperId = assignableDevelopers[0].id;
+        const resp = await gatewayFetchJson<Record<string, unknown>>(token, `/api/v1/assignment/assign-explicit`, {
+          method: "POST",
+          body: JSON.stringify({
+            taskId,
+            sprintId,
+            developerId: explicitDeveloperId,
+            reason: "Fallback explicit assignment from agentic builder",
+          }),
+        });
+        explicitResp = { ok: resp.ok, status: resp.status, raw: resp.raw };
+        explicitAssigned = resp.ok;
+      }
+
+      const finalOk = autoAssigned || explicitAssigned;
+
+      assignmentResults.push({
+        ticketId: null,
+        taskId,
+        developerId: explicitAssigned ? assignableDevelopers[0].id : null,
+        mode: explicitAssigned ? "fallback-explicit" : "fallback-auto",
+        ok: finalOk,
+        status: explicitResp?.status ?? autoAssignResp.status,
+        reason: autoReason,
+        data: {
+          auto: autoAssignResp.raw as unknown,
+          explicit: explicitResp?.raw ?? null,
+        },
+      });
+      if (finalOk) assignedTaskIds.add(taskId);
+    }
+  }
+
   return NextResponse.json(
     {
       sprintId,
@@ -239,6 +362,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ spr
       agentic: {
         sprintGoal: aiResp.data?.sprint_goal || null,
         selectedTicketIds: selectedIds,
+        selectionMode: selectedIdsRaw.length ? "ai" : "fallback-generated",
         finalPlan: aiResp.data?.final_plan || null,
         risks: aiResp.data?.final_plan?.risks || [],
         summary: aiResp.data?.final_plan?.summary || null,

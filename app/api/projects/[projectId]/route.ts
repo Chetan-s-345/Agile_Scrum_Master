@@ -47,3 +47,19 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ pr
   const data = await gatewayResp.json().catch(() => null);
   return NextResponse.json(data || { error: "Upstream error" }, { status: gatewayResp.status });
 }
+
+export async function DELETE(_request: Request, { params }: { params: Promise<{ projectId: string }> }) {
+  const token = await getAuthToken();
+  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { projectId } = await params;
+
+  const gatewayResp = await fetch(`${getGatewayBaseUrl()}/api/v1/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+
+  const data = await gatewayResp.json().catch(() => null);
+  return NextResponse.json(data || { error: "Upstream error" }, { status: gatewayResp.status });
+}

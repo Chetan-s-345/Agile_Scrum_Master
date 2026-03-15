@@ -47,13 +47,16 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tas
   return NextResponse.json(data || { error: "Upstream error" }, { status: gatewayResp.status });
 }
 
-export async function DELETE(_request: Request, { params }: { params: Promise<{ taskId: string }> }) {
+export async function DELETE(request: Request, { params }: { params: Promise<{ taskId: string }> }) {
   const token = await getAuthToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { taskId } = await params;
+  const url = new URL(request.url);
+  const hard = String(url.searchParams.get("hard") || "").toLowerCase() === "true";
+  const qs = hard ? "?hard=true" : "";
 
-  const gatewayResp = await fetch(`${getGatewayBaseUrl()}/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+  const gatewayResp = await fetch(`${getGatewayBaseUrl()}/api/v1/tasks/${encodeURIComponent(taskId)}${qs}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",

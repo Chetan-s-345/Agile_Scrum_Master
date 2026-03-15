@@ -44,6 +44,14 @@ export async function getMe(): Promise<MeResponse | null> {
   return (data || null) as MeResponse | null;
 }
 
+export async function signOut(): Promise<boolean> {
+  const resp = await fetch("/api/auth/sign-out", {
+    method: "POST",
+    cache: "no-store",
+  });
+  return resp.ok;
+}
+
 export async function listMembers(params?: { page?: number; limit?: number }): Promise<{ members: OrgMember[] } | null> {
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 200;

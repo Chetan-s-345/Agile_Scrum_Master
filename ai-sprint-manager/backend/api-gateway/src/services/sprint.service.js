@@ -542,6 +542,77 @@ class SprintService {
     }
   }
 
+  async archive(req, sprintId, context) {
+    const orgPool = requireOrgDb(req);
+
+    const beforeResp = await orgPool.query('SELECT * FROM sprints WHERE id = $1', [String(sprintId)]);
+    const before = beforeResp.rows[0];
+    if (!before) throw Object.assign(new Error('Sprint not found'), { statusCode: 404 });
+
+    const afterResp = await orgPool.query(
+      `UPDATE sprints
+       SET status = 'cancelled', updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [String(sprintId)]
+    );
+    const after = afterResp.rows[0];
+
+    const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+    await audit(orgPool, {
+      actorMemberId,
+      action: 'sprint.archive',
+      resourceType: 'sprint',
+      resourceId: String(sprintId),
+      oldValue: before,
+      newValue: after,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
+
+    return { ok: true, sprint: after };
+  }
+
+  async remove(req, sprintId, context) {
+    const orgPool = requireOrgDb(req);
+
+    const beforeResp = await orgPool.query('SELECT * FROM sprints WHERE id = $1', [String(sprintId)]);
+    const before = beforeResp.rows[0];
+    if (!before) throw Object.assign(new Error('Sprint not found'), { statusCode: 404 });
+
+    await orgPool.query('BEGIN');
+    try {
+      // Detach backlog references first; tasks are deleted via ON DELETE CASCADE.
+      await orgPool.query('UPDATE backlog_items SET sprint_id = NULL, status = CASE WHEN status = \'in_sprint\' THEN \'ready\' ELSE status END WHERE sprint_id = $1', [
+        String(sprintId),
+      ]);
+
+      await orgPool.query('DELETE FROM sprints WHERE id = $1', [String(sprintId)]);
+
+      const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+      await audit(orgPool, {
+        actorMemberId,
+        action: 'sprint.delete',
+        resourceType: 'sprint',
+        resourceId: String(sprintId),
+        oldValue: before,
+        newValue: null,
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent,
+      });
+
+      await orgPool.query('COMMIT');
+      return { ok: true, deleted: true };
+    } catch (e) {
+      try {
+        await orgPool.query('ROLLBACK');
+      } catch {
+        // ignore
+      }
+      throw e;
+    }
+  }
+
   async get(req, sprintId) {
     const orgPool = requireOrgDb(req);
 
