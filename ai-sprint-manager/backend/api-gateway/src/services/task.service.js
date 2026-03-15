@@ -169,16 +169,18 @@ class TaskService {
 
       // Auto-trigger assignment
       let assignment = null;
-      try {
-        assignment = await assignmentService.assign(req, {
-          taskId: String(task.id),
-          sprintId: String(task.sprint_id),
-          techTags: task.tech_tags || [],
-          storyPoints: Number(task.story_points || 0),
-          priority: task.priority,
-        });
-      } catch (e) {
-        assignment = { assigned: false, reason: e?.message || 'Assignment failed', suggestion: null };
+      if (payload.autoAssign !== false) {
+        try {
+          assignment = await assignmentService.assign(req, {
+            taskId: String(task.id),
+            sprintId: String(task.sprint_id),
+            techTags: task.tech_tags || [],
+            storyPoints: Number(task.story_points || 0),
+            priority: task.priority,
+          });
+        } catch (e) {
+          assignment = { assigned: false, reason: e?.message || 'Assignment failed', suggestion: null };
+        }
       }
 
       // Update sprint planned points

@@ -8,6 +8,7 @@ const router = express.Router();
 router.use(authMiddleware, orgDbMiddleware);
 
 router.post('/assign', assignmentController.assign);
+router.post('/assign-explicit', assignmentController.assignExplicit);
 router.post('/assign-bulk', assignmentController.assignBulk);
 router.post('/reassign', assignmentController.reassign);
 router.get('/suggest/:taskId', assignmentController.suggest);

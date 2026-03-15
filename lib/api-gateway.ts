@@ -8,6 +8,13 @@ type ProxyOptions = {
   body?: unknown;
 };
 
+type ProxySseOptions = {
+  upstreamPath: string;
+  method: "GET" | "POST";
+  token?: string | null;
+  body?: unknown;
+};
+
 export function getApiGatewayBaseUrl() {
   const raw = process.env.API_GATEWAY_URL || "http://localhost:4000";
   return raw.replace(/\/+$/, "");
@@ -76,5 +83,35 @@ export async function proxyToApiGateway({ upstreamPath, method, token, body }: P
       "x-upstream-url": upstreamUrl,
       "x-upstream-status": String(resp.status),
     },
+  });
+}
+
+export async function proxyToApiGatewaySse({ upstreamPath, method, token, body }: ProxySseOptions): Promise<Response> {
+  const baseUrl = getApiGatewayBaseUrl();
+  const normalizedPath = upstreamPath.startsWith("/") ? upstreamPath : `/${upstreamPath}`;
+  const upstreamUrl = `${baseUrl}${normalizedPath}`;
+
+  const headers: Record<string, string> = {
+    Accept: "text/event-stream",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+
+  const resp = await fetch(upstreamUrl, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store",
+  });
+
+  const outHeaders = new Headers(resp.headers);
+  outHeaders.set("Content-Type", "text/event-stream; charset=utf-8");
+  outHeaders.set("Cache-Control", "no-cache, no-transform");
+  outHeaders.set("Connection", "keep-alive");
+  outHeaders.set("X-Accel-Buffering", "no");
+
+  return new Response(resp.body, {
+    status: resp.status,
+    headers: outHeaders,
   });
 }

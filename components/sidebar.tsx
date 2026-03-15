@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { 
   Grid2x2PlusIcon, 
   LayoutDashboard, 
+  Bot,
   Zap, 
   ListTodo, 
   Users, 
@@ -21,6 +22,7 @@ import { useState } from "react";
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Sprint Plan", href: "/sprint_plan", icon: Zap },
+  { name: "Agentic Scrum Master", href: "/scrum-master", icon: Bot },
   { name: "Sprints", href: "/sprint", icon: Flag },
   { name: "Tasks", href: "/tasks", icon: ListTodo },
   { name: "Developers", href: "/developers", icon: Users },
@@ -49,10 +51,10 @@ export function Sidebar() {
       <Link
         href={item.href}
         onClick={() => setIsOpen(false)}
-        className={`flex items-center gap-3 px-4 py-2 rounded-lg transition ${
+        className={`flex items-center gap-3 px-4 py-2 rounded-lg transition border ${
           active
-            ? "bg-blue-600 text-white shadow-md"
-            : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+            ? "bg-slate-100 dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-white"
+            : "border-transparent text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-zinc-900"
         }`}
       >
         <Icon className="w-5 h-5 flex-shrink-0" />
@@ -66,7 +68,7 @@ export function Sidebar() {
       {/* Mobile Toggle */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="fixed top-4 left-4 z-50 lg:hidden p-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+        className="fixed top-4 left-4 z-50 lg:hidden p-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-black hover:bg-slate-100 dark:hover:bg-zinc-900 transition text-slate-700 dark:text-slate-300"
       >
         {isOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
       </button>

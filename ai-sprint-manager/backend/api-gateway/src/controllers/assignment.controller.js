@@ -1,5 +1,6 @@
 const {
   assignSchema,
+  assignExplicitSchema,
   assignBulkSchema,
   reassignSchema,
   suggestParamsSchema,
@@ -24,6 +25,18 @@ async function assign(req, res, next) {
     if (!parsed.success) return validationError(res, parsed);
 
     const result = await assignmentService.assign(req, parsed.data);
+    return res.status(200).json(result);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function assignExplicit(req, res, next) {
+  try {
+    const parsed = assignExplicitSchema.safeParse(req.body || {});
+    if (!parsed.success) return validationError(res, parsed);
+
+    const result = await assignmentService.assignToDeveloper(req, parsed.data);
     return res.status(200).json(result);
   } catch (err) {
     return next(err);
@@ -89,6 +102,7 @@ async function log(req, res, next) {
 
 module.exports = {
   assign,
+  assignExplicit,
   assignBulk,
   reassign,
   suggest,
