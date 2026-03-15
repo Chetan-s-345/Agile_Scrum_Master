@@ -152,13 +152,8 @@ jobs:
             }
 
             async function ensureLabel(label) {
-              try {
-                await github.rest.issues.getLabel({ owner, repo, name: label });
-                return;
-              } catch (e) {
-                if (e.status !== 404) throw e;
-              }
-
+              // NOTE: kept for backwards compatibility, but this workflow now uses
+              // a label prefetch to avoid rate limits.
               await github.rest.issues.createLabel({
                 owner,
                 repo,
@@ -168,35 +163,78 @@ jobs:
               });
             }
 
-            async function findExistingIssueByKey(key) {
-              const marker = `roadmap-issue-key: ${key}`;
-
-              // Preferred: Search API (fast)
-              try {
-                const q = `repo:${owner}/${repo} "${marker}" in:body`;
-                const search = await github.rest.search.issuesAndPullRequests({ q, per_page: 5 });
-                const hit = (search.data.items || [])[0];
-                return hit ? hit.number : null;
-              } catch (e) {
-                core.warning(`Search API failed; falling back to listing issues. (${e.message || e})`);
-              }
-
-              // Fallback: list issues and scan bodies (slower)
-              let page = 1;
-              while (page <= 10) {
+            async function listAllIssuesLight({ maxPages = 20 } = {}) {
+              // Avoid Search API (strict rate limits). List issues once and scan for markers.
+              const all = [];
+              for (let page = 1; page <= maxPages; page++) {
                 const resp = await github.rest.issues.listForRepo({ owner, repo, state: 'all', per_page: 100, page });
                 const items = resp.data || [];
-                for (const it of items) {
-                  if (typeof it.body === 'string' && it.body.includes(marker)) return it.number;
+                all.push(...items);
+                if (items.length < 100) break;
+              }
+              return all;
+            }
+
+            async function loadExistingRoadmapKeys() {
+              const issues = await listAllIssuesLight({ maxPages: 20 });
+              const keys = new Set();
+
+              const re = /roadmap-issue-key:\s*([A-Z0-9][A-Z0-9_-]*)/g;
+              for (const it of issues) {
+                const body = typeof it.body === 'string' ? it.body : '';
+                let m;
+                while ((m = re.exec(body)) !== null) {
+                  keys.add(String(m[1]).trim());
+                }
+              }
+              core.info(`Found ${keys.size} existing roadmap markers in repo issues`);
+              return keys;
+            }
+
+            async function loadExistingLabels() {
+              const labels = new Set();
+              for (let page = 1; page <= 10; page++) {
+                const resp = await github.rest.issues.listLabelsForRepo({ owner, repo, per_page: 100, page });
+                const items = resp.data || [];
+                for (const l of items) {
+                  if (l && l.name) labels.add(String(l.name));
                 }
                 if (items.length < 100) break;
-                page++;
               }
-              return null;
+              core.info(`Loaded ${labels.size} existing labels from repo`);
+              return labels;
             }
 
             const parsed = parseIssues(lines);
             core.info(`Parsed ${parsed.length} issue blocks from ${sourceFile}`);
+
+            // Prefetch state to minimize API calls.
+            const existingRoadmapKeys = await loadExistingRoadmapKeys();
+            const existingLabels = createLabels ? await loadExistingLabels() : new Set();
+
+            async function ensureLabelsIfNeeded(labelNames) {
+              if (!createLabels) return;
+              for (const name of labelNames) {
+                if (existingLabels.has(name)) continue;
+                try {
+                  await github.rest.issues.createLabel({
+                    owner,
+                    repo,
+                    name,
+                    color: labelColor(name),
+                    description: 'Auto-created by roadmap import workflow',
+                  });
+                  existingLabels.add(name);
+                } catch (e) {
+                  // 422 can happen if a concurrent run created it.
+                  if (e && (e.status === 422 || e.status === 409)) {
+                    existingLabels.add(name);
+                    continue;
+                  }
+                  throw e;
+                }
+              }
+            }
 
             let createdCount = 0;
             let skippedCount = 0;
@@ -204,9 +242,8 @@ jobs:
             for (const it of parsed) {
               const issueTitle = `${it.key} — ${it.title}`;
 
-              const existing = await findExistingIssueByKey(it.key);
-              if (existing) {
-                core.info(`SKIP (exists #${existing}): ${issueTitle}`);
+              if (existingRoadmapKeys.has(it.key)) {
+                core.info(`SKIP (already imported): ${issueTitle}`);
                 skippedCount++;
                 continue;
               }
@@ -252,11 +289,7 @@ jobs:
                 continue;
               }
 
-              if (createLabels) {
-                for (const l of uniqueLabels) {
-                  await ensureLabel(l);
-                }
-              }
+              await ensureLabelsIfNeeded(uniqueLabels);
 
               const created = await github.rest.issues.create({
                 owner,
@@ -267,6 +300,7 @@ jobs:
               });
 
               core.info(`CREATED #${created.data.number}: ${issueTitle}`);
+              existingRoadmapKeys.add(it.key);
               createdCount++;
 
               if (createdCount >= maxIssues) {
