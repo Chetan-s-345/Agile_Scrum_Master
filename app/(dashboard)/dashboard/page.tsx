@@ -22,8 +22,8 @@ type SprintListItem = {
 };
 
 type SprintDetails = {
-  sprint: any;
-  tasks?: Record<string, any[]>;
+  sprint: Record<string, unknown>;
+  tasks?: Record<string, unknown[]>;
   developerCapacity?: Array<{
     full_name?: string;
     max_sprint_capacity?: number;
@@ -37,6 +37,12 @@ type SprintDetails = {
     title?: string;
     message?: string;
   }>;
+};
+
+type BurndownPoint = {
+  day?: number;
+  actualRemaining?: number;
+  idealRemaining?: number;
 };
 
 type SprintRisk = {
@@ -158,7 +164,7 @@ export default function DashboardPage() {
         if (!cancelled) {
           if (burndownResp.ok && Array.isArray(burndownJson)) {
             setBurndownData(
-              burndownJson.map((r: any) => ({
+              (burndownJson as BurndownPoint[]).map((r) => ({
                 day: `Day ${Number(r.day)}`,
                 remaining: Number(r.actualRemaining || 0),
                 ideal: Number(r.idealRemaining || 0),
@@ -189,7 +195,8 @@ export default function DashboardPage() {
 
           const grouped = detailsJson?.tasks || {};
           const total = Object.values(grouped).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0);
-          const done = Array.isArray((grouped as any).done) ? (grouped as any).done.length : 0;
+          const doneItems = grouped.done;
+          const done = Array.isArray(doneItems) ? doneItems.length : 0;
           setTaskCounts({ total, done });
 
           const alerts = Array.isArray(detailsJson?.activeDelayAlerts) ? detailsJson!.activeDelayAlerts! : [];

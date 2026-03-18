@@ -6,7 +6,7 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   {
-    files: ["ai-sprint-manager/backend/api-gateway/**/*.js"],
+    files: ["backend/api-gateway/**/*.js"],
     rules: {
       "@typescript-eslint/no-require-imports": "off",
     },
@@ -18,6 +18,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Python virtual environments (contain third-party JS not owned by this repo).
+    "**/.venv/**",
+    "**/venv/**",
   ]),
 ]);
 

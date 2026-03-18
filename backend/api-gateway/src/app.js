@@ -25,6 +25,7 @@ const webhookRoutes = require('./routes/webhook.routes');
 const monitoringRoutes = require('./routes/monitoring.routes');
 const integrationRoutes = require('./routes/integration.routes');
 const aiRoutes = require('./routes/ai.routes');
+const standupRoutes = require('./routes/standup.routes');
 
 const app = express();
 
@@ -55,6 +56,7 @@ app.use('/api/v1/webhooks', webhookRoutes);
 app.use('/api/v1/monitoring', monitoringRoutes);
 app.use('/api/v1/integrations', integrationRoutes);
 app.use('/api/v1/ai', aiRoutes);
+app.use('/api/v1/standup', standupRoutes);
 
 app.use(errorHandler);
 

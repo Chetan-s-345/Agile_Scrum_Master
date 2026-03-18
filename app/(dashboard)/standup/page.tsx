@@ -4,8 +4,44 @@ import { useMemo, useState } from "react";
 
 export default function StandupPage() {
   const [text, setText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const maxChars = 2000;
   const remaining = useMemo(() => maxChars - text.length, [text.length]);
+
+  async function submitStandup() {
+    if (!text.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const resp = await fetch("/api/standup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rawInput: text,
+          inputChannel: "web",
+        }),
+      });
+
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to submit standup"));
+
+      const blockers = Array.isArray(data?.item?.blockerTaskIds) ? data.item.blockerTaskIds.length : 0;
+      setSuccess(
+        blockers
+          ? `Standup submitted. ${blockers} blocker task${blockers > 1 ? "s" : ""} created automatically.`
+          : "Standup submitted successfully."
+      );
+      setText("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to submit standup");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
@@ -29,12 +65,25 @@ export default function StandupPage() {
             <span>{remaining} characters remaining</span>
             <button
               type="button"
-              className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-semibold"
-              onClick={() => alert("Standup submit endpoint not implemented yet.")}
+              className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-60"
+              onClick={() => void submitStandup()}
+              disabled={submitting || !text.trim()}
             >
-              Submit
+              {submitting ? "Submitting..." : "Submit"}
             </button>
           </div>
+
+          {error ? (
+            <div className="mt-3 rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950 px-3 py-2 text-xs text-red-800 dark:text-red-200">
+              {error}
+            </div>
+          ) : null}
+
+          {success ? (
+            <div className="mt-3 rounded border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950 px-3 py-2 text-xs text-green-800 dark:text-green-200">
+              {success}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

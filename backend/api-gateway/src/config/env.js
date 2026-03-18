@@ -6,6 +6,13 @@ function emptyToUndefined(value) {
   return v.trim() === '' ? undefined : v;
 }
 
+function normalizeHttpUrl(value, fallback) {
+  const raw = String(value || fallback || '').trim();
+  if (!raw) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `http://${raw}`;
+}
+
 const optionalNonEmptyString = z.preprocess(emptyToUndefined, z.string().min(1).optional());
 
 const EnvSchema = z
@@ -46,7 +53,10 @@ const EnvSchema = z
   ENABLE_SCHEDULER: z.coerce.boolean().default(true),
   ENABLE_WORKERS: z.coerce.boolean().default(true),
 
-  AI_SERVICE_URL: z.string().url().default('http://localhost:8000'),
+  AI_SERVICE_URL: z.preprocess(
+    (v) => normalizeHttpUrl(v, 'http://localhost:8000'),
+    z.string().url()
+  ),
   OPENAI_API_KEY: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
 
