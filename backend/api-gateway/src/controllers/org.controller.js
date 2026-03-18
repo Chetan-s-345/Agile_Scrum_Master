@@ -171,7 +171,15 @@ async function audit(orgPool, { actorMemberId, action, resourceType, resourceId,
 async function getCurrentOrg(req, res, next) {
   try {
     const orgId = req.user?.orgId;
-    if (!orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+    if (!orgId) {
+      return res.status(200).json({
+        org: null,
+        plan: null,
+        subscription: null,
+        memberCount: 0,
+        requiresOrgSetup: true,
+      });
+    }
 
     const orgResp = await db.universalPool.query(
       `SELECT o.id, o.name, o.slug, o.timezone, o.logo_url, o.plan_status, o.trial_ends_at,

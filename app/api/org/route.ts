@@ -38,9 +38,11 @@ export async function POST(request: Request) {
     });
 
     const data = await proxyResp.json().catch(() => null);
+    const response = NextResponse.json(data || { error: "Upstream error" }, { status: proxyResp.status });
+
     const accessToken = data?.tokens?.accessToken;
     if (accessToken) {
-      proxyResp.cookies.set({
+      response.cookies.set({
         name: "auth_token",
         value: String(accessToken).trim(),
         httpOnly: true,
@@ -50,7 +52,7 @@ export async function POST(request: Request) {
         maxAge: 60 * 60 * 24 * 7,
       });
     }
-    return proxyResp;
+    return response;
     
   } catch (error) {
     console.error("Create org error:", error);
