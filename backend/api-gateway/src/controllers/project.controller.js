@@ -133,6 +133,18 @@ async function listEpics(req, res, next) {
   }
 }
 
+async function listBacklog(req, res, next) {
+  try {
+    const parsedId = uuidSchema.safeParse(req.params.projectId);
+    if (!parsedId.success) return res.status(400).json({ error: 'Invalid projectId' });
+
+    const items = await projectService.listBacklog(req, parsedId.data);
+    return res.status(200).json({ items });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function createEpic(req, res, next) {
   try {
     const parsedId = uuidSchema.safeParse(req.params.projectId);
@@ -157,5 +169,6 @@ module.exports = {
   addMember,
   removeMember,
   listEpics,
+  listBacklog,
   createEpic,
 };

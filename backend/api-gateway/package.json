@@ -7,9 +7,11 @@
   "scripts": {
     "dev": "nodemon src/app.js",
     "start": "node src/app.js",
+    "start:render": "node src/app.js",
     "init:universal-db": "node scripts/init-universal-db.js",
     "init:tenant-template-db": "node scripts/init-tenant-template-db.js",
     "init:tenant-db": "node scripts/init-tenant-db-from-connection-string.js",
+    "init:contributor-db": "node scripts/init-contributor-db.js",
     "test": "jest"
   },
   "dependencies": {
