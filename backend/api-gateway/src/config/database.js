@@ -1,6 +1,7 @@
 const { Pool } = require('pg');
 const { env } = require('./env');
 const { logger } = require('../middleware/logger');
+const { normalizeTenantDbConnectionString } = require('../utils/tenant-db');
 
 function poolFromConnectionString(connectionString, { max } = {}) {
   return new Pool({
@@ -49,12 +50,24 @@ class DatabasePoolManager {
 
 
     if (!conn) {
-      throw Object.assign(new Error('Org DB connection string not found. In manual mode, you must store organizations.db_connection_string for this org.'), {
-        statusCode: 500,
+      throw Object.assign(
+        new Error('Organization database is not provisioned yet. Complete database setup and try again.'),
+        {
+          statusCode: 409,
+          code: 'ORG_DB_NOT_PROVISIONED',
+        }
+      );
+    }
+
+    const normalizedConn = normalizeTenantDbConnectionString(conn);
+    if (!normalizedConn) {
+      throw Object.assign(new Error('Organization database connection string is empty.'), {
+        statusCode: 409,
+        code: 'ORG_DB_NOT_PROVISIONED',
       });
     }
 
-    const pool = poolFromConnectionString(conn, { max: 10 });
+    const pool = poolFromConnectionString(normalizedConn, { max: 10 });
     this.orgPools.set(key, pool);
     return pool;
   }

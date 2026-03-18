@@ -33,8 +33,36 @@ const createOrgSchema = z.object({
       message: 'orgSlug cannot start/end with a hyphen or contain consecutive hyphens',
     }),
   planSlug: z.string().min(1).optional(),
-  tenantDbConnectionString: z.string().min(1).optional(),
+  autoResolveSlugCollision: z.coerce.boolean().optional(),
+  tenantDbConnectionString: z
+    .string()
+    .min(1)
+    .refine((v) => /^postgres(ql)?:\/\//i.test(String(v || '')), {
+      message: 'tenantDbConnectionString must start with postgres:// or postgresql://',
+    })
+    .optional(),
 });
+
+const provisionDbSchema = z
+  .object({
+    tenantDbConnectionString: z
+      .string()
+      .min(1)
+      .refine((v) => /^postgres(ql)?:\/\//i.test(String(v || '')), {
+        message: 'tenantDbConnectionString must start with postgres:// or postgresql://',
+      })
+      .optional(),
+    autoProvision: z.coerce.boolean().optional(),
+    neonOrgId: z
+      .string()
+      .min(1)
+      .transform((v) => String(v).trim())
+      .refine((v) => /^org-[a-z0-9-]+$/i.test(v), { message: 'neonOrgId must look like org-...' })
+      .optional(),
+  })
+  .refine((v) => Boolean(v.tenantDbConnectionString) || Boolean(v.autoProvision), {
+    message: 'Provide tenantDbConnectionString or set autoProvision=true',
+  });
 
 const billingCheckoutSchema = z.object({
   planSlug: z.string().min(1),
@@ -49,12 +77,46 @@ const couponValidateSchema = z.object({
   couponCode: z.string().min(1),
 });
 
+const billingConfirmSchema = z.object({
+  planSlug: z.string().min(1),
+  billingCycle: z.enum(['monthly', 'yearly']).default('monthly'),
+  provider: z.string().min(1).optional(),
+  providerSessionId: z.string().min(1).optional(),
+  couponCode: z.string().min(1).optional(),
+});
+
+const billingApplyCouponSchema = z.object({
+  planSlug: z.string().min(1),
+  billingCycle: z.enum(['monthly', 'yearly']).default('monthly'),
+  couponCode: z.string().min(1).optional(),
+});
+
+const billingCreateSubscriptionSchema = z.object({
+  planSlug: z.string().min(1),
+  billingCycle: z.enum(['monthly', 'yearly']).default('monthly'),
+  couponCode: z.string().min(1).optional(),
+  provider: z.enum(['mock', 'stripe']).default('mock'),
+  successUrl: z.string().url().optional(),
+  cancelUrl: z.string().url().optional(),
+});
+
+const billingConfirmPaymentSchema = z.object({
+  provider: z.enum(['mock', 'stripe']).default('mock'),
+  providerTransactionId: z.string().min(1),
+  paymentStatus: z.enum(['succeeded', 'failed', 'cancelled']).default('succeeded'),
+});
+
 module.exports = {
   updateSettingsSchema,
   listMembersQuerySchema,
   inviteMemberSchema,
   acceptInvitationSchema,
   createOrgSchema,
+  provisionDbSchema,
   billingCheckoutSchema,
   couponValidateSchema,
+  billingConfirmSchema,
+  billingApplyCouponSchema,
+  billingCreateSubscriptionSchema,
+  billingConfirmPaymentSchema,
 };

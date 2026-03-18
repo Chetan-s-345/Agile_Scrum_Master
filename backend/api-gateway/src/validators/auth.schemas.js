@@ -40,7 +40,10 @@ const registerSchema = z.object({
   orgName: trimmedStringSchema({ min: 1, optional: true }),
   orgSlug: normalizedSlugSchema({ optional: true }),
   planSlug: trimmedStringSchema({ min: 1, optional: true }),
-  tenantDbConnectionString: trimmedStringSchema({ min: 1, optional: true }),
+  tenantDbConnectionString: trimmedStringSchema({ min: 1, optional: true }).refine(
+    (v) => !v || /^postgres(ql)?:\/\//i.test(v),
+    'tenantDbConnectionString must start with postgres:// or postgresql://'
+  ),
 });
 
 const loginSchema = z.object({

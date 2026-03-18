@@ -1,21 +1,14 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-
-function getGatewayBaseUrl() {
-  return process.env.API_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-}
+import { getAuthTokenFromCookies, proxyToApiGateway } from "@/lib/api-gateway";
 
 export async function GET() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("auth_token")?.value || null;
+  const token = await getAuthTokenFromCookies();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const gatewayResp = await fetch(`${getGatewayBaseUrl()}/api/v1/auth/me`, {
+  const gatewayResp = await proxyToApiGateway({
+    upstreamPath: "/api/v1/auth/me",
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    cache: "no-store",
+    token,
   });
 
   const data = await gatewayResp.json().catch(() => null);
@@ -24,6 +17,16 @@ export async function GET() {
     const resp = NextResponse.json(data || { error: "Unauthorized" }, { status: 401 });
     resp.cookies.set({ name: "auth_token", value: "", path: "/", maxAge: 0 });
     return resp;
+  }
+
+  if (gatewayResp.status === 404) {
+    return NextResponse.json(
+      {
+        error: "Auth profile endpoint not found on API gateway. Check API_GATEWAY_URL and ensure api-gateway is running.",
+        details: data,
+      },
+      { status: 502 }
+    );
   }
 
   return NextResponse.json(data || { error: "Upstream error" }, { status: gatewayResp.status });

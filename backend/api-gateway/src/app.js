@@ -1,3 +1,8 @@
+const path = require('node:path');
+
+// Always load backend/api-gateway/.env regardless of launch cwd.
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+// Keep cwd .env as a secondary source (without overriding existing keys).
 require('dotenv').config();
 
 const express = require('express');
@@ -57,6 +62,15 @@ app.use('/api/v1/monitoring', monitoringRoutes);
 app.use('/api/v1/integrations', integrationRoutes);
 app.use('/api/v1/ai', aiRoutes);
 app.use('/api/v1/standup', standupRoutes);
+
+// Ensure unmatched routes return JSON (prevents upstream non-JSON errors in the Next.js proxy).
+app.use((req, res) => {
+  res.status(404).json({
+    error: 'Not found',
+    path: req.originalUrl,
+    method: req.method,
+  });
+});
 
 app.use(errorHandler);
 

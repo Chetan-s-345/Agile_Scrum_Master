@@ -12,6 +12,11 @@ const { db } = require('../config/database');
 const { NeonProjectManager } = require('../config/neon');
 const { emailService } = require('./email.service');
 const { logger } = require('../middleware/logger');
+const { mapNeonProvisioningError } = require('../utils/neon-errors');
+const {
+  normalizeTenantDbConnectionString,
+  requireTenantDbConnectionForManualMode,
+} = require('../utils/tenant-db');
 
 let _cachedTenantSchemaSql = null;
 
@@ -125,17 +130,6 @@ function poolFromConnectionString(connectionString) {
   });
 }
 
-function mapNeonProvisioningError(err) {
-  const status = err?.status || err?.cause?.status;
-  if (status === 401 || status === 403) {
-    return Object.assign(new Error('Neon API authentication failed. Check NEON_API_KEY.'), {
-      statusCode: 500,
-      cause: err,
-    });
-  }
-  return Object.assign(new Error('Database unavailable'), { statusCode: 503, cause: err });
-}
-
 async function resolvePlanOrSeedDefault(client, planSlug) {
   const requested = String(planSlug || 'free').trim().toLowerCase() || 'free';
 
@@ -195,8 +189,6 @@ class AuthService {
   async _ensureOrgDbProvisionedForLogin({ orgId, orgSlug, user }) {
     if (env.TENANT_DB_PROVISIONING_MODE !== 'neon') return;
     if (!this.neon) return;
-
-    let createdProjectId = null;
     try {
       await db.transaction(db.universalPool, async (client) => {
         // Prevent duplicate provisioning if multiple logins hit at once.
@@ -216,44 +208,28 @@ class AuthService {
         let projectId = org.neon_branch_id ? String(org.neon_branch_id) : null;
 
         if (!connectionString && projectId) {
-          // Recover connection URI if we have a project id but no stored connection string.
-          connectionString = await this.neon.getProjectConnectionString(projectId);
-        }
-
-        if (!connectionString) {
-          const project = await this.neon.createOrgProject(String(orgId), String(org.slug || orgSlug || 'org'));
-          createdProjectId = project.projectId;
-          projectId = project.projectId;
-          connectionString = project.connectionString;
-        }
-
-        try {
-          await ensureTenantSchema(connectionString);
-        } catch (e) {
-          if (e?.code === '42501') {
-            throw Object.assign(
-              new Error(
-                'Tenant database user lacks permissions to initialize schema (needs CREATE EXTENSION/TABLE/INDEX).'
-              ),
-              { statusCode: 400, cause: e }
+          // Best-effort metadata recovery only. Login should never create/provision DB.
+          try {
+            connectionString = await this.neon.getProjectConnectionString(projectId);
+          } catch (e) {
+            logger.warn(
+              {
+                orgId: String(orgId),
+                orgSlug: String(org.slug || orgSlug || ''),
+                projectId: String(projectId),
+                status: e?.status,
+                data: e?.data,
+                message: e?.message,
+              },
+              'auth.login.neon_connection_recovery_failed'
             );
+            return;
           }
-          throw Object.assign(new Error('Failed to initialize tenant database schema'), { statusCode: 400, cause: e });
         }
 
-        try {
-          await seedOrgBranch({ connectionString, orgId: String(orgId), user });
-        } catch (e) {
-          if (e?.code === '42P01') {
-            throw Object.assign(
-              new Error(
-                'Tenant database is missing required schema. Ensure PART 2 (tenant schema) from init.sql has been applied.'
-              ),
-              { statusCode: 400, cause: e }
-            );
-          }
-          throw Object.assign(new Error('Database unavailable'), { statusCode: 503, cause: e });
-        }
+        // If org has no project and no connection string, keep sign-in successful.
+        // DB provisioning is handled explicitly via /api/v1/org/provision-db.
+        if (!connectionString) return;
 
         await client.query(
           'UPDATE organizations SET neon_branch_id = $1, db_connection_string = $2, db_provisioned = TRUE WHERE id = $3',
@@ -261,19 +237,21 @@ class AuthService {
         );
 
         await client.query(
-          "INSERT INTO db_provisioning_log (org_id, db_name, action, status, started_at, completed_at) VALUES ($1, $2, 'recover', 'success', NOW(), NOW())",
+          "INSERT INTO db_provisioning_log (org_id, db_name, action, status, started_at, completed_at) VALUES ($1, $2, 'recover-metadata', 'success', NOW(), NOW())",
           [String(orgId), `org_${String(orgId).replace(/-/g, '')}_db`]
         );
       });
-    } catch (err) {
-      if (createdProjectId && this.neon) {
-        try {
-          await this.neon.deleteProject(String(createdProjectId));
-        } catch {
-          // best-effort cleanup
-        }
-      }
-      throw err;
+    } catch (e) {
+      logger.warn(
+        {
+          orgId: String(orgId),
+          orgSlug: String(orgSlug || ''),
+          message: e?.message,
+          statusCode: e?.statusCode,
+          causeStatus: e?.cause?.status,
+        },
+        'auth.login.org_db_reconcile_failed'
+      );
     }
   }
 
@@ -363,7 +341,7 @@ class AuthService {
         const user = userResp.rows[0];
 
         const orgResp = await client.query(
-          "INSERT INTO organizations (name, slug, plan_id, plan_status, trial_ends_at) VALUES ($1, $2, $3, 'trial', (NOW() + INTERVAL '14 days')) RETURNING id, name, slug, plan_id, plan_status, trial_ends_at, neon_branch_id, db_connection_string, db_provisioned",
+          "INSERT INTO organizations (name, slug, plan_id, plan_status, trial_ends_at) VALUES ($1, $2, $3, 'active', (NOW() + INTERVAL '14 days')) RETURNING id, name, slug, plan_id, plan_status, trial_ends_at, neon_branch_id, db_connection_string, db_provisioned",
           [normalizedOrgName, normalizedOrgSlug, planRow.id]
         );
         const org = orgResp.rows[0];
@@ -378,20 +356,13 @@ class AuthService {
           [org.id, planRow.id, 'active']
         );
 
-        const mode = env.TENANT_DB_PROVISIONING_MODE;
+        const manualOverrideConnection = normalizeTenantDbConnectionString(tenantDbConnectionString);
+        requireTenantDbConnectionForManualMode(manualOverrideConnection, env.TENANT_DB_PROVISIONING_MODE);
         let connectionString = null;
         let neonProjectId = null;
 
-        if (mode === 'manual') {
-          connectionString = String(tenantDbConnectionString || '').trim();
-          if (!connectionString) {
-            throw Object.assign(
-              new Error(
-                'tenantDbConnectionString is required when TENANT_DB_PROVISIONING_MODE=manual. Provide a per-org Postgres/Neon connection string.'
-              ),
-              { statusCode: 400 }
-            );
-          }
+        if (manualOverrideConnection) {
+          connectionString = manualOverrideConnection;
 
           // Auto-initialize tenant schema (PART 2) into the provided tenant DB, so signup works
           // even when the tenant DB is a separate Neon project (not a branch).
@@ -412,8 +383,20 @@ class AuthService {
             });
           }
         } else {
+          if (env.TENANT_DB_PROVISIONING_MODE !== 'neon') {
+            throw Object.assign(
+              new Error(
+                'tenantDbConnectionString is required when TENANT_DB_PROVISIONING_MODE=manual. Provide a per-org Postgres/Neon connection string.'
+              ),
+              { statusCode: 400 }
+            );
+          }
+
           if (!this.neon) {
-            throw Object.assign(new Error('Neon provisioning is not configured on this server'), { statusCode: 500 });
+            throw Object.assign(
+              new Error('No tenant DB connection string provided and Neon auto provisioning is not configured on this server'),
+              { statusCode: 400 }
+            );
           }
 
           let project;

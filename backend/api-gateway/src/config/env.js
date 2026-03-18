@@ -2,8 +2,8 @@ const { z } = require('zod');
 
 function emptyToUndefined(value) {
   if (value === undefined || value === null) return undefined;
-  const v = String(value);
-  return v.trim() === '' ? undefined : v;
+  const v = String(value).trim();
+  return v === '' ? undefined : v;
 }
 
 function normalizeHttpUrl(value, fallback) {
@@ -36,6 +36,18 @@ const EnvSchema = z
 
   // Neon API (required only when TENANT_DB_PROVISIONING_MODE=neon)
   NEON_API_KEY: optionalNonEmptyString,
+
+  // Optional alias for an Organization-scoped Neon API key.
+  // If provided, the gateway will use this key when NEON_API_KEY is not set.
+  NEON_ORG_KEY: optionalNonEmptyString,
+
+  // Neon Organization ID (recommended when using a Personal API Key)
+  // Personal keys can require org_id to access organization projects.
+  NEON_ORG_ID: optionalNonEmptyString,
+
+  // Optional: default region_id to use when creating a Neon project.
+  // See Neon docs for supported region_id values.
+  NEON_REGION_ID: optionalNonEmptyString,
 
   // Payment gateway strategy
   PAYMENT_PROVIDER: z.enum(['mock', 'stripe']).default('mock'),
@@ -70,8 +82,8 @@ const EnvSchema = z
   .superRefine((val, ctx) => {
     if (val.TENANT_DB_PROVISIONING_MODE !== 'neon') return;
 
-    if (!val.NEON_API_KEY) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['NEON_API_KEY'], message: 'Required when TENANT_DB_PROVISIONING_MODE=neon' });
+    if (!val.NEON_API_KEY && !val.NEON_ORG_KEY) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['NEON_API_KEY'], message: 'Required when TENANT_DB_PROVISIONING_MODE=neon (set NEON_API_KEY or NEON_ORG_KEY)' });
     }
   });
 

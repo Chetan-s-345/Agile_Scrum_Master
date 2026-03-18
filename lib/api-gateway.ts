@@ -17,7 +17,8 @@ type ProxySseOptions = {
 
 export function getApiGatewayBaseUrl() {
   const raw = process.env.API_GATEWAY_URL || "http://localhost:4000";
-  return raw.replace(/\/+$/, "");
+  const normalized = raw.replace(/\/+$/, "");
+  return normalized.replace(/\/api(?:\/v1)?$/i, "");
 }
 
 export async function getAuthTokenFromCookies() {
@@ -67,13 +68,17 @@ export async function proxyToApiGateway({ upstreamPath, method, token, body }: P
   }
 
   const { json, text } = await readGatewayResponse(resp);
+  const isExpressCannotPost = typeof text === "string" && /Cannot\s+POST\s+\//i.test(text);
   const payload =
     json ??
     (text
       ? {
           error: "Upstream returned non-JSON",
-          upstream: { url: upstreamUrl, status: resp.status },
+          upstream: { baseUrl, url: upstreamUrl, status: resp.status },
           bodySnippet: text.slice(0, 2000),
+          hint: isExpressCannotPost
+            ? "Upstream looks like an Express 404 page (Cannot POST). Ensure API_GATEWAY_URL points to the api-gateway service origin (default http://localhost:4000) and that the gateway process is running/restarted."
+            : "Ensure API_GATEWAY_URL points to the API gateway origin and the gateway is responding with JSON.",
         }
       : { error: "Upstream error", upstream: { url: upstreamUrl, status: resp.status } });
 

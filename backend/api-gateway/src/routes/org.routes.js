@@ -12,6 +12,7 @@ router.post('/invitations/:token/accept', orgController.acceptInvitation);
 router.use(authMiddleware);
 
 router.post('/', orgController.createOrg);
+router.post('/provision-db', orgController.provisionDb);
 router.get('/', orgController.getCurrentOrg);
 router.delete('/', orgController.deleteOrg);
 router.get('/email/status', orgController.emailStatus);
@@ -23,7 +24,11 @@ router.get('/invitations', orgController.listInvitations);
 router.get('/billing', orgController.billing);
 router.get('/billing/plans', orgController.billingPlans);
 router.post('/billing/coupon/validate', orgController.validateBillingCoupon);
+router.post('/billing/apply-coupon', orgController.billingApplyCoupon);
+router.post('/billing/create-subscription', orgController.billingCreateSubscription);
+router.post('/billing/confirm-payment', orgController.billingConfirmPayment);
 router.post('/billing/checkout', orgController.billingCheckout);
+router.post('/billing/confirm', orgController.billingConfirm);
 router.get('/db-status', orgController.dbStatus);
 
 module.exports = router;

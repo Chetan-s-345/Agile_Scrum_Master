@@ -69,6 +69,11 @@ Jira Sync Agent updates everything automatically
 
 ## ✨ Key Features
 
+## Billing Coupon
+
+- Enterprise promo coupon code: ENT-2026-SCALE-40
+- Apply it in Billing page or with query params: /settings/billing?plan=enterprise&coupon=ENT-2026-SCALE-40
+
 <table>
 <tr>
 <td width="50%">
@@ -457,7 +462,7 @@ Runs on: `http://localhost:3000`
 #### Terminal B — API gateway (Express)
 
 ```bash
-cd ai-sprint-manager/backend/api-gateway
+cd backend/api-gateway
 npm install
 npm run dev
 ```
@@ -469,7 +474,7 @@ Tip: if you don’t have Redis locally, keep `ENABLE_SCHEDULER=false` and `ENABL
 #### Terminal C — AI service (FastAPI)
 
 ```bash
-cd ai-sprint-manager/backend/ai-service
+cd backend/ai-service
 
 # Create & activate a virtual environment
 python -m venv .venv
@@ -506,13 +511,21 @@ There are **two** database concepts:
 
 - Apply the schema in `database/init.sql` to the database pointed to by `DATABASE_URL`.
 
+If you are using **Neon**, set `DATABASE_URL` to your Neon connection string and run:
+
+```bash
+npm run init:app-db
+```
+
 2. **API gateway universal DB** (`UNIVERSAL_DATABASE_URL`) used for org/user/auth + tenant registry.
 
-From `ai-sprint-manager/backend/api-gateway`:
+From `backend/api-gateway`:
 
 ```bash
 npm run init:universal-db
 ```
+
+If `UNIVERSAL_DATABASE_URL` points at **Neon**, the init script connects with SSL automatically.
 
 If you are using **manual tenant DB mode**, initialize a tenant DB once (apply PART 2 of the schema):
 
@@ -520,6 +533,12 @@ If you are using **manual tenant DB mode**, initialize a tenant DB once (apply P
 # PowerShell example
 $env:TENANT_DB_CONNECTION_STRING="postgresql://user:pass@localhost:5432/tenant_db"; npm run init:tenant-db
 ```
+
+Note: legacy billing endpoints are deprecated and return `410 Gone`:
+
+- `POST /api/org/billing/coupon/validate` → use `POST /api/org/billing/apply-coupon`
+- `POST /api/org/billing/checkout` → use `POST /api/org/billing/create-subscription`
+- `POST /api/org/billing/confirm` → use `POST /api/org/billing/confirm-payment`
 
 ---
 

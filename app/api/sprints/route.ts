@@ -16,11 +16,20 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const qs = url.searchParams.toString();
 
-  return proxyToApiGateway({
+  const upstream = await proxyToApiGateway({
     upstreamPath: `/api/v1/sprints${qs ? `?${qs}` : ""}`,
     method: "GET",
     token,
   });
+
+  if (upstream.status === 400) {
+    const data = await upstream.clone().json().catch(() => null) as { error?: string } | null;
+    if (String(data?.error || "").toLowerCase().includes("missing orgid")) {
+      return NextResponse.json({ sprints: [], requiresOrgSetup: true }, { status: 200 });
+    }
+  }
+
+  return upstream;
 }
 
 export async function POST(request: Request) {
