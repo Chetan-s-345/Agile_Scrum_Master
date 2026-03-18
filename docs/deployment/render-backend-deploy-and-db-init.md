@@ -43,7 +43,7 @@ The Render blueprint defines:
   - UNIVERSAL_DATABASE_URL
   - JWT_SECRET
   - REFRESH_TOKEN_SECRET
-  - optional integration keys (Jira/Groq/OpenAI/etc)
+  - optional integration keys (Jira/Groq/etc)
 - asm-ai-service:
   - DATABASE_URL (optional but recommended for ML persistence)
   - GROQ_API_KEY (if using Groq routes)
@@ -107,3 +107,7 @@ Required GitHub repository secrets:
 - `VERCEL_TOKEN`
 - `VERCEL_ORG_ID`
 - `VERCEL_PROJECT_ID`
+
+Vercel project env template:
+
+- `.env.vercel.example`

@@ -14,11 +14,11 @@ async def agentic_sprint_build(payload: AgenticSprintBuildRequest) -> AgenticSpr
         return await build_agentic_sprint(req=payload)
     except RuntimeError as exc:
         message = str(exc)
-        if "GROQ_API_KEY" in message or "OPENAI_API_KEY" in message:
+        if "GROQ_API_KEY" in message:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    "LLM credentials missing. Set GROQ_API_KEY (preferred) or OPENAI_API_KEY in "
+                    "LLM credentials missing. Set GROQ_API_KEY in "
                     "ai-service/.env and restart the AI service."
                 ),
             ) from exc
