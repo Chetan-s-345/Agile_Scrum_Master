@@ -12,6 +12,7 @@
     "init:tenant-template-db": "node scripts/init-tenant-template-db.js",
     "init:tenant-db": "node scripts/init-tenant-db-from-connection-string.js",
     "init:contributor-db": "node scripts/init-contributor-db.js",
+    "reset:all-data": "node scripts/reset-all-data.js --yes",
     "test": "jest"
   },
   "dependencies": {

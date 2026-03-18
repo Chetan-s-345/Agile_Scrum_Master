@@ -57,8 +57,6 @@ const EnvSchema = z
     (v) => normalizeHttpUrl(v, 'http://localhost:8000'),
     z.string().url()
   ),
-  OPENAI_API_KEY: z.string().optional(),
-  ANTHROPIC_API_KEY: z.string().optional(),
 
   JIRA_CLIENT_ID: z.string().optional(),
   JIRA_CLIENT_SECRET: z.string().optional(),

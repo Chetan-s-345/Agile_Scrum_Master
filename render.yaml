@@ -1,9 +1,11 @@
 services:
+  # Shared cache service.
   - type: redis
     name: asm-redis
     plan: free
     ipAllowList: []
 
+  # Web service instance 1: API gateway (Node.js).
   - type: web
     name: asm-api-gateway
     runtime: node
@@ -15,8 +17,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 4000
       - key: REDIS_URL
         fromService:
           type: redis
@@ -32,6 +32,8 @@ services:
         sync: false
       - key: TENANT_DB_PROVISIONING_MODE
         value: manual
+      - key: NEON_API_KEY
+        sync: false
       - key: JWT_SECRET
         sync: false
       - key: REFRESH_TOKEN_SECRET
@@ -41,12 +43,6 @@ services:
           type: web
           name: asm-ai-service
           property: hostport
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: GROQ_API_KEY
-        sync: false
       - key: BREVO_API_KEY
         sync: false
       - key: EMAIL_FROM
@@ -62,6 +58,7 @@ services:
       - key: JIRA_CLIENT_SECRET
         sync: false
 
+  # Web service instance 2: AI service (Python/FastAPI).
   - type: web
     name: asm-ai-service
     runtime: python
@@ -81,5 +78,3 @@ services:
         value: https://api.groq.com/openai/v1
       - key: GROQ_MODEL
         value: llama-3.1-8b-instant
-      - key: OPENAI_API_KEY
-        sync: false
