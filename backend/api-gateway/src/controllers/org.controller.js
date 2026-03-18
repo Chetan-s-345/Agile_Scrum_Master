@@ -351,14 +351,36 @@ async function createOrg(req, res, next) {
           createdProjectId = project.projectId;
           neonProjectId = project.projectId;
         } catch (e) {
+          logger.error(
+            {
+              orgId: org.id,
+              orgSlug: org.slug,
+              errorMessage: e?.message,
+              status: e?.status || e?.cause?.status,
+              data: e?.data || e?.cause?.data,
+            },
+            'org.create.neon_provision_failed'
+          );
+
           const status = e?.status || e?.cause?.status;
           if (status === 401 || status === 403) {
             throw Object.assign(
               new Error('Neon API authentication failed. Check NEON_API_KEY.'),
-              { statusCode: 500, cause: e }
+              { statusCode: 400, cause: e }
             );
           }
-          throw Object.assign(new Error('Database unavailable'), { statusCode: 503, cause: e });
+
+          if (status === 429) {
+            throw Object.assign(
+              new Error('Neon API rate limit reached. Please retry in a minute.'),
+              { statusCode: 429, cause: e }
+            );
+          }
+
+          throw Object.assign(
+            new Error('Neon project provisioning failed. Verify Neon API access and try again.'),
+            { statusCode: 400, cause: e }
+          );
         }
 
         connectionString = project.connectionString;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 type SubscriptionInfo = {
   status?: string;
@@ -83,6 +84,7 @@ function extractError(data: unknown): string | null {
 }
 
 export default function BillingSettingsPage() {
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [billing, setBilling] = useState<BillingResponse | null>(null);
@@ -116,6 +118,9 @@ export default function BillingSettingsPage() {
     ? Math.max(0, Math.round(basePrice * (1 - validatedCoupon.discountValue / 100) * 100) / 100)
     : basePrice;
 
+  const initialPlan = searchParams.get("plan")?.toLowerCase() || "";
+  const initialCoupon = searchParams.get("coupon") || "";
+
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -136,19 +141,24 @@ export default function BillingSettingsPage() {
         const nextPlans = Array.isArray(plansResp.data.plans) ? plansResp.data.plans : [];
         setPlans(nextPlans);
         const firstPaid = nextPlans.find((p) => p.slug !== "free")?.slug || "starter";
-        setSelectedPlan(firstPaid);
+        const requestedPlanValid = nextPlans.some((p) => p.slug === initialPlan && p.slug !== "free");
+        setSelectedPlan(requestedPlanValid ? initialPlan : firstPaid);
 
         const enterpriseCoupon = Array.isArray(plansResp.data.coupons)
           ? plansResp.data.coupons.find((c) => c.code.toUpperCase().includes("ENT"))
           : null;
         if (enterpriseCoupon?.code) setEnterpriseCouponCode(enterpriseCoupon.code);
+
+        if (initialCoupon) {
+          setCouponCode(initialCoupon);
+        }
       } else if (!billingResp.ok) {
         setError((prev) => prev || extractError(plansResp.data) || `Failed to load plans (${plansResp.status})`);
       }
 
       setLoading(false);
     })();
-  }, []);
+  }, [initialPlan, initialCoupon]);
 
   async function validateCoupon() {
     if (!couponCode.trim()) {
