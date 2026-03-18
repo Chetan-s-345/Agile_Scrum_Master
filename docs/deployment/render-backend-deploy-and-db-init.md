@@ -48,6 +48,11 @@ The Render blueprint defines:
   - DATABASE_URL (optional but recommended for ML persistence)
   - GROQ_API_KEY (if using Groq routes)
 
+### Render AI service URL wiring note
+
+- Render blueprint uses `fromService.property: hostport` for `AI_SERVICE_URL`.
+- The API gateway now normalizes `AI_SERVICE_URL` values without protocol (for example `service-name:10000`) into `http://service-name:10000` automatically.
+
 ## Contributor DB initialization
 
 This project includes one script to initialize contributor databases from backend/api-gateway/init.sql.
@@ -83,3 +88,22 @@ npm run init:contributor-db
 
 - AI service can run without DATABASE_URL, but ML persistence tables are not available.
 - For production, use strong secrets and do not commit real keys in any .env file.
+
+## Frontend Deploy (Vercel via GitHub Actions)
+
+Deployment is handled by GitHub Actions workflow:
+
+- `.github/workflows/ci-production.yml`
+
+Behavior:
+
+1. On every push, it runs lint + build checks.
+2. If checks pass, it deploys automatically to Vercel.
+3. Pushes to `production` or `main` deploy with `--prod`.
+4. Pushes to any other branch deploy to Vercel preview.
+
+Required GitHub repository secrets:
+
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`

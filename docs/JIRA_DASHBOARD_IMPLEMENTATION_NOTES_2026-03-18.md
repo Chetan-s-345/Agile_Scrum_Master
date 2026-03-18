@@ -134,17 +134,42 @@ Added Jira-like board features:
 - Board now renders filtered tasks while keeping real WIP checks
 - Stats section now shows filtered task total
 
+### 3) Standup submit persistence + blocker task creation
+
+Backend:
+
+- Added standup API routes:
+  - backend/api-gateway/src/routes/standup.routes.js
+  - Mounted under /api/v1/standup
+- Added standup controller:
+  - backend/api-gateway/src/controllers/standup.controller.js
+- Added standup service:
+  - backend/api-gateway/src/services/standup.service.js
+  - Persists standup entries to standup_entries
+  - Parses raw input into completed/planned/blockers sections
+  - Auto-creates blocker tasks in tasks when blockers are reported
+- Added standup validators:
+  - backend/api-gateway/src/validators/standup.schemas.js
+
+Frontend:
+
+- Added Next.js proxy route:
+  - app/api/standup/route.ts
+- Updated standup UI page:
+  - app/(dashboard)/standup/page.tsx
+  - Replaced placeholder alert with real submit flow
+  - Added submission state + success/error feedback
+
 ## Validation
 
 Changed files were checked for editor diagnostics. Hook dependency errors in backlog page were fixed by converting loaders to useCallback and updating useEffect dependencies.
 
 ## Remaining work (not implemented in this pass)
 
-1. Standup submit persistence and summarization endpoint wiring.
-2. Rich sprint report visualizations (instead of raw JSON sections).
-3. Workflow transition enforcement and configurable status columns.
-4. Bulk backlog edit actions (rank drag-drop, bulk assign/labels/sprint move).
-5. Saved filters shared across users (currently local browser only).
+1. Rich sprint report visualizations (instead of raw JSON sections).
+2. Workflow transition enforcement and configurable status columns.
+3. Bulk backlog edit actions (rank drag-drop, bulk assign/labels/sprint move).
+4. Saved filters shared across users (currently local browser only).
 
 ## Notes
 

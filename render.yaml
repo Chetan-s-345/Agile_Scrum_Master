@@ -40,7 +40,7 @@ services:
         fromService:
           type: web
           name: asm-ai-service
-          property: url
+          property: hostport
       - key: OPENAI_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY
