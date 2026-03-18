@@ -1,4 +1,5 @@
 import { HomeNavbar } from "@/components/home-navbar";
+import Link from "next/link";
 
 export const metadata = {
   title: "Pricing - Agile Scrum Master",
@@ -35,9 +36,12 @@ export default function PricingPage() {
                   <span>✓</span> 1 Active Sprint
                 </li>
               </ul>
-              <button className="w-full py-3 px-4 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-900 dark:text-white rounded-lg font-semibold transition">
+              <Link
+                href="/auth/sign-up"
+                className="w-full py-3 px-4 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-900 dark:text-white rounded-lg font-semibold transition text-center"
+              >
                 Start for Free
-              </button>
+              </Link>
             </div>
 
             {/* Pro Tier */}
@@ -62,9 +66,12 @@ export default function PricingPage() {
                   <span className="text-blue-600">✓</span> Priority Support
                 </li>
               </ul>
-              <button className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold transition shadow-lg shadow-blue-500/30">
-                Start Trial
-              </button>
+              <Link
+                href="/settings/billing?plan=pro"
+                className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold transition shadow-lg shadow-blue-500/30 text-center"
+              >
+                Upgrade to Pro
+              </Link>
             </div>
 
             {/* Enterprise Tier */}
@@ -86,9 +93,12 @@ export default function PricingPage() {
                   <span>✓</span> Advanced Security
                 </li>
               </ul>
-              <button className="w-full py-3 px-4 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-900 dark:text-white rounded-lg font-semibold transition">
-                Contact Sales
-              </button>
+              <Link
+                href="/settings/billing?plan=enterprise&coupon=ENT-2026-SCALE-40"
+                className="w-full py-3 px-4 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-900 dark:text-white rounded-lg font-semibold transition text-center"
+              >
+                Upgrade to Enterprise
+              </Link>
             </div>
           </div>
         </div>

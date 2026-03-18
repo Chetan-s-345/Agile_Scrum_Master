@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { User, Save } from "lucide-react";
 import { getMe } from "@/lib/org-member-auth";
 
@@ -102,6 +103,24 @@ export default function ProfilePage() {
               </div>
             </div>
           )}
+
+          <div className="mt-5 rounded-lg border border-slate-200 dark:border-zinc-800 p-4">
+            <p className="text-sm text-slate-600 dark:text-slate-300 mb-3">Need to upgrade your workspace plan?</p>
+            <div className="flex flex-wrap gap-3">
+              <Link
+                href="/settings/billing?plan=pro"
+                className="inline-flex items-center rounded-lg bg-slate-900 dark:bg-white px-4 py-2 text-sm font-semibold text-white dark:text-black"
+              >
+                Upgrade to Pro
+              </Link>
+              <Link
+                href="/settings/billing?plan=enterprise&coupon=ENT-2026-SCALE-40"
+                className="inline-flex items-center rounded-lg border border-slate-300 dark:border-zinc-700 px-4 py-2 text-sm font-semibold text-slate-900 dark:text-white"
+              >
+                Enterprise with Coupon
+              </Link>
+            </div>
+          </div>
         </div>
 
         <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">

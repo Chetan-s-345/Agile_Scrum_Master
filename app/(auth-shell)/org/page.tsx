@@ -180,6 +180,21 @@ export default function OrgSetupPage() {
               : "Manual mode is active. Provide a per-org Postgres connection string to create the organization."}
           </p>
 
+          <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-white">Selected Plan: Free</div>
+                <div className="text-xs text-zinc-400 mt-1">Create on Free plan now. Upgrade anytime after org creation.</div>
+              </div>
+              <span className="rounded-md border border-emerald-700 bg-emerald-900/40 px-2 py-1 text-xs font-semibold text-emerald-200">
+                $0/month
+              </span>
+            </div>
+            <div className="mt-3 text-xs text-zinc-500">
+              Includes basic setup for your workspace. Paid plans are available from Billing after creation.
+            </div>
+          </div>
+
           <form className="space-y-5" onSubmit={onCreateOrg}>
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-zinc-300">Organization Name</label>
@@ -264,6 +279,21 @@ export default function OrgSetupPage() {
             Members
           </h2>
           <p className="text-sm text-zinc-400 mb-6">Invite teammates to join your organization.</p>
+
+          <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-white">Need more features?</div>
+                <div className="text-xs text-zinc-400 mt-1">Upgrade your plan from Billing to unlock advanced limits and enterprise options.</div>
+              </div>
+              <Link
+                href="/settings/billing?plan=pro"
+                className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm font-semibold text-white hover:bg-zinc-700 transition-all"
+              >
+                Upgrade Plan
+              </Link>
+            </div>
+          </div>
 
           <form className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end" onSubmit={onInvite}>
             <div className="md:col-span-2 space-y-1.5">
