@@ -136,6 +136,40 @@ function mapNeonProvisioningError(err) {
   return Object.assign(new Error('Database unavailable'), { statusCode: 503, cause: err });
 }
 
+async function resolvePlanOrSeedDefault(client, planSlug) {
+  const requested = String(planSlug || 'free').trim().toLowerCase() || 'free';
+
+  let plan = await client.query(
+    'SELECT id, slug, name FROM plans WHERE slug = $1 AND is_active = TRUE LIMIT 1',
+    [requested]
+  );
+  if (plan.rows.length) return plan.rows[0];
+
+  await client.query(
+    `INSERT INTO plans (
+       name, slug, price_monthly, price_yearly,
+       max_members, max_projects, max_sprints_per_mo, max_storage_gb, ai_requests_per_day,
+       features, is_active
+     )
+     VALUES (
+       'Free', 'free', 0, 0,
+       5, 2, 4, 2, 50,
+       '{"auto_assign":false,"burnout_detect":false,"ai_reporter":false,"skill_gap":false}'::jsonb,
+       TRUE
+     )
+     ON CONFLICT (slug) DO UPDATE SET
+       is_active = TRUE,
+       updated_at = NOW()`
+  );
+
+  plan = await client.query(
+    'SELECT id, slug, name FROM plans WHERE slug = $1 AND is_active = TRUE LIMIT 1',
+    [requested]
+  );
+  if (!plan.rows.length) throw Object.assign(new Error('Invalid plan'), { statusCode: 400 });
+  return plan.rows[0];
+}
+
 async function seedOrgBranch({ connectionString, orgId, user }) {
   const pool = poolFromConnectionString(connectionString);
   try {
@@ -320,12 +354,7 @@ class AuthService {
         const existingOrg = await client.query('SELECT id FROM organizations WHERE slug = $1', [normalizedOrgSlug]);
         if (existingOrg.rows.length) throw Object.assign(new Error('Organization slug already taken'), { statusCode: 409 });
 
-        const plan = await client.query(
-          'SELECT id, slug, name FROM plans WHERE slug = $1 AND is_active = TRUE LIMIT 1',
-          [normalizedPlanSlug]
-        );
-        if (!plan.rows.length) throw Object.assign(new Error('Invalid plan'), { statusCode: 400 });
-        const planRow = plan.rows[0];
+        const planRow = await resolvePlanOrSeedDefault(client, normalizedPlanSlug);
 
         const userResp = await client.query(
           'INSERT INTO global_users (email, full_name, password_hash, auth_provider) VALUES ($1, $2, $3, $4) RETURNING id, email, full_name, email_verified, created_at',

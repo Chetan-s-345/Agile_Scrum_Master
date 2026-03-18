@@ -21,6 +21,9 @@ router.post('/members/invite', orgDbMiddleware, orgController.inviteMember);
 router.delete('/members/:memberId', orgDbMiddleware, orgController.removeMember);
 router.get('/invitations', orgController.listInvitations);
 router.get('/billing', orgController.billing);
+router.get('/billing/plans', orgController.billingPlans);
+router.post('/billing/coupon/validate', orgController.validateBillingCoupon);
+router.post('/billing/checkout', orgController.billingCheckout);
 router.get('/db-status', orgController.dbStatus);
 
 module.exports = router;

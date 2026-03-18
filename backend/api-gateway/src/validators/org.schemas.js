@@ -36,10 +36,25 @@ const createOrgSchema = z.object({
   tenantDbConnectionString: z.string().min(1).optional(),
 });
 
+const billingCheckoutSchema = z.object({
+  planSlug: z.string().min(1),
+  billingCycle: z.enum(['monthly', 'yearly']).default('monthly'),
+  couponCode: z.string().min(1).optional(),
+  successUrl: z.string().url(),
+  cancelUrl: z.string().url(),
+});
+
+const couponValidateSchema = z.object({
+  planSlug: z.string().min(1),
+  couponCode: z.string().min(1),
+});
+
 module.exports = {
   updateSettingsSchema,
   listMembersQuerySchema,
   inviteMemberSchema,
   acceptInvitationSchema,
   createOrgSchema,
+  billingCheckoutSchema,
+  couponValidateSchema,
 };

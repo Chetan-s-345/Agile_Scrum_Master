@@ -10,6 +10,12 @@ const { env } = require('../config/env');
 const { db } = require('../config/database');
 const { NeonProjectManager } = require('../config/neon');
 const { emailService } = require('../services/email.service');
+const {
+  listActivePlans,
+  listPublicCoupons,
+  validateCouponForPlan,
+  createCheckoutForOrg,
+} = require('../services/payments/payment.service');
 const { logger } = require('../middleware/logger');
 const {
   updateSettingsSchema,
@@ -17,6 +23,8 @@ const {
   inviteMemberSchema,
   acceptInvitationSchema,
   createOrgSchema,
+  billingCheckoutSchema,
+  couponValidateSchema,
 } = require('../validators/org.schemas');
 
 let _cachedTenantSchemaSql = null;
@@ -146,6 +154,40 @@ function requireRole(req, allowed) {
   return allowed.includes(role);
 }
 
+async function resolvePlanOrSeedDefault(client, planSlug) {
+  const requested = String(planSlug || 'free').trim().toLowerCase() || 'free';
+
+  let plan = await client.query(
+    'SELECT id, slug, name FROM plans WHERE slug = $1 AND is_active = TRUE LIMIT 1',
+    [requested]
+  );
+  if (plan.rows.length) return plan.rows[0];
+
+  await client.query(
+    `INSERT INTO plans (
+       name, slug, price_monthly, price_yearly,
+       max_members, max_projects, max_sprints_per_mo, max_storage_gb, ai_requests_per_day,
+       features, is_active
+     )
+     VALUES (
+       'Free', 'free', 0, 0,
+       5, 2, 4, 2, 50,
+       '{"auto_assign":false,"burnout_detect":false,"ai_reporter":false,"skill_gap":false}'::jsonb,
+       TRUE
+     )
+     ON CONFLICT (slug) DO UPDATE SET
+       is_active = TRUE,
+       updated_at = NOW()`
+  );
+
+  plan = await client.query(
+    'SELECT id, slug, name FROM plans WHERE slug = $1 AND is_active = TRUE LIMIT 1',
+    [requested]
+  );
+  if (!plan.rows.length) throw Object.assign(new Error('Invalid plan'), { statusCode: 400 });
+  return plan.rows[0];
+}
+
 async function getActorMemberId(orgPool, userId) {
   const resp = await orgPool.query('SELECT id FROM team_members WHERE global_user_id = $1 LIMIT 1', [String(userId)]);
   return resp.rows[0]?.id || null;
@@ -252,12 +294,7 @@ async function createOrg(req, res, next) {
       const existingOrg = await client.query('SELECT id FROM organizations WHERE slug = $1', [normalizedOrgSlug]);
       if (existingOrg.rows.length) throw Object.assign(new Error('Organization slug already taken'), { statusCode: 409 });
 
-      const plan = await client.query(
-        'SELECT id, slug, name FROM plans WHERE slug = $1 AND is_active = TRUE LIMIT 1',
-        [normalizedPlanSlug]
-      );
-      if (!plan.rows.length) throw Object.assign(new Error('Invalid plan'), { statusCode: 400 });
-      const planRow = plan.rows[0];
+      const planRow = await resolvePlanOrSeedDefault(client, normalizedPlanSlug);
 
       const orgResp = await client.query(
         "INSERT INTO organizations (name, slug, plan_id, plan_status, trial_ends_at) VALUES ($1, $2, $3, 'trial', (NOW() + INTERVAL '14 days')) RETURNING id, name, slug, plan_id, plan_status, trial_ends_at, neon_branch_id, db_connection_string, db_provisioned",
@@ -958,6 +995,64 @@ async function billing(req, res, next) {
   }
 }
 
+async function billingPlans(req, res, next) {
+  try {
+    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+
+    const plans = await listActivePlans();
+    return res.status(200).json({
+      plans,
+      coupons: listPublicCoupons(),
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function validateBillingCoupon(req, res, next) {
+  try {
+    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+
+    const parsed = couponValidateSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
+
+    const normalizedPlan = String(parsed.data.planSlug || '').trim().toLowerCase();
+    const result = validateCouponForPlan(parsed.data.couponCode, normalizedPlan);
+
+    if (!result.valid) {
+      return res.status(400).json({ valid: false, error: result.reason || 'Invalid coupon' });
+    }
+
+    return res.status(200).json({ valid: true, coupon: result.coupon });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function billingCheckout(req, res, next) {
+  try {
+    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+    if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
+
+    const parsed = billingCheckoutSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
+
+    const checkout = await createCheckoutForOrg({
+      orgId: String(req.user.orgId),
+      actorUserId: String(req.user.userId || ''),
+      planSlug: parsed.data.planSlug,
+      billingCycle: parsed.data.billingCycle,
+      couponCode: parsed.data.couponCode,
+      successUrl: parsed.data.successUrl,
+      cancelUrl: parsed.data.cancelUrl,
+    });
+
+    return res.status(200).json(checkout);
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function dbStatus(req, res, next) {
   try {
     if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
@@ -1012,5 +1107,8 @@ module.exports = {
   listInvitations,
   acceptInvitation,
   billing,
+  billingPlans,
+  validateBillingCoupon,
+  billingCheckout,
   dbStatus,
 };

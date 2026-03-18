@@ -37,6 +37,11 @@ const EnvSchema = z
   // Neon API (required only when TENANT_DB_PROVISIONING_MODE=neon)
   NEON_API_KEY: optionalNonEmptyString,
 
+  // Payment gateway strategy
+  PAYMENT_PROVIDER: z.enum(['mock', 'stripe']).default('mock'),
+  STRIPE_SECRET_KEY: optionalNonEmptyString,
+  STRIPE_WEBHOOK_SECRET: optionalNonEmptyString,
+
   // Optional: legacy env vars from previous "branch per org" design.
   // They are intentionally not required anymore.
   NEON_PROJECT_ID: optionalNonEmptyString,
