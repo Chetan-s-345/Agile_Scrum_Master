@@ -114,10 +114,10 @@ export default function ProfilePage() {
                 Upgrade to Pro
               </Link>
               <Link
-                href="/settings/billing?plan=enterprise&coupon=ENT-2026-SCALE-40"
+                href="/settings/billing?plan=enterprise"
                 className="inline-flex items-center rounded-lg border border-slate-300 dark:border-zinc-700 px-4 py-2 text-sm font-semibold text-slate-900 dark:text-white"
               >
-                Enterprise with Coupon
+                Upgrade to Enterprise
               </Link>
             </div>
           </div>

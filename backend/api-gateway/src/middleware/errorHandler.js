@@ -6,11 +6,15 @@ function errorHandler(err, req, res, next) {
   const statusCode = err?.statusCode || err?.status || 500;
   const isServerError = statusCode >= 500;
 
+  const publicMessage = typeof err?.publicMessage === 'string' && err.publicMessage.trim()
+    ? err.publicMessage.trim()
+    : null;
+
   const message = !isServerError
     ? err.message
     : env.NODE_ENV === 'production'
-      ? 'Internal server error'
-      : err.message || 'Internal server error';
+      ? publicMessage || 'Internal server error'
+      : err.message || publicMessage || 'Internal server error';
 
   const payload = { error: message };
 

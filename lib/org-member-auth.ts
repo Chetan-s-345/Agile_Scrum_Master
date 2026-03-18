@@ -116,7 +116,7 @@ export async function createOrg(payload: {
   orgName: string;
   orgSlug: string;
   planSlug?: string;
-  tenantDbConnectionString?: string;
+  autoResolveSlugCollision?: boolean;
 }): Promise<
   | { ok: true; org: { id: string; name?: string; slug?: string } }
   | { ok: false; error: string; status: number }
@@ -136,5 +136,35 @@ export async function createOrg(payload: {
     ok: false,
     status: resp.status,
     error: String(data?.error || "Create org failed"),
+  };
+}
+
+export async function provisionOrgDb(payload: {
+  tenantDbConnectionString?: string;
+  autoProvision?: boolean;
+  neonOrgId?: string;
+}): Promise<
+  | { ok: true; provisioned: boolean; provider?: string }
+  | { ok: false; error: string; status: number }
+> {
+  const resp = await fetch("/api/org/provision-db", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+
+  const data = await resp.json().catch(() => null);
+  if (resp.ok) {
+    return {
+      ok: true,
+      provisioned: Boolean(data?.provisioned ?? data?.ok ?? true),
+      provider: typeof data?.provider === "string" ? data.provider : undefined,
+    };
+  }
+  return {
+    ok: false,
+    status: resp.status,
+    error: String(data?.error || "Provision DB failed"),
   };
 }

@@ -23,8 +23,8 @@ export async function POST(request: Request) {
     const orgName = typeof body?.orgName === 'string' ? body.orgName.trim() : body?.orgName;
     const orgSlug = typeof body?.orgSlug === 'string' ? body.orgSlug.trim() : body?.orgSlug;
     const planSlug = typeof body?.planSlug === 'string' ? body.planSlug.trim() : body?.planSlug;
-    const tenantDbConnectionString =
-      typeof body?.tenantDbConnectionString === 'string' ? body.tenantDbConnectionString.trim() : body?.tenantDbConnectionString;
+    const autoResolveSlugCollision =
+      typeof body?.autoResolveSlugCollision === 'boolean' ? body.autoResolveSlugCollision : true;
 
     if (!orgName || !orgSlug) {
       return NextResponse.json({ error: "Missing orgName or orgSlug" }, { status: 400 });
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
       upstreamPath: "/api/v1/org",
       method: "POST",
       token,
-      body: { orgName, orgSlug, planSlug, tenantDbConnectionString },
+      body: { orgName, orgSlug, planSlug, autoResolveSlugCollision },
     });
 
     const data = await proxyResp.json().catch(() => null);

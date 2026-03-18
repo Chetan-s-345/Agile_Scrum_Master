@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const repoRoot = path.resolve(__dirname, '..');
-const gatewayCwd = path.join(repoRoot, 'ai-sprint-manager', 'backend', 'api-gateway');
+const gatewayCwd = path.join(repoRoot, 'backend', 'api-gateway');
 
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const node = process.execPath;

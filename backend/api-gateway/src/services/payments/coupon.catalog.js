@@ -1,9 +1,9 @@
 const COUPON_CATALOG = {
   'ENT-2026-SCALE-40': {
     code: 'ENT-2026-SCALE-40',
-    description: '40% off Enterprise billing for growth-stage organizations.',
+    description: '100% off Enterprise billing (full discount).',
     discountType: 'percent',
-    discountValue: 40,
+    discountValue: 100,
     applicablePlanSlugs: ['enterprise'],
     isActive: true,
   },

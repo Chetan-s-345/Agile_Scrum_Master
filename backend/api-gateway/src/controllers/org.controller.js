@@ -12,10 +12,15 @@ const { NeonProjectManager } = require('../config/neon');
 const { emailService } = require('../services/email.service');
 const {
   listActivePlans,
-  listPublicCoupons,
-  validateCouponForPlan,
   createCheckoutForOrg,
+  getActivePlanBySlug,
 } = require('../services/payments/payment.service');
+const { computeDiscountedAmount } = require('../services/payments/billing.logic');
+const {
+  listPublicCouponsDb,
+  validateCouponForPlanDb,
+  normalizeCouponCode: normalizeCouponCodeDb,
+} = require('../services/payments/coupon.service');
 const { logger } = require('../middleware/logger');
 const {
   updateSettingsSchema,
@@ -23,9 +28,18 @@ const {
   inviteMemberSchema,
   acceptInvitationSchema,
   createOrgSchema,
+  provisionDbSchema,
   billingCheckoutSchema,
   couponValidateSchema,
+  billingConfirmSchema,
+  billingApplyCouponSchema,
+  billingCreateSubscriptionSchema,
+  billingConfirmPaymentSchema,
 } = require('../validators/org.schemas');
+const {
+  normalizeTenantDbConnectionString,
+} = require('../utils/tenant-db');
+const { mapNeonProvisioningError } = require('../utils/neon-errors');
 
 let _cachedTenantSchemaSql = null;
 
@@ -154,6 +168,56 @@ function requireRole(req, allowed) {
   return allowed.includes(role);
 }
 
+function maskConnectionString(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (raw.length <= 24) return '***';
+  return `${raw.slice(0, 18)}...${raw.slice(-12)}`;
+}
+
+function toNumber(value) {
+  const num = Number(value || 0);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function resolveBaseAmountForPlan(plan, billingCycle) {
+  const cycle = String(billingCycle || 'monthly').trim().toLowerCase();
+  const listed = cycle === 'yearly' ? toNumber(plan?.price_yearly) : toNumber(plan?.price_monthly);
+  return Math.max(0, Math.round(listed * 100) / 100);
+}
+
+async function getTenantIdForOrg(client, orgId) {
+  const resp = await client.query('SELECT id FROM tenants WHERE org_id = $1 LIMIT 1', [String(orgId)]);
+  return resp.rows[0]?.id || null;
+}
+
+function withSlugSuffix(baseSlug) {
+  const suffix = crypto.randomBytes(3).toString('hex'); // 6 chars
+  const maxBaseLen = 50;
+  const trimmedBase = String(baseSlug || 'org').slice(0, maxBaseLen).replace(/-+$/g, '') || 'org';
+  return `${trimmedBase}-${suffix}`;
+}
+
+async function resolveAvailableOrgSlug(client, requestedSlug, { autoResolve = true, maxAttempts = 12 } = {}) {
+  const normalized = String(requestedSlug || '').trim().toLowerCase();
+  if (!normalized) {
+    throw Object.assign(new Error('Organization slug is required'), { statusCode: 400 });
+  }
+
+  let candidate = normalized;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const existingOrg = await client.query('SELECT id FROM organizations WHERE slug = $1 LIMIT 1', [candidate]);
+    if (!existingOrg.rows.length) return candidate;
+
+    if (!autoResolve && attempt === 0) {
+      throw Object.assign(new Error('Organization slug already taken'), { statusCode: 409 });
+    }
+    candidate = withSlugSuffix(normalized);
+  }
+
+  throw Object.assign(new Error('Could not generate an available organization slug. Please try again.'), { statusCode: 409 });
+}
+
 async function resolvePlanOrSeedDefault(client, planSlug) {
   const requested = String(planSlug || 'free').trim().toLowerCase() || 'free';
 
@@ -247,6 +311,16 @@ async function getCurrentOrg(req, res, next) {
     );
     const subscription = subResp.rows[0] || null;
 
+    // Backfill org plan_status from subscription status if it's stale.
+    const subStatus = subscription?.status ? String(subscription.status) : null;
+    if (subStatus && String(org.plan_status || '') !== subStatus) {
+      await db.universalPool.query('UPDATE organizations SET plan_status = $1, updated_at = NOW() WHERE id = $2', [
+        subStatus,
+        String(orgId),
+      ]);
+      org.plan_status = subStatus;
+    }
+
     return res.status(200).json({
       org: {
         id: org.id,
@@ -254,7 +328,7 @@ async function getCurrentOrg(req, res, next) {
         slug: org.slug,
         timezone: org.timezone,
         logoUrl: org.logo_url,
-        status: org.plan_status,
+        status: subStatus || org.plan_status,
         trialEndsAt: org.trial_ends_at,
         dbProvisioned: org.db_provisioned,
       },
@@ -268,8 +342,6 @@ async function getCurrentOrg(req, res, next) {
 }
 
 async function createOrg(req, res, next) {
-  let createdProjectId = null;
-
   try {
     if (!req.user?.userId) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -279,6 +351,7 @@ async function createOrg(req, res, next) {
     const normalizedOrgName = String(parsed.data.orgName || '').trim();
     const normalizedOrgSlug = String(parsed.data.orgSlug || '').trim().toLowerCase();
     const normalizedPlanSlug = String(parsed.data.planSlug || 'free').trim().toLowerCase();
+    const autoResolveSlugCollision = parsed.data.autoResolveSlugCollision !== false;
 
     if (!normalizedOrgName) return res.status(400).json({ error: 'Organization name is required' });
     if (!normalizedOrgSlug) return res.status(400).json({ error: 'Organization slug is required' });
@@ -291,14 +364,15 @@ async function createOrg(req, res, next) {
       const user = userResp.rows[0];
       if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
 
-      const existingOrg = await client.query('SELECT id FROM organizations WHERE slug = $1', [normalizedOrgSlug]);
-      if (existingOrg.rows.length) throw Object.assign(new Error('Organization slug already taken'), { statusCode: 409 });
+      const finalOrgSlug = await resolveAvailableOrgSlug(client, normalizedOrgSlug, {
+        autoResolve: autoResolveSlugCollision,
+      });
 
       const planRow = await resolvePlanOrSeedDefault(client, normalizedPlanSlug);
 
       const orgResp = await client.query(
-        "INSERT INTO organizations (name, slug, plan_id, plan_status, trial_ends_at) VALUES ($1, $2, $3, 'trial', (NOW() + INTERVAL '14 days')) RETURNING id, name, slug, plan_id, plan_status, trial_ends_at, neon_branch_id, db_connection_string, db_provisioned",
-        [normalizedOrgName, normalizedOrgSlug, planRow.id]
+        "INSERT INTO organizations (name, slug, plan_id, plan_status, trial_ends_at) VALUES ($1, $2, $3, 'active', (NOW() + INTERVAL '14 days')) RETURNING id, name, slug, plan_id, plan_status, trial_ends_at, neon_branch_id, db_connection_string, db_provisioned",
+        [normalizedOrgName, finalOrgSlug, planRow.id]
       );
       const org = orgResp.rows[0];
 
@@ -312,20 +386,96 @@ async function createOrg(req, res, next) {
         [org.id, planRow.id, 'active']
       );
 
-      const mode = env.TENANT_DB_PROVISIONING_MODE;
+      // Tenant DB provisioning happens AFTER org creation, via a dedicated endpoint.
+      // This avoids blocking org creation on Neon/manual DB setup.
+
+      const sessionId = uuidv4();
+      const accessToken = signAccessToken({ userId: user.id, orgId: org.id, role: 'owner', sessionId });
+      const refreshToken = signRefreshToken({ userId: user.id, orgId: org.id, sessionId, type: 'refresh' });
+      const expiresAt = decodeExpToDate(refreshToken);
+      if (!expiresAt) throw Object.assign(new Error('Failed to issue refresh token'), { statusCode: 500 });
+
+      await client.query(
+        'INSERT INTO auth_sessions (id, user_id, org_id, token_hash, refresh_token_hash, ip_address, user_agent, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        [
+          sessionId,
+          user.id,
+          org.id,
+          sha256(accessToken),
+          sha256(refreshToken),
+          req.ip,
+          req.get('user-agent') || null,
+          expiresAt,
+        ]
+      );
+
+      return {
+        user: { id: user.id, email: user.email, fullName: user.full_name, emailVerified: user.email_verified },
+        org: {
+          id: org.id,
+          name: org.name,
+          slug: org.slug,
+          planSlug: planRow.slug,
+          planName: planRow.name,
+          status: org.plan_status,
+          trialEndsAt: org.trial_ends_at,
+          dbProvisioned: Boolean(org.db_provisioned),
+        },
+        tokens: { accessToken, refreshToken },
+      };
+    });
+
+    return res.status(201).json(result);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function provisionDb(req, res, next) {
+  let createdProjectId = null;
+  let createdProjectOrgId = null;
+
+  try {
+    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+    if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
+
+    const parsed = provisionDbSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
+
+    const result = await db.transaction(db.universalPool, async (client) => {
+      const orgResp = await client.query(
+        `SELECT o.id, o.slug, o.db_provisioned, o.db_connection_string, o.neon_branch_id, p.slug AS plan_slug
+         FROM organizations o
+         LEFT JOIN plans p ON p.id = o.plan_id
+         WHERE o.id = $1`,
+        [String(req.user.orgId)]
+      );
+      const org = orgResp.rows[0];
+      if (!org) throw Object.assign(new Error('Organization not found'), { statusCode: 404 });
+      const planSlug = String(org.plan_slug || 'free').trim().toLowerCase();
+      const supportsAutoProvision = planSlug === 'pro' || planSlug === 'enterprise';
+
+      if (org.db_provisioned && org.db_connection_string) {
+        return {
+          ok: true,
+          provisioned: true,
+          provider: env.TENANT_DB_PROVISIONING_MODE,
+        };
+      }
+
+      const userResp = await client.query(
+        'SELECT id, email, full_name FROM global_users WHERE id = $1',
+        [String(req.user.userId)]
+      );
+      const user = userResp.rows[0];
+      if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
+
+      const normalizedConn = normalizeTenantDbConnectionString(parsed.data.tenantDbConnectionString);
       let connectionString = null;
       let neonProjectId = null;
 
-      if (mode === 'manual') {
-        connectionString = String(parsed.data.tenantDbConnectionString || '').trim();
-        if (!connectionString) {
-          throw Object.assign(
-            new Error(
-              'tenantDbConnectionString is required when TENANT_DB_PROVISIONING_MODE=manual. Provide a per-org Postgres/Neon connection string.'
-            ),
-            { statusCode: 400 }
-          );
-        }
+      if (normalizedConn) {
+        connectionString = normalizedConn;
 
         try {
           await ensureTenantSchema(connectionString);
@@ -344,11 +494,33 @@ async function createOrg(req, res, next) {
           });
         }
       } else {
-        const neon = new NeonProjectManager();
+        if (!supportsAutoProvision) {
+          throw Object.assign(
+            new Error('Free plan requires tenantDbConnectionString. Auto-provision is available only for Pro and Enterprise.'),
+            { statusCode: 400 }
+          );
+        }
+
+        if (env.TENANT_DB_PROVISIONING_MODE !== 'neon') {
+          throw Object.assign(new Error('tenantDbConnectionString is required for this environment.'), { statusCode: 400 });
+        }
+
+        if (!parsed.data.autoProvision) {
+          throw Object.assign(new Error('Set autoProvision=true to create a tenant database automatically.'), {
+            statusCode: 400,
+          });
+        }
+
+        if (!env.NEON_API_KEY && !env.NEON_ORG_KEY) {
+          throw Object.assign(new Error('Neon auto provisioning is not configured.'), { statusCode: 400 });
+        }
+
+        const neon = new NeonProjectManager({ orgId: parsed.data.neonOrgId });
         let project;
         try {
           project = await neon.createOrgProject(org.id, org.slug);
           createdProjectId = project.projectId;
+          createdProjectOrgId = project.orgId || null;
           neonProjectId = project.projectId;
         } catch (e) {
           logger.error(
@@ -359,41 +531,19 @@ async function createOrg(req, res, next) {
               status: e?.status || e?.cause?.status,
               data: e?.data || e?.cause?.data,
             },
-            'org.create.neon_provision_failed'
+            'org.provisionDb.neon_provision_failed'
           );
-
-          const status = e?.status || e?.cause?.status;
-          if (status === 401 || status === 403) {
-            throw Object.assign(
-              new Error('Neon API authentication failed. Check NEON_API_KEY.'),
-              { statusCode: 400, cause: e }
-            );
-          }
-
-          if (status === 429) {
-            throw Object.assign(
-              new Error('Neon API rate limit reached. Please retry in a minute.'),
-              { statusCode: 429, cause: e }
-            );
-          }
-
-          throw Object.assign(
-            new Error('Neon project provisioning failed. Verify Neon API access and try again.'),
-            { statusCode: 400, cause: e }
-          );
+          throw mapNeonProvisioningError(e);
         }
 
         connectionString = project.connectionString;
 
-        // Project-per-org starts empty; apply tenant schema before seeding.
         try {
           await ensureTenantSchema(connectionString);
         } catch (e) {
           if (e?.code === '42501') {
             throw Object.assign(
-              new Error(
-                'Tenant database user lacks permissions to initialize schema (needs CREATE EXTENSION/TABLE/INDEX).'
-              ),
+              new Error('Tenant database user lacks permissions to initialize schema (needs CREATE EXTENSION/TABLE/INDEX).'),
               { statusCode: 400, cause: e }
             );
           }
@@ -430,51 +580,33 @@ async function createOrg(req, res, next) {
         [org.id, `org_${String(org.id).replace(/-/g, '')}_db`]
       );
 
-      const sessionId = uuidv4();
-      const accessToken = signAccessToken({ userId: user.id, orgId: org.id, role: 'owner', sessionId });
-      const refreshToken = signRefreshToken({ userId: user.id, orgId: org.id, sessionId, type: 'refresh' });
-      const expiresAt = decodeExpToDate(refreshToken);
-      if (!expiresAt) throw Object.assign(new Error('Failed to issue refresh token'), { statusCode: 500 });
-
-      await client.query(
-        'INSERT INTO auth_sessions (id, user_id, org_id, token_hash, refresh_token_hash, ip_address, user_agent, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        [
-          sessionId,
-          user.id,
-          org.id,
-          sha256(accessToken),
-          sha256(refreshToken),
-          req.ip,
-          req.get('user-agent') || null,
-          expiresAt,
-        ]
-      );
-
-      return {
-        user: { id: user.id, email: user.email, fullName: user.full_name, emailVerified: user.email_verified },
-        org: {
-          id: org.id,
-          name: org.name,
-          slug: org.slug,
-          planSlug: planRow.slug,
-          planName: planRow.name,
-          status: org.plan_status,
-          trialEndsAt: org.trial_ends_at,
-        },
-        tokens: { accessToken, refreshToken },
-      };
+      return { ok: true, provisioned: true, provider: env.TENANT_DB_PROVISIONING_MODE };
     });
 
-    return res.status(201).json(result);
+    return res.status(200).json(result);
   } catch (err) {
+    // Best-effort cleanup if a Neon project was created but later steps failed.
     if (createdProjectId && env.TENANT_DB_PROVISIONING_MODE === 'neon') {
       try {
-        const neon = new NeonProjectManager();
+        const neon = new NeonProjectManager({ orgId: createdProjectOrgId || undefined });
         await neon.deleteProject(String(createdProjectId));
       } catch {
-        // best-effort cleanup
+        // ignore cleanup errors
       }
     }
+
+    // Log provisioning failure (best effort).
+    try {
+      if (req.user?.orgId) {
+        await db.universalPool.query(
+          "INSERT INTO db_provisioning_log (org_id, db_name, action, status, error_message, started_at, completed_at) VALUES ($1, $2, 'create', 'failed', $3, NOW(), NOW())",
+          [String(req.user.orgId), `org_${String(req.user.orgId).replace(/-/g, '')}_db`, String(err?.message || 'Provisioning failed')]
+        );
+      }
+    } catch {
+      // ignore logging errors
+    }
+
     return next(err);
   }
 }
@@ -981,7 +1113,13 @@ async function acceptInvitation(req, res, next) {
 
 async function billing(req, res, next) {
   try {
-    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+    if (!req.user?.orgId) {
+      return res.status(200).json({
+        subscription: null,
+        usageMonthToDate: { total_requests: 0, total_tokens: 0, total_cost_usd: 0 },
+        requiresOrgSetup: true,
+      });
+    }
     const orgId = String(req.user.orgId);
 
     const subResp = await db.universalPool.query(
@@ -1022,9 +1160,15 @@ async function billingPlans(req, res, next) {
     if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
 
     const plans = await listActivePlans();
+    let coupons = [];
+    try {
+      coupons = await listPublicCouponsDb();
+    } catch {
+      coupons = [];
+    }
     return res.status(200).json({
       plans,
-      coupons: listPublicCoupons(),
+      coupons,
     });
   } catch (err) {
     return next(err);
@@ -1033,13 +1177,19 @@ async function billingPlans(req, res, next) {
 
 async function validateBillingCoupon(req, res, next) {
   try {
+    return res.status(410).json({
+      error: 'Deprecated endpoint. Use POST /api/v1/org/billing/apply-coupon instead.',
+      deprecated: true,
+      replacement: '/api/v1/org/billing/apply-coupon',
+    });
+
     if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
 
     const parsed = couponValidateSchema.safeParse(req.body || {});
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
 
     const normalizedPlan = String(parsed.data.planSlug || '').trim().toLowerCase();
-    const result = validateCouponForPlan(parsed.data.couponCode, normalizedPlan);
+    const result = await validateCouponForPlanDb(parsed.data.couponCode, normalizedPlan);
 
     if (!result.valid) {
       return res.status(400).json({ valid: false, error: result.reason || 'Invalid coupon' });
@@ -1051,8 +1201,312 @@ async function validateBillingCoupon(req, res, next) {
   }
 }
 
+async function billingApplyCoupon(req, res, next) {
+  try {
+    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+
+    const parsed = billingApplyCouponSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
+
+    const planSlug = String(parsed.data.planSlug || '').trim().toLowerCase();
+    const billingCycle = String(parsed.data.billingCycle || 'monthly').trim().toLowerCase();
+    const couponCode = normalizeCouponCodeDb(parsed.data.couponCode);
+
+    const plan = await getActivePlanBySlug(planSlug);
+    if (!plan) return res.status(400).json({ error: `Invalid plan: ${planSlug || '<empty>'}` });
+
+    const baseAmount = resolveBaseAmountForPlan(plan, billingCycle);
+
+    let coupon = null;
+    if (couponCode) {
+      const couponResult = await validateCouponForPlanDb(couponCode, plan.slug);
+      if (!couponResult.valid) {
+        return res.status(400).json({ valid: false, error: couponResult.reason || 'Invalid coupon' });
+      }
+      coupon = couponResult.coupon;
+    }
+
+    const pricing = computeDiscountedAmount(baseAmount, coupon);
+
+    return res.status(200).json({
+      ok: true,
+      plan: { id: plan.id, slug: plan.slug, name: plan.name },
+      billingCycle,
+      coupon,
+      pricing: {
+        baseAmount: pricing.baseAmount,
+        discountAmount: pricing.discountAmount,
+        finalAmount: pricing.finalAmount,
+        currency: 'USD',
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function billingCreateSubscription(req, res, next) {
+  try {
+    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+    if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
+
+    const parsed = billingCreateSubscriptionSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
+
+    const orgId = String(req.user.orgId);
+    const planSlug = String(parsed.data.planSlug || '').trim().toLowerCase();
+    const billingCycle = String(parsed.data.billingCycle || 'monthly').trim().toLowerCase();
+    const provider = String(parsed.data.provider || 'mock').trim().toLowerCase();
+    const couponCode = normalizeCouponCodeDb(parsed.data.couponCode);
+
+    const plan = await getActivePlanBySlug(planSlug);
+    if (!plan) return res.status(400).json({ error: `Invalid plan: ${planSlug || '<empty>'}` });
+    if (String(plan.slug) === 'free') {
+      return res.status(400).json({ error: 'Free plan does not require subscription creation.' });
+    }
+
+    const baseAmount = resolveBaseAmountForPlan(plan, billingCycle);
+
+    const created = await db.transaction(db.universalPool, async (client) => {
+      let coupon = null;
+      let couponId = null;
+
+      if (couponCode) {
+        const couponResult = await validateCouponForPlanDb(couponCode, plan.slug, { client });
+        if (!couponResult.valid) {
+          throw Object.assign(new Error(couponResult.reason || 'Invalid coupon'), { statusCode: 400 });
+        }
+        coupon = couponResult.coupon;
+        couponId = couponResult.couponRow?.id || null;
+      }
+
+      const pricing = computeDiscountedAmount(baseAmount, coupon);
+      const requiresPayment = pricing.finalAmount > 0;
+      const status = requiresPayment ? 'pending' : 'active';
+      const periodEndInterval = billingCycle === 'yearly' ? '1 year' : '1 month';
+
+      // Cancel any prior active/pending subscriptions.
+      await client.query(
+        "UPDATE subscriptions SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, NOW()), updated_at = NOW() WHERE org_id = $1 AND status <> 'cancelled'",
+        [orgId]
+      );
+
+      const tenantId = await getTenantIdForOrg(client, orgId);
+
+      const subResp = await client.query(
+        `INSERT INTO subscriptions (
+           tenant_id, org_id, plan_id, billing_cycle, status,
+           provider, provider_subscription_id,
+           coupon_id, base_amount, discount_amount, final_amount, currency,
+           current_period_start, current_period_end
+         ) VALUES (
+           $1, $2, $3, $4, $5,
+           $6, NULL,
+           $7, $8, $9, $10, 'USD',
+           $11, $12
+         )
+         RETURNING id, status, billing_cycle, base_amount, discount_amount, final_amount, currency, created_at`,
+        [
+          tenantId,
+          orgId,
+          plan.id,
+          billingCycle,
+          status,
+          provider,
+          couponId,
+          pricing.baseAmount,
+          pricing.discountAmount,
+          pricing.finalAmount,
+          status === 'active' ? new Date() : null,
+          status === 'active' ? null : null,
+        ]
+      );
+      const subscription = subResp.rows[0];
+
+      // Create a payment record even for 0.00 flows (helps audit and consistent UI state).
+      const providerTransactionId = uuidv4();
+      const payStatus = requiresPayment ? 'pending' : 'succeeded';
+
+      const payResp = await client.query(
+        `INSERT INTO payments (
+           org_id, subscription_id, provider, provider_transaction_id,
+           payment_status, amount, currency, metadata, paid_at
+         ) VALUES (
+           $1, $2, $3, $4,
+           $5, $6, 'USD', $7,
+           $8
+         )
+         RETURNING id, provider, provider_transaction_id, payment_status, amount, currency`,
+        [
+          orgId,
+          subscription.id,
+          provider,
+          providerTransactionId,
+          payStatus,
+          pricing.finalAmount,
+          JSON.stringify({ planSlug: plan.slug, billingCycle, couponCode: coupon?.code || null }),
+          payStatus === 'succeeded' ? new Date() : null,
+        ]
+      );
+      const payment = payResp.rows[0];
+
+      if (!requiresPayment) {
+        // Activate immediately (and update org plan) for 100% discounts.
+        await client.query(
+          `UPDATE subscriptions
+           SET current_period_start = NOW(),
+               current_period_end = (NOW() + INTERVAL '${periodEndInterval}'),
+               updated_at = NOW()
+           WHERE id = $1`,
+          [subscription.id]
+        );
+
+        if (couponId) {
+          await client.query(
+            `UPDATE coupons
+             SET redeemed_count = redeemed_count + 1,
+                 updated_at = NOW()
+             WHERE id = $1
+               AND (max_redemptions IS NULL OR redeemed_count < max_redemptions)`,
+            [couponId]
+          );
+        }
+
+        await client.query(
+          "UPDATE organizations SET plan_id = $1, plan_status = 'active', trial_ends_at = NULL, updated_at = NOW() WHERE id = $2",
+          [plan.id, orgId]
+        );
+      }
+
+      return {
+        plan: { id: plan.id, slug: plan.slug, name: plan.name },
+        coupon,
+        pricing: { ...pricing, currency: 'USD' },
+        requiresPayment,
+        subscription,
+        payment,
+      };
+    });
+
+    return res.status(200).json({ ok: true, ...created });
+  } catch (err) {
+    if (err?.code === '42P01') {
+      err.statusCode = err.statusCode || 503;
+      err.publicMessage =
+        err.publicMessage ||
+        'Billing schema not initialized. Apply backend/api-gateway/init.sql PART 1 to the database in UNIVERSAL_DATABASE_URL (Neon), then run: backend/api-gateway -> npm run init:universal-db';
+    }
+    return next(err);
+  }
+}
+
+async function billingConfirmPayment(req, res, next) {
+  try {
+    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+    if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
+
+    const parsed = billingConfirmPaymentSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
+
+    const orgId = String(req.user.orgId);
+    const provider = String(parsed.data.provider || 'mock').trim().toLowerCase();
+    const providerTransactionId = String(parsed.data.providerTransactionId || '').trim();
+    const paymentStatus = String(parsed.data.paymentStatus || 'succeeded').trim().toLowerCase();
+
+    const result = await db.transaction(db.universalPool, async (client) => {
+      const payResp = await client.query(
+        `SELECT id, subscription_id, payment_status, amount, currency
+         FROM payments
+         WHERE org_id = $1 AND provider = $2 AND provider_transaction_id = $3
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [orgId, provider, providerTransactionId]
+      );
+      const payment = payResp.rows[0];
+      if (!payment) throw Object.assign(new Error('Payment not found'), { statusCode: 404 });
+
+      const paidAt = paymentStatus === 'succeeded' ? new Date() : null;
+      const updatedPaymentResp = await client.query(
+        `UPDATE payments
+         SET payment_status = $1,
+             updated_at = NOW(),
+             paid_at = COALESCE(paid_at, $2)
+         WHERE id = $3
+         RETURNING id, subscription_id, provider, provider_transaction_id, payment_status, amount, currency, paid_at`,
+        [paymentStatus, paidAt, payment.id]
+      );
+      const updatedPayment = updatedPaymentResp.rows[0];
+
+      const subResp = await client.query(
+        `SELECT s.id, s.plan_id, s.billing_cycle, s.status, s.coupon_id
+         FROM subscriptions s
+         WHERE s.id = $1 AND s.org_id = $2
+         LIMIT 1`,
+        [updatedPayment.subscription_id, orgId]
+      );
+      const subscription = subResp.rows[0];
+      if (!subscription) throw Object.assign(new Error('Subscription not found'), { statusCode: 404 });
+
+      if (paymentStatus !== 'succeeded') {
+        await client.query(
+          "UPDATE subscriptions SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, NOW()), updated_at = NOW() WHERE id = $1",
+          [subscription.id]
+        );
+        return { payment: updatedPayment, subscription: { ...subscription, status: 'cancelled' }, activated: false };
+      }
+
+      const periodEndInterval = String(subscription.billing_cycle) === 'yearly' ? '1 year' : '1 month';
+      const activatedSubResp = await client.query(
+        `UPDATE subscriptions
+         SET status = 'active',
+             current_period_start = NOW(),
+             current_period_end = (NOW() + INTERVAL '${periodEndInterval}'),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, status, billing_cycle, current_period_start, current_period_end, final_amount, currency, coupon_id, plan_id`,
+        [subscription.id]
+      );
+      const activatedSubscription = activatedSubResp.rows[0];
+
+      await client.query(
+        "UPDATE organizations SET plan_id = $1, plan_status = 'active', trial_ends_at = NULL, updated_at = NOW() WHERE id = $2",
+        [activatedSubscription.plan_id, orgId]
+      );
+
+      if (activatedSubscription.coupon_id) {
+        await client.query(
+          `UPDATE coupons
+           SET redeemed_count = redeemed_count + 1,
+               updated_at = NOW()
+           WHERE id = $1
+             AND (max_redemptions IS NULL OR redeemed_count < max_redemptions)`,
+          [activatedSubscription.coupon_id]
+        );
+      }
+
+      return { payment: updatedPayment, subscription: activatedSubscription, activated: true };
+    });
+
+    return res.status(200).json({ ok: true, ...result });
+  } catch (err) {
+    if (err?.code === '42P01') {
+      err.statusCode = err.statusCode || 503;
+      err.publicMessage =
+        err.publicMessage ||
+        'Billing schema not initialized. Apply backend/api-gateway/init.sql PART 1 to the database in UNIVERSAL_DATABASE_URL (Neon), then run: backend/api-gateway -> npm run init:universal-db';
+    }
+    return next(err);
+  }
+}
+
 async function billingCheckout(req, res, next) {
   try {
+    return res.status(410).json({
+      error: 'Deprecated endpoint. Use POST /api/v1/org/billing/create-subscription instead.',
+      deprecated: true,
+      replacement: '/api/v1/org/billing/create-subscription',
+    });
+
     if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
     if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
 
@@ -1075,6 +1529,81 @@ async function billingCheckout(req, res, next) {
   }
 }
 
+async function billingConfirm(req, res, next) {
+  try {
+    return res.status(410).json({
+      error: 'Deprecated endpoint. Use POST /api/v1/org/billing/confirm-payment instead.',
+      deprecated: true,
+      replacement: '/api/v1/org/billing/confirm-payment',
+    });
+
+    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+    if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
+
+    const parsed = billingConfirmSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
+
+    const normalizedPlanSlug = String(parsed.data.planSlug || '').trim().toLowerCase();
+    const normalizedCycle = String(parsed.data.billingCycle || 'monthly').trim().toLowerCase();
+    const normalizedCoupon = parsed.data.couponCode ? String(parsed.data.couponCode).trim().toUpperCase() : null;
+
+    const plan = await getActivePlanBySlug(normalizedPlanSlug);
+    if (!plan) return res.status(400).json({ error: `Invalid plan: ${normalizedPlanSlug || '<empty>'}` });
+    if (String(plan.slug) === 'free') {
+      return res.status(400).json({ error: 'Free plan does not require confirmation.' });
+    }
+
+    const orgId = String(req.user.orgId);
+
+    const subscription = await db.transaction(db.universalPool, async (client) => {
+      await client.query(
+        "UPDATE subscriptions SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, NOW()) WHERE org_id = $1 AND status <> 'cancelled'",
+        [orgId]
+      );
+
+      const periodEndInterval = normalizedCycle === 'yearly' ? "1 year" : "1 month";
+      const providerSubId = parsed.data.provider === 'stripe' && parsed.data.providerSessionId ? parsed.data.providerSessionId : null;
+      const insertResp = await client.query(
+        `INSERT INTO subscriptions (
+           org_id, plan_id, status, billing_cycle,
+           current_period_start, current_period_end,
+           trial_start, trial_end,
+           provider, provider_subscription_id,
+           base_amount, discount_amount, final_amount,
+           coupon_id, currency
+         ) VALUES (
+           $1, $2, 'active', $3,
+           NOW(), (NOW() + INTERVAL '${periodEndInterval}'),
+           NULL, NULL,
+           'stripe', $4,
+           0, 0, 0,
+           NULL, 'USD'
+         )
+         RETURNING id, status, billing_cycle, current_period_start, current_period_end, trial_end`,
+        [orgId, plan.id, normalizedCycle, providerSubId]
+      );
+
+      await client.query(
+        "UPDATE organizations SET plan_id = $1, plan_status = 'active', trial_ends_at = NULL, updated_at = NOW() WHERE id = $2",
+        [plan.id, orgId]
+      );
+
+      // Keep an audit trail in universal DB if desired later; for now return the subscription row.
+      return insertResp.rows[0];
+    });
+
+    return res.status(200).json({
+      ok: true,
+      plan: { slug: plan.slug, name: plan.name },
+      billingCycle: normalizedCycle,
+      couponCode: normalizedCoupon,
+      subscription,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function dbStatus(req, res, next) {
   try {
     if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
@@ -1090,6 +1619,8 @@ async function dbStatus(req, res, next) {
     const provider = env.TENANT_DB_PROVISIONING_MODE;
     const provisioned = Boolean(row.db_provisioned);
     const projectId = provider === 'neon' ? (row.neon_branch_id ? String(row.neon_branch_id) : null) : null;
+    const connectionMode = row.db_connection_string ? 'manual-connection' : provider === 'neon' ? 'neon-auto' : 'unknown';
+    const connectionStringMasked = row.db_connection_string ? maskConnectionString(String(row.db_connection_string)) : null;
 
     let connected = false;
     if (row.db_connection_string) {
@@ -1107,10 +1638,12 @@ async function dbStatus(req, res, next) {
 
     return res.status(200).json({
       provider,
+      connectionMode,
       status,
       provisioned,
       connected,
       projectId,
+      connectionStringMasked,
     });
   } catch (err) {
     return next(err);
@@ -1119,6 +1652,7 @@ async function dbStatus(req, res, next) {
 
 module.exports = {
   createOrg,
+  provisionDb,
   getCurrentOrg,
   emailStatus,
   deleteOrg,
@@ -1131,6 +1665,10 @@ module.exports = {
   billing,
   billingPlans,
   validateBillingCoupon,
+  billingApplyCoupon,
+  billingCreateSubscription,
+  billingConfirmPayment,
   billingCheckout,
+  billingConfirm,
   dbStatus,
 };

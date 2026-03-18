@@ -46,9 +46,9 @@ CREATE TABLE plans (
 
 INSERT INTO plans (name, slug, price_monthly, price_yearly, max_members, max_projects, max_sprints_per_mo, max_storage_gb, ai_requests_per_day, features) VALUES
 ('Free',       'free',       0.00,   0.00,    5,   2,   4,   2,   50,   '{"auto_assign":false,"burnout_detect":false,"ai_reporter":false,"skill_gap":false}'),
-('Starter',    'starter',    29.00,  290.00,  15,  10,  20,  10,  500,  '{"auto_assign":true,"burnout_detect":false,"ai_reporter":true,"skill_gap":false}'),
-('Pro',        'pro',        79.00,  790.00,  50,  50,  100, 50,  2000, '{"auto_assign":true,"burnout_detect":true,"ai_reporter":true,"skill_gap":true}'),
-('Enterprise', 'enterprise', 0.00,   0.00,    9999,9999,9999,500, 99999,'{"auto_assign":true,"burnout_detect":true,"ai_reporter":true,"skill_gap":true,"custom_domain":true,"sso":true,"audit_log":true}')
+('Starter',    'starter',    49.00,  490.00,  15,  10,  20,  20,  500,  '{"auto_assign":true,"burnout_detect":false,"ai_reporter":true,"skill_gap":true}'),
+('Pro',        'pro',        199.00, 1990.00, 50,  40,  80,  100, 2500, '{"auto_assign":true,"burnout_detect":true,"ai_reporter":true,"skill_gap":true}'),
+('Enterprise', 'enterprise', 999.00, 9990.00, 500, 500, 500, 2000,20000,'{"auto_assign":true,"burnout_detect":true,"ai_reporter":true,"skill_gap":true,"custom_domain":true,"sso":true,"audit_log":true}')
 ON CONFLICT (slug) DO UPDATE
 SET name = EXCLUDED.name,
     price_monthly = EXCLUDED.price_monthly,
@@ -88,6 +88,32 @@ CREATE TABLE organizations (
     created_at          TIMESTAMP DEFAULT NOW(),
     updated_at          TIMESTAMP DEFAULT NOW()
 );
+
+-- ============================================================================
+-- 1.2.1  TENANTS (Canonical multi-tenant handle)
+-- NOTE: This system historically uses organizations as tenants. We keep that,
+-- but also create a tenants table (1:1 mapping) to support clean SaaS billing.
+-- ============================================================================
+CREATE TABLE tenants (
+        id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        org_id              UUID NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
+        created_at          TIMESTAMP DEFAULT NOW()
+);
+
+-- Auto-create a tenant row whenever an organization is created.
+CREATE OR REPLACE FUNCTION ensure_tenant_for_org() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO tenants (org_id) VALUES (NEW.id)
+    ON CONFLICT (org_id) DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_ensure_tenant_for_org ON organizations;
+CREATE TRIGGER trg_ensure_tenant_for_org
+AFTER INSERT ON organizations
+FOR EACH ROW
+EXECUTE PROCEDURE ensure_tenant_for_org();
 
 -- ============================================================================
 -- 1.3  GLOBAL USERS (Identity — one per person, many orgs)
@@ -177,25 +203,129 @@ CREATE TABLE password_resets (
 -- ============================================================================
 -- 1.7  BILLING & SUBSCRIPTIONS
 -- ============================================================================
+CREATE TABLE coupons (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    code                VARCHAR(80) NOT NULL UNIQUE,
+    description         TEXT,
+    discount_type       VARCHAR(20) NOT NULL CHECK (discount_type IN ('percent','fixed')),
+    discount_value      DECIMAL(10,2) NOT NULL CHECK (discount_value >= 0),
+    applicable_plan_slugs TEXT[] DEFAULT NULL, -- NULL/empty => all plans
+    is_active           BOOLEAN DEFAULT TRUE,
+    starts_at           TIMESTAMP DEFAULT NOW(),
+    expires_at          TIMESTAMP,
+    max_redemptions     INT,
+    redeemed_count      INT DEFAULT 0,
+    created_at          TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW()
+);
+
+-- Seed enterprise coupon used by the app docs
+INSERT INTO coupons (code, description, discount_type, discount_value, applicable_plan_slugs, is_active)
+VALUES ('ENT-2026-SCALE-40', '100% off Enterprise billing (full discount).', 'percent', 100, ARRAY['enterprise'], TRUE)
+ON CONFLICT (code) DO UPDATE
+SET description = EXCLUDED.description,
+    discount_type = EXCLUDED.discount_type,
+    discount_value = EXCLUDED.discount_value,
+    applicable_plan_slugs = EXCLUDED.applicable_plan_slugs,
+    is_active = TRUE,
+    updated_at = NOW();
+
 CREATE TABLE subscriptions (
     id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id               UUID REFERENCES tenants(id) ON DELETE SET NULL,
     org_id                  UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
     plan_id                 UUID NOT NULL REFERENCES plans(id),
-    billing_cycle           VARCHAR(20) DEFAULT 'monthly',   -- monthly, yearly
-    status                  VARCHAR(30) DEFAULT 'active',    -- active, cancelled, past_due, paused
-    stripe_subscription_id  TEXT UNIQUE,
-    stripe_customer_id      TEXT,
+    billing_cycle           VARCHAR(20) DEFAULT 'monthly' CHECK (billing_cycle IN ('monthly','yearly')),
+    status                  VARCHAR(30) DEFAULT 'trial' CHECK (status IN ('trial','pending','active','cancelled','past_due','paused')),
+
+    -- Provider metadata (fixes missing provider column issue)
+    provider                VARCHAR(30) NOT NULL DEFAULT 'stripe', -- stripe, mock
+    provider_customer_id    TEXT,
+    provider_subscription_id TEXT,
+
+    -- Coupon + pricing snapshot
+    coupon_id               UUID REFERENCES coupons(id) ON DELETE SET NULL,
+    base_amount             DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    discount_amount         DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    final_amount            DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    currency                VARCHAR(10) DEFAULT 'USD',
+
     current_period_start    TIMESTAMP,
     current_period_end      TIMESTAMP,
     cancel_at_period_end    BOOLEAN DEFAULT FALSE,
     cancelled_at            TIMESTAMP,
     trial_start             TIMESTAMP,
     trial_end               TIMESTAMP,
-    amount                  DECIMAL(10,2),
-    currency                VARCHAR(10) DEFAULT 'USD',
+
     created_at              TIMESTAMP DEFAULT NOW(),
     updated_at              TIMESTAMP DEFAULT NOW()
 );
+
+CREATE INDEX idx_subscriptions_org_created ON subscriptions(org_id, created_at DESC);
+CREATE INDEX idx_subscriptions_status ON subscriptions(status);
+
+CREATE TABLE payments (
+    id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id                  UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    subscription_id         UUID REFERENCES subscriptions(id) ON DELETE SET NULL,
+    provider                VARCHAR(30) NOT NULL DEFAULT 'stripe',
+    provider_transaction_id TEXT,
+    payment_status          VARCHAR(30) NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending','succeeded','failed','cancelled')),
+    amount                  DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    currency                VARCHAR(10) DEFAULT 'USD',
+    metadata                JSONB DEFAULT '{}',
+    created_at              TIMESTAMP DEFAULT NOW(),
+    updated_at              TIMESTAMP DEFAULT NOW(),
+    paid_at                 TIMESTAMP
+);
+
+CREATE INDEX idx_payments_org_created ON payments(org_id, created_at DESC);
+CREATE INDEX idx_payments_status ON payments(payment_status);
+
+-- ============================================================================
+-- 1.7.1 BILLING MIGRATIONS (idempotent upgrades for existing universal DBs)
+-- ============================================================================
+-- When running scripts/init-universal-db.js against an existing database, CREATE TABLE statements
+-- might be skipped (duplicate_table). These ALTERs ensure required columns exist for the current
+-- billing code paths.
+
+-- subscriptions upgrades
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS tenant_id UUID;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS billing_cycle VARCHAR(20) DEFAULT 'monthly';
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS status VARCHAR(30) DEFAULT 'trial';
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS provider VARCHAR(30) NOT NULL DEFAULT 'stripe';
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS provider_customer_id TEXT;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS provider_subscription_id TEXT;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS coupon_id UUID;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS base_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS final_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'USD';
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS current_period_start TIMESTAMP;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS current_period_end TIMESTAMP;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS cancel_at_period_end BOOLEAN DEFAULT FALSE;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS trial_start TIMESTAMP;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS trial_end TIMESTAMP;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
+-- payments upgrades
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider VARCHAR(30) NOT NULL DEFAULT 'stripe';
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS provider_transaction_id TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) NOT NULL DEFAULT 'pending';
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS amount DECIMAL(10,2) NOT NULL DEFAULT 0.00;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'USD';
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}';
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP;
+
+-- Indexes (safe to re-run)
+CREATE INDEX IF NOT EXISTS idx_subscriptions_org_created ON subscriptions(org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status);
+CREATE INDEX IF NOT EXISTS idx_payments_org_created ON payments(org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(payment_status);
 
 CREATE TABLE invoices (
     id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

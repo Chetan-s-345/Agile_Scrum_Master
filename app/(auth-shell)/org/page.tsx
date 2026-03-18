@@ -9,6 +9,7 @@ import {
   getMe,
   inviteMember,
   listMembers,
+  provisionOrgDb,
   type MeResponse,
   type OrgMember,
 } from "@/lib/org-member-auth";
@@ -21,8 +22,9 @@ export default function OrgSetupPage() {
 
   const [orgName, setOrgName] = React.useState("");
   const [orgSlug, setOrgSlug] = React.useState("");
+  const [planSlug, setPlanSlug] = React.useState<"free" | "starter" | "pro" | "enterprise">("free");
+  const [dbSetupMode, setDbSetupMode] = React.useState<"manual" | "auto">("manual");
   const [tenantDbConnectionString, setTenantDbConnectionString] = React.useState("");
-  const [useCustomTenantDb, setUseCustomTenantDb] = React.useState(false);
 
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
@@ -36,7 +38,13 @@ export default function OrgSetupPage() {
   const [inviteError, setInviteError] = React.useState<string | null>(null);
 
   const hasOrg = Boolean(Array.isArray(me?.memberships) && me!.memberships!.length);
-  const tenantMode = me?.tenantProvisioningMode === "neon" ? "neon" : "manual";
+  const supportsAutoProvision = planSlug === "pro" || planSlug === "enterprise";
+
+  React.useEffect(() => {
+    if (!supportsAutoProvision && dbSetupMode !== "manual") {
+      setDbSetupMode("manual");
+    }
+  }, [supportsAutoProvision, dbSetupMode]);
 
   const refreshMe = React.useCallback(async () => {
     const data = await getMe();
@@ -83,28 +91,44 @@ export default function OrgSetupPage() {
     setCreating(true);
 
     try {
-      if (tenantMode === "manual" && !tenantDbConnectionString.trim()) {
-        setCreateError("Tenant DB connection string is required in manual mode.");
+      if (dbSetupMode === "manual" && !tenantDbConnectionString.trim()) {
+        setCreateError("Tenant DB connection string is required.");
         return;
       }
 
-      const result = await createOrg({
+      if (!supportsAutoProvision && !tenantDbConnectionString.trim()) {
+        setCreateError("Tenant DB connection string is required.");
+        return;
+      }
+
+      const payload: Parameters<typeof createOrg>[0] = {
         orgName,
         orgSlug,
-        planSlug: "free",
-        tenantDbConnectionString:
-          tenantMode === "manual" || useCustomTenantDb ? tenantDbConnectionString || undefined : undefined,
-      });
+        planSlug,
+      };
+
+      const result = await createOrg(payload);
 
       if (!result.ok) {
         setCreateError(result.error);
         return;
       }
 
-      const updatedMe = await refreshMe();
-      if (Array.isArray(updatedMe?.memberships) && updatedMe.memberships.length) {
-        await refreshMembers();
+      const provisionPayload = supportsAutoProvision
+        ? dbSetupMode === "manual"
+          ? { tenantDbConnectionString: tenantDbConnectionString.trim() }
+          : { autoProvision: true }
+        : { tenantDbConnectionString: tenantDbConnectionString.trim() };
+
+      const provisionResp = await provisionOrgDb(provisionPayload);
+      if (!provisionResp.ok) {
+        setCreateError(provisionResp.error);
+        return;
       }
+
+      await refreshMe();
+      router.push("/settings/org");
+      return;
     } finally {
       setCreating(false);
     }
@@ -174,25 +198,10 @@ export default function OrgSetupPage() {
       ) : !hasOrg ? (
         <div className="rounded-2xl border border-zinc-800 bg-[#121212] p-6">
           <h2 className="text-xl font-semibold text-white mb-1">Create Organization</h2>
-          <p className="text-sm text-zinc-400 mb-6">
-            {tenantMode === "neon"
-              ? "Neon mode is active. We will create a separate Neon project automatically for this organization."
-              : "Manual mode is active. Provide a per-org Postgres connection string to create the organization."}
-          </p>
+          <p className="text-sm text-zinc-400 mb-6">Enter organization details to continue.</p>
 
-          <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-white">Selected Plan: Free</div>
-                <div className="text-xs text-zinc-400 mt-1">Create on Free plan now. Upgrade anytime after org creation.</div>
-              </div>
-              <span className="rounded-md border border-emerald-700 bg-emerald-900/40 px-2 py-1 text-xs font-semibold text-emerald-200">
-                $0/month
-              </span>
-            </div>
-            <div className="mt-3 text-xs text-zinc-500">
-              Includes basic setup for your workspace. Paid plans are available from Billing after creation.
-            </div>
+          <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-400">
+            Select a plan for your organization. You can upgrade later from Billing.
           </div>
 
           <form className="space-y-5" onSubmit={onCreateOrg}>
@@ -218,38 +227,51 @@ export default function OrgSetupPage() {
               />
             </div>
 
-            {tenantMode === "neon" ? (
-              <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-                <div className="text-xs text-zinc-400">
-                  Free plan setup note: you can still paste your own tenant DB URL if you do not want automatic Neon provisioning.
-                </div>
-                <label className="flex items-center gap-2 text-sm text-zinc-300">
-                  <input
-                    type="checkbox"
-                    checked={useCustomTenantDb}
-                    onChange={(e) => setUseCustomTenantDb(e.target.checked)}
-                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-900"
-                  />
-                  Use custom tenant DB connection string instead of auto-provisioning Neon
-                </label>
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-zinc-300">Plan</label>
+              <select
+                value={planSlug}
+                onChange={(e) => setPlanSlug(e.target.value as "free" | "starter" | "pro" | "enterprise")}
+                className="w-full rounded-xl border border-zinc-800 bg-[#121212] px-4 py-3 text-[15px] text-white focus:border-transparent focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all duration-300"
+              >
+                <option value="free">Free</option>
+                <option value="starter">Starter</option>
+                <option value="pro">Pro</option>
+                <option value="enterprise">Enterprise</option>
+              </select>
+            </div>
 
-                {useCustomTenantDb ? (
-                  <div className="space-y-1.5">
-                    <label className="block text-sm font-medium text-zinc-300">Tenant DB Connection String (Optional Override)</label>
-                    <textarea
-                      value={tenantDbConnectionString}
-                      onChange={(e) => setTenantDbConnectionString(e.target.value)}
-                      rows={3}
-                      className="w-full rounded-xl border border-zinc-800 bg-[#121212] px-4 py-3 text-[15px] text-white placeholder:text-zinc-500 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all duration-300"
-                      placeholder="postgresql://user:pass@host/db?sslmode=require"
+            {supportsAutoProvision ? (
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-zinc-300">Database Setup</div>
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 text-sm text-zinc-300">
+                    <input
+                      type="radio"
+                      name="dbSetupMode"
+                      value="manual"
+                      checked={dbSetupMode === "manual"}
+                      onChange={() => setDbSetupMode("manual")}
                     />
-                  </div>
-                ) : null}
+                    I have a connection string
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-zinc-300">
+                    <input
+                      type="radio"
+                      name="dbSetupMode"
+                      value="auto"
+                      checked={dbSetupMode === "auto"}
+                      onChange={() => setDbSetupMode("auto")}
+                    />
+                    Create one automatically
+                  </label>
+                </div>
               </div>
-            ) : (
+            ) : null}
+
+            {!supportsAutoProvision || dbSetupMode === "manual" ? (
               <div className="space-y-1.5">
                 <label className="block text-sm font-medium text-zinc-300">Tenant DB Connection String</label>
-                <div className="text-xs text-zinc-400">Free plan requires a tenant DB URL in manual mode.</div>
                 <textarea
                   value={tenantDbConnectionString}
                   onChange={(e) => setTenantDbConnectionString(e.target.value)}
@@ -258,8 +280,13 @@ export default function OrgSetupPage() {
                   className="w-full rounded-xl border border-zinc-800 bg-[#121212] px-4 py-3 text-[15px] text-white placeholder:text-zinc-500 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all duration-300"
                   placeholder="postgresql://user:pass@host/db?sslmode=require"
                 />
+                {!supportsAutoProvision ? (
+                  <div className="text-xs text-zinc-400">
+                    Free plan requires an explicit tenant DB connection string.
+                  </div>
+                ) : null}
               </div>
-            )}
+            ) : null}
 
             {createError ? <div className="text-sm text-red-400">{createError}</div> : null}
 

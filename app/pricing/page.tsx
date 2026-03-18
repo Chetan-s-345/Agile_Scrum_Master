@@ -94,7 +94,7 @@ export default function PricingPage() {
                 </li>
               </ul>
               <Link
-                href="/settings/billing?plan=enterprise&coupon=ENT-2026-SCALE-40"
+                href="/settings/billing?plan=enterprise"
                 className="w-full py-3 px-4 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-900 dark:text-white rounded-lg font-semibold transition text-center"
               >
                 Upgrade to Enterprise
