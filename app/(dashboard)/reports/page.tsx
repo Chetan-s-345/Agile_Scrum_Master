@@ -1,170 +1,193 @@
 "use client";
 
-import { Download, TrendingUp } from 'lucide-react';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { RefreshCw } from "lucide-react";
+
+type VelocityPoint = {
+  sprintId: string;
+  sprint: string;
+  status: string;
+  startDate: string;
+  endDate: string;
+  planned: number;
+  velocity: number;
+  completionPct: number | null;
+};
+
+type ReportItem = {
+  id: string;
+  name: string;
+  date: string;
+  type: string;
+};
+
+type ReportsResp = {
+  velocityHistory?: VelocityPoint[];
+  reports?: ReportItem[];
+  error?: string;
+};
+
+async function fetchJson<T>(url: string): Promise<{ ok: boolean; status: number; data: T | null }> {
+  const resp = await fetch(url, { cache: "no-store" });
+  const text = await resp.text().catch(() => "");
+  let data: T | null = null;
+  try {
+    data = text ? (JSON.parse(text) as T) : null;
+  } catch {
+    data = null;
+  }
+  return { ok: resp.ok, status: resp.status, data };
+}
 
 export default function ReportsPage() {
-  const velocityHistory = [
-    { sprint: 'Sprint 1', velocity: 28, planned: 30 },
-    { sprint: 'Sprint 2', velocity: 32, planned: 30 },
-    { sprint: 'Sprint 3', velocity: 35, planned: 35 },
-    { sprint: 'Sprint 4', velocity: 38, planned: 35 },
-  ];
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<ReportsResp | null>(null);
 
-  const completionHistory = [
-    { sprint: 'Sprint 1', completed: 85, bugs: 2 },
-    { sprint: 'Sprint 2', completed: 92, bugs: 1 },
-    { sprint: 'Sprint 3', completed: 95, bugs: 1 },
-    { sprint: 'Sprint 4', completed: 98, bugs: 0 },
-  ];
+  const velocityHistory = useMemo(() => (Array.isArray(data?.velocityHistory) ? data!.velocityHistory! : []), [data]);
+  const reports = useMemo(() => (Array.isArray(data?.reports) ? data!.reports! : []), [data]);
 
-  const skillGaps = [
-    { skill: 'Kubernetes', frequency: 8, priority: 'high' },
-    { skill: 'GraphQL', frequency: 5, priority: 'medium' },
-    { skill: 'WebSockets', frequency: 3, priority: 'low' },
-  ];
+  const avgVelocity = useMemo(() => {
+    if (!velocityHistory.length) return 0;
+    const sum = velocityHistory.reduce((acc, p) => acc + Number(p.velocity || 0), 0);
+    return Math.round((sum / velocityHistory.length) * 100) / 100;
+  }, [velocityHistory]);
 
-  const reports = [
-    { id: 1, name: 'Sprint 4 Report', date: '2024-01-28', type: 'Sprint Summary' },
-    { id: 2, name: 'Team Performance Q1', date: '2024-01-15', type: 'Quarterly' },
-    { id: 3, name: 'Skill Gap Analysis', date: '2024-01-01', type: 'Analysis' },
-  ];
+  const avgCompletion = useMemo(() => {
+    const vals = velocityHistory.map((p) => p.completionPct).filter((v): v is number => typeof v === "number");
+    if (!vals.length) return null;
+    const sum = vals.reduce((acc, v) => acc + v, 0);
+    return Math.round((sum / vals.length) * 10) / 10;
+  }, [velocityHistory]);
+
+  const lastSprint = useMemo(() => (velocityHistory.length ? velocityHistory[velocityHistory.length - 1] : null), [velocityHistory]);
+
+  async function load() {
+    setLoading(true);
+    setError(null);
+    const resp = await fetchJson<ReportsResp>("/api/reports");
+    if (!resp.ok) {
+      setData(null);
+      setError(String(resp.data?.error || `Failed to load reports (${resp.status})`));
+      setLoading(false);
+      return;
+    }
+    setData(resp.data);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    (async () => {
+      await load();
+    })();
+  }, []);
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
       <div className="w-full">
-        {/* Header */}
-        <div className="mb-8 flex items-center justify-between">
+        <div className="mb-6 flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">Reports</h1>
-            <p className="text-slate-600 dark:text-slate-300">Sprint Analytics & Team Performance</p>
+            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Reports</h1>
+            <p className="text-slate-600 dark:text-slate-300">Sprint history, velocity, and completion snapshots.</p>
           </div>
-          <button className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition flex items-center gap-2">
-            <Download className="w-5 h-5" />
-            Export PDF
+          <button
+            onClick={load}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm font-semibold text-slate-900 dark:text-white disabled:opacity-60"
+          >
+            <RefreshCw className="w-4 h-4" /> Refresh
           </button>
         </div>
 
-        {/* Key Metrics */}
+        {error ? (
+          <div className="mb-6 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950 px-4 py-3 text-sm text-red-800 dark:text-red-200">
+            {error}
+          </div>
+        ) : null}
+
+        {loading ? <div className="text-slate-600 dark:text-slate-300">Loading…</div> : null}
+
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
           <div className="bg-white dark:bg-zinc-900 rounded-lg p-4 shadow-md border border-slate-200 dark:border-zinc-800">
             <p className="text-slate-600 dark:text-slate-400 text-sm">Avg Velocity</p>
-            <p className="text-3xl font-bold text-slate-900 dark:text-white mt-1">33.25</p>
-            <p className="text-xs text-green-600 dark:text-green-400 mt-2">↑ +10% vs Q3</p>
+            <p className="text-3xl font-bold text-slate-900 dark:text-white mt-1">{avgVelocity}</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">Across {velocityHistory.length} sprints</p>
           </div>
           <div className="bg-white dark:bg-zinc-900 rounded-lg p-4 shadow-md border border-slate-200 dark:border-zinc-800">
             <p className="text-slate-600 dark:text-slate-400 text-sm">Completion Rate</p>
-            <p className="text-3xl font-bold text-slate-900 dark:text-white mt-1">92.5%</p>
-            <p className="text-xs text-green-600 dark:text-green-400 mt-2">↑ +7.5% trend</p>
+            <p className="text-3xl font-bold text-slate-900 dark:text-white mt-1">{avgCompletion === null ? "—" : `${avgCompletion}%`}</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">Planned vs completed points</p>
           </div>
           <div className="bg-white dark:bg-zinc-900 rounded-lg p-4 shadow-md border border-slate-200 dark:border-zinc-800">
-            <p className="text-slate-600 dark:text-slate-400 text-sm">Team Velocity</p>
-            <p className="text-3xl font-bold text-slate-900 dark:text-white mt-1">4.2</p>
-            <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">Points/developer</p>
+            <p className="text-slate-600 dark:text-slate-400 text-sm">Latest Sprint</p>
+            <p className="text-3xl font-bold text-slate-900 dark:text-white mt-1">{lastSprint?.sprint || "—"}</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">{lastSprint ? `${lastSprint.velocity}/${lastSprint.planned} points` : ""}</p>
           </div>
           <div className="bg-white dark:bg-zinc-900 rounded-lg p-4 shadow-md border border-slate-200 dark:border-zinc-800">
-            <p className="text-slate-600 dark:text-slate-400 text-sm">Critical Bugs</p>
-            <p className="text-3xl font-bold text-slate-900 dark:text-white mt-1">0</p>
-            <p className="text-xs text-green-600 dark:text-green-400 mt-2">Zero in Q1 ✅</p>
+            <p className="text-slate-600 dark:text-slate-400 text-sm">Recent Reports</p>
+            <p className="text-3xl font-bold text-slate-900 dark:text-white mt-1">{reports.length}</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">Last 10 sprints</p>
           </div>
         </div>
 
-        {/* Charts */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-          {/* Velocity History */}
-          <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 shadow-md border border-slate-200 dark:border-zinc-800">
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
-              <TrendingUp className="w-5 h-5" />
-              Velocity Trend
-            </h2>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={velocityHistory}>
-                <XAxis dataKey="sprint" stroke="#94a3b8" />
-                <YAxis stroke="#94a3b8" />
-                <Tooltip 
-                  contentStyle={{
-                    backgroundColor: '#1e293b',
-                    border: '1px solid #475569',
-                    borderRadius: '8px'
-                  }}
-                  labelStyle={{ color: '#fff' }}
-                />
-                <Legend />
-                <Line type="monotone" dataKey="velocity" stroke="#10b981" strokeWidth={2} />
-                <Line type="monotone" dataKey="planned" stroke="#f59e0b" strokeWidth={2} strokeDasharray="5 5" />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Completion History */}
-          <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 shadow-md border border-slate-200 dark:border-zinc-800">
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Completion & Quality</h2>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={completionHistory}>
-                <XAxis dataKey="sprint" stroke="#94a3b8" />
-                <YAxis stroke="#94a3b8" />
-                <Tooltip 
-                  contentStyle={{
-                    backgroundColor: '#1e293b',
-                    border: '1px solid #475569',
-                    borderRadius: '8px'
-                  }}
-                  labelStyle={{ color: '#fff' }}
-                />
-                <Legend />
-                <Bar dataKey="completed" fill="#3b82f6" />
-                <Bar dataKey="bugs" fill="#ef4444" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Skill Gaps */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
           <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 shadow-md border border-slate-200 dark:border-zinc-800">
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Skill Gap Analysis</h2>
-            <div className="space-y-3">
-              {skillGaps.map((gap, idx) => (
-                <div key={idx} className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <p className="font-medium text-slate-900 dark:text-white">{gap.skill}</p>
-                    <div className="w-full bg-slate-200 dark:bg-slate-600 rounded-full h-2 mt-1">
-                      <div 
-                        className={`h-2 rounded-full ${
-                          gap.priority === 'high' ? 'bg-red-500' :
-                          gap.priority === 'medium' ? 'bg-yellow-500' : 'bg-blue-500'
-                        }`}
-                        style={{ width: `${(gap.frequency / 8) * 100}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                  <span className={`ml-4 px-2 py-1 rounded text-xs font-medium ${
-                    gap.priority === 'high' ? 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200' :
-                    gap.priority === 'medium' ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200' :
-                    'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
-                  }`}>
-                    {gap.frequency}x
-                  </span>
-                </div>
-              ))}
-            </div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Velocity history</h2>
+            {velocityHistory.length ? (
+              <div className="overflow-auto rounded-lg border border-slate-200 dark:border-zinc-800">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 dark:bg-black/40">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Sprint</th>
+                      <th className="text-right px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Planned</th>
+                      <th className="text-right px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Done</th>
+                      <th className="text-right px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {velocityHistory.map((p) => (
+                      <tr key={p.sprintId} className="border-t border-slate-200 dark:border-zinc-800">
+                        <td className="px-3 py-3">
+                          <div className="font-semibold text-slate-900 dark:text-white">{p.sprint}</div>
+                          <div className="text-xs text-slate-500">{p.status}</div>
+                        </td>
+                        <td className="px-3 py-3 text-right text-slate-700 dark:text-slate-200">{p.planned}</td>
+                        <td className="px-3 py-3 text-right text-slate-700 dark:text-slate-200">{p.velocity}</td>
+                        <td className="px-3 py-3 text-right text-slate-700 dark:text-slate-200">{p.completionPct === null ? "—" : `${p.completionPct}%`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-sm text-slate-600 dark:text-slate-300">No active/completed sprints yet.</div>
+            )}
           </div>
 
           {/* Recent Reports */}
           <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 shadow-md border border-slate-200 dark:border-zinc-800">
             <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Recent Reports</h2>
             <div className="space-y-2">
-              {reports.map((report) => (
-                <div key={report.id} className="p-3 bg-slate-50 dark:bg-slate-700 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-600 transition cursor-pointer border border-slate-200 dark:border-slate-600">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-slate-900 dark:text-white text-sm">{report.name}</p>
-                      <p className="text-xs text-slate-600 dark:text-slate-400">{report.date} • {report.type}</p>
+              {reports.length ? (
+                reports.map((report) => (
+                  <Link
+                    key={report.id}
+                    href={`/reports/${encodeURIComponent(report.id)}`}
+                    className="block p-3 bg-slate-50 dark:bg-black/30 rounded-lg hover:bg-slate-100 dark:hover:bg-black/40 transition border border-slate-200 dark:border-zinc-800"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-medium text-slate-900 dark:text-white text-sm">{report.name}</p>
+                        <p className="text-xs text-slate-600 dark:text-slate-400">{String(report.date).slice(0, 10)} • {report.type}</p>
+                      </div>
+                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 underline">Open</span>
                     </div>
-                    <Download className="w-4 h-4 text-slate-600 dark:text-slate-400" />
-                  </div>
-                </div>
-              ))}
+                  </Link>
+                ))
+              ) : (
+                <div className="text-sm text-slate-600 dark:text-slate-300">No reports available.</div>
+              )}
             </div>
           </div>
         </div>

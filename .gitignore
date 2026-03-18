@@ -60,3 +60,8 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
+
+# local-only notes/prompts (do not commit)
+AI_Sprint_Manager_Route_Prompts.txt
+creatingpages.txt
+prompt.txt

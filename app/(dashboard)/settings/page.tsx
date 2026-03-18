@@ -1,5 +1,6 @@
 "use client";
 
+import Link from 'next/link';
 import { Settings, Save, AlertCircle } from 'lucide-react';
 import { useState } from 'react';
 
@@ -20,19 +21,62 @@ export default function SettingsPage() {
           <p className="text-slate-600 dark:text-slate-300">Configure project connections and preferences</p>
         </div>
 
+        {/* Quick links */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          <Link
+            href="/settings/org"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Organization</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">Org profile, preferences, and defaults.</div>
+          </Link>
+
+          <Link
+            href="/settings/team"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Team</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">Invite members and manage roles.</div>
+          </Link>
+
+          <Link
+            href="/settings/integrations"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Integrations</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">Connect Jira and trigger sync.</div>
+          </Link>
+
+          <Link
+            href="/settings/billing"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Billing</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">Plan and subscription status.</div>
+          </Link>
+        </div>
+
         {/* Jira Configuration */}
         <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6 mb-6">
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-6 flex items-center gap-2">
-            <span className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 flex items-center justify-center text-sm font-bold">1</span>
+            <span className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-slate-200 flex items-center justify-center text-sm font-bold">1</span>
             Jira Configuration
           </h2>
+
+          <div className="mb-4 text-sm text-slate-600 dark:text-slate-300">
+            Recommended: manage Jira connection in{' '}
+            <Link href="/settings/integrations" className="text-slate-900 dark:text-slate-200 underline underline-offset-4">
+              Settings → Integrations
+            </Link>
+            .
+          </div>
 
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Jira Instance URL</label>
               <input
                 type="url"
-                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-600"
                 value={jiraUrl}
                 onChange={(e) => setJiraUrl(e.target.value)}
                 placeholder="https://yourcompany.atlassian.net"
@@ -43,7 +87,7 @@ export default function SettingsPage() {
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Email</label>
               <input
                 type="email"
-                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-600"
                 value={jiraEmail}
                 onChange={(e) => setJiraEmail(e.target.value)}
                 placeholder="your@email.com"
@@ -54,27 +98,38 @@ export default function SettingsPage() {
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">API Token</label>
               <input
                 type="password"
-                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-600"
                 value={jiraToken}
                 onChange={(e) => setJiraToken(e.target.value)}
                 placeholder="••••••••••••••••"
               />
               <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
-                📌 <a href="#" className="text-blue-600 dark:text-blue-400 hover:underline">Generate token</a> from Jira Account Settings
+                📌 <a href="#" className="text-slate-900 dark:text-slate-200 underline underline-offset-4">Generate token</a> from Jira Account Settings
               </p>
             </div>
 
-            <button className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition flex items-center gap-2">
-              <Save className="w-4 h-4" />
-              Test Connection
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/settings/integrations"
+                className="bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-200 text-white dark:text-black font-semibold py-2 px-4 rounded-lg transition inline-flex items-center gap-2"
+              >
+                <Save className="w-4 h-4" />
+                Manage Jira
+              </Link>
+              <button
+                type="button"
+                className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-slate-900 dark:text-white font-semibold py-2 px-4 rounded-lg transition"
+              >
+                Save (coming soon)
+              </button>
+            </div>
           </div>
         </div>
 
         {/* GitHub Integration */}
         <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6 mb-6">
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-6 flex items-center gap-2">
-            <span className="w-8 h-8 rounded-full bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 flex items-center justify-center text-sm font-bold">2</span>
+            <span className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-slate-200 flex items-center justify-center text-sm font-bold">2</span>
             GitHub Integration
           </h2>
 
@@ -83,7 +138,7 @@ export default function SettingsPage() {
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Repository</label>
               <input
                 type="text"
-                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-600"
                 placeholder="org/repo-name"
               />
             </div>
@@ -92,12 +147,12 @@ export default function SettingsPage() {
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">GitHub Token</label>
               <input
                 type="password"
-                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-600"
                 placeholder="••••••••••••••••"
               />
             </div>
 
-            <button className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition flex items-center gap-2">
+            <button className="bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-200 text-white dark:text-black font-semibold py-2 px-4 rounded-lg transition flex items-center gap-2">
               <Save className="w-4 h-4" />
               Configure Webhook
             </button>
@@ -107,7 +162,7 @@ export default function SettingsPage() {
         {/* Slack Configuration */}
         <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6 mb-6">
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-6 flex items-center gap-2">
-            <span className="w-8 h-8 rounded-full bg-pink-100 dark:bg-pink-900 text-pink-800 dark:text-pink-200 flex items-center justify-center text-sm font-bold">3</span>
+            <span className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-slate-200 flex items-center justify-center text-sm font-bold">3</span>
             Slack Integration
           </h2>
 
@@ -115,11 +170,11 @@ export default function SettingsPage() {
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Bot Token</label>
             <input
               type="password"
-              className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-400 dark:focus:ring-slate-600"
               placeholder="xoxb-••••••••••••••••"
             />
             <p className="text-xs text-slate-600 dark:text-slate-400 mt-2">
-              💬 Create Slack App at <a href="#" className="text-blue-600 dark:text-blue-400 hover:underline">api.slack.com</a>
+              💬 Create Slack App at <a href="#" className="text-slate-900 dark:text-slate-200 underline underline-offset-4">api.slack.com</a>
             </p>
           </div>
         </div>
@@ -127,7 +182,7 @@ export default function SettingsPage() {
         {/* Merit Score Configuration */}
         <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6 mb-6">
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-6 flex items-center gap-2">
-            <span className="w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 flex items-center justify-center text-sm font-bold">4</span>
+            <span className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-slate-200 flex items-center justify-center text-sm font-bold">4</span>
             Merit Score Weights
           </h2>
 
@@ -142,7 +197,7 @@ export default function SettingsPage() {
               <div key={idx}>
                 <div className="flex justify-between mb-2">
                   <label className="text-sm font-medium text-slate-700 dark:text-slate-300">{item.label}</label>
-                  <span className="text-sm font-bold text-blue-600 dark:text-blue-400">{item.weight}%</span>
+                  <span className="text-sm font-bold text-slate-900 dark:text-slate-200">{item.weight}%</span>
                 </div>
                 <input
                   type="range"
@@ -155,8 +210,8 @@ export default function SettingsPage() {
             ))}
           </div>
 
-          <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg">
-            <p className="text-sm text-blue-800 dark:text-blue-200">
+          <div className="mt-4 p-3 bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-lg">
+            <p className="text-sm text-slate-700 dark:text-slate-200">
               ℹ️ Total weights must equal 100% to save configuration
             </p>
           </div>

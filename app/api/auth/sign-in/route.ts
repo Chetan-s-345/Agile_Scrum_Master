@@ -1,7 +1,30 @@
 import { NextResponse } from "next/server";
+import { getApiGatewayBaseUrl } from "@/lib/api-gateway";
 
 function getGatewayBaseUrl() {
-  return process.env.API_GATEWAY_URL || "http://localhost:4000";
+  return getApiGatewayBaseUrl();
+}
+
+function normalizeBaseUrl(raw: string | null | undefined, fallback: string) {
+  const value = String(raw || fallback).trim();
+  const withProtocol = /^https?:\/\//i.test(value) ? value : `http://${value}`;
+  return withProtocol.replace(/\/+$/, "");
+}
+
+async function warmUpServices() {
+  const gatewayBaseUrl = normalizeBaseUrl(process.env.API_GATEWAY_URL, getGatewayBaseUrl());
+  const aiBaseUrl = normalizeBaseUrl(process.env.AI_SERVICE_URL, "http://localhost:8000");
+
+  const warm = (url: string) =>
+    fetch(url, {
+      method: "GET",
+      cache: "no-store",
+      headers: {
+        "x-warmup": "signin",
+      },
+    }).catch(() => null);
+
+  await Promise.allSettled([warm(`${gatewayBaseUrl}/health`), warm(`${aiBaseUrl}/health`)]);
 }
 
 export async function POST(request: Request) {
@@ -47,6 +70,10 @@ export async function POST(request: Request) {
         maxAge: 60 * 60 * 24 * 7,
       });
     }
+
+    // Warm backend services in background after a successful login.
+    void warmUpServices();
+
     return response;
 
   } catch (error) {

@@ -346,54 +346,20 @@ New Task Created
 ## 📁 Project Structure
 
 ```
-ai-sprint-manager/
-├── 📁 frontend/                    # Next.js 14 App
-│   ├── app/
-│   │   ├── dashboard/              # Main sprint dashboard
-│   │   ├── sprint/plan/            # Sprint planner
-│   │   ├── tasks/                  # Kanban task board
-│   │   ├── developers/             # Developer hub & leaderboard
-│   │   ├── assign/                 # Assignment engine UI
-│   │   ├── reports/                # Sprint reports viewer
-│   │   └── settings/               # Configuration
-│   ├── components/                 # Reusable UI components
-│   └── lib/                        # API clients & utilities
-│
-├── 📁 backend/
-│   ├── api-gateway/                # Node.js Express gateway
-│   │   ├── routes/
-│   │   ├── middleware/
-│   │   └── webhooks/               # Jira + GitHub webhook handlers
-│   └── ai-service/                 # Python FastAPI
-│       ├── agents/
-│       │   ├── requirement_agent.py
-│       │   ├── task_generator.py
-│       │   ├── story_point_estimator.py
-│       │   ├── assignment_agent.py  ← Core feature
-│       │   ├── sprint_monitor.py
-│       │   ├── reporting_agent.py
-│       │   └── jira_sync_agent.py
-│       ├── models/                 # ML model files
-│       └── services/               # Jira, GitHub, Slack clients
-│
-├── 📁 database/
-│   ├── migrations/                 # Prisma migrations
-│   └── seeds/                      # Sample developer data
-│
-├── 📁 ml/
-│   ├── train_story_points.py       # XGBoost training script
-│   ├── train_delay_predictor.py    # Delay classification model
-│   └── retrain_pipeline.py         # Self-learning retraining job
-│
-├── 📁 docker/
-│   ├── docker-compose.yml
-│   ├── docker-compose.prod.yml
-│   └── Dockerfile.*
-│
-└── 📁 docs/
-    ├── API.md
-    ├── ARCHITECTURE.md
-    └── DEPLOYMENT.md
+repo-root/
+├── app/                            # Next.js App Router pages + API routes
+├── components/                     # Reusable UI components (sidebar, navbar, etc.)
+├── lib/                            # Next.js server helpers + gateway proxy helpers
+├── inngest/                        # Inngest client + functions
+│   ├── client.ts
+│   └── functions/
+├── app/api/inngest/route.ts         # Inngest handler (Next.js)
+├── ai-sprint-manager/
+│   └── backend/
+│       ├── api-gateway/             # Node.js/Express API gateway
+│       └── ai-service/              # Python/FastAPI AI service
+├── database/                        # SQL init for the app DB used by Next.js routes
+└── tools/                           # Local dev helpers (e.g. dev-all.mjs)
 ```
 
 ---
@@ -405,8 +371,8 @@ ai-sprint-manager/
 ```bash
 node >= 18.0.0
 python >= 3.11
-docker >= 24.0.0
-docker-compose >= 2.0.0
+postgres (local or cloud)
+redis (optional; only required if you enable gateway workers/scheduler)
 ```
 
 ### 1. Clone the Repository
@@ -416,13 +382,15 @@ git clone https://github.com/deekshithgowda85/ai-sprint-manager.git
 cd ai-sprint-manager
 ```
 
+Note: this repo is a monorepo-style layout. The **Next.js frontend is at the repo root** and the two backend services are under `ai-sprint-manager/backend/*`.
+
 ### 2. Configure Environment Variables
 
 ```bash
-cp .env.example .env
+cp .env.example .env.local
 ```
 
-Edit `.env` with your credentials:
+Edit `.env.local` with your credentials (these are used by the Next.js app and its API routes):
 
 ```env
 # Jira
@@ -446,44 +414,121 @@ REDIS_URL=redis://localhost:6379
 # Slack
 SLACK_BOT_TOKEN=xoxb-your-token
 SLACK_STANDUP_CHANNEL=standup
+
+# Inngest
+# For local dev you can use INNGEST_EVENT_KEY=local
+INNGEST_EVENT_KEY=local
+INNGEST_SIGNING_KEY=
+
+# Backend service URLs (local dev defaults)
+API_GATEWAY_URL=http://localhost:4000
+AI_SERVICE_URL=http://localhost:8000
 ```
 
-### 3. Start with Docker (Recommended)
+Backend services have their own env files:
 
 ```bash
-docker-compose up --build
+# API gateway
+cp ai-sprint-manager/backend/api-gateway/.env.example ai-sprint-manager/backend/api-gateway/.env
+
+# AI service
+cp ai-sprint-manager/backend/ai-service/.env.example ai-sprint-manager/backend/ai-service/.env
 ```
 
-Services started:
-| Service | URL |
-|---|---|
-| Frontend Dashboard | http://localhost:3000 |
-| API Gateway | http://localhost:4000 |
-| AI Service | http://localhost:8000 |
-| API Docs (Swagger) | http://localhost:8000/docs |
+Minimum required values:
 
-### 4. Manual Setup (Development)
+- Next.js (repo root): `DATABASE_URL`, `API_GATEWAY_URL`, `AI_SERVICE_URL`, `NEXTAUTH_SECRET`, `JWT_SECRET`, `GROQ_API_KEY` (for AI features)
+- API gateway: `UNIVERSAL_DATABASE_URL`, `JWT_SECRET`, `REFRESH_TOKEN_SECRET` (and `REDIS_URL` if workers are enabled)
+- AI service: `GROQ_API_KEY` (DB is optional; it will start without persistence)
+
+### 3. Run the project locally (4 processes)
+
+Open **4 terminals** and run the following.
+
+#### Terminal A — Next.js frontend (repo root)
 
 ```bash
-# Frontend
-cd frontend
 npm install
 npm run dev
+```
 
-# API Gateway
-cd backend/api-gateway
+Runs on: `http://localhost:3000`
+
+#### Terminal B — API gateway (Express)
+
+```bash
+cd ai-sprint-manager/backend/api-gateway
 npm install
 npm run dev
+```
 
-# AI Service
-cd backend/ai-service
+Runs on: `http://localhost:4000` (health: `/health`)
+
+Tip: if you don’t have Redis locally, keep `ENABLE_SCHEDULER=false` and `ENABLE_WORKERS=false` in the gateway `.env`.
+
+#### Terminal C — AI service (FastAPI)
+
+```bash
+cd ai-sprint-manager/backend/ai-service
+
+# Create & activate a virtual environment
+python -m venv .venv
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# Install deps
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
 
-# Database migrations
-cd backend/api-gateway
-npx prisma migrate dev
-npx prisma db seed
+# Start API
+uvicorn app.main:app --reload --port 8000
+```
+
+Runs on: `http://localhost:8000` (health: `/health`, docs: `/docs`)
+
+#### Terminal D — Inngest Dev Server
+
+The Next.js app exposes an Inngest handler at `http://localhost:3000/api/inngest`.
+
+```bash
+npx inngest-cli@latest dev -u http://localhost:3000/api/inngest
+```
+
+This starts the Inngest dev server and connects it to your local Next.js handler.
+
+---
+
+### 4. Database setup (minimal)
+
+There are **two** database concepts:
+
+1. **Next.js app DB** (repo root `DATABASE_URL`) used by Next.js server routes.
+
+- Apply the schema in `database/init.sql` to the database pointed to by `DATABASE_URL`.
+
+2. **API gateway universal DB** (`UNIVERSAL_DATABASE_URL`) used for org/user/auth + tenant registry.
+
+From `ai-sprint-manager/backend/api-gateway`:
+
+```bash
+npm run init:universal-db
+```
+
+If you are using **manual tenant DB mode**, initialize a tenant DB once (apply PART 2 of the schema):
+
+```bash
+# PowerShell example
+$env:TENANT_DB_CONNECTION_STRING="postgresql://user:pass@localhost:5432/tenant_db"; npm run init:tenant-db
+```
+
+---
+
+### Optional: run web + gateway together
+
+This helper runs Next.js + API gateway together (it auto-picks free ports). It does **not** start the AI service or Inngest.
+
+```bash
+node tools/dev-all.mjs
 ```
 
 ---

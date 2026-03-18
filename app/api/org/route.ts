@@ -1,14 +1,22 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { getAuthTokenFromCookies, proxyToApiGateway } from "@/lib/api-gateway";
 
-function getGatewayBaseUrl() {
-  return process.env.API_GATEWAY_URL || "http://localhost:4000";
+async function getAuthToken() {
+  const cookieStore = await cookies();
+  return cookieStore.get("auth_token")?.value || null;
+}
+
+export async function GET() {
+  const token = await getAuthTokenFromCookies();
+  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  return proxyToApiGateway({ upstreamPath: "/api/v1/org", method: "GET", token });
 }
 
 export async function POST(request: Request) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get("auth_token")?.value || null;
+    const token = await getAuthToken();
     if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await request.json().catch(() => null);
@@ -22,23 +30,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing orgName or orgSlug" }, { status: 400 });
     }
 
-    const gatewayResp = await fetch(`${getGatewayBaseUrl()}/api/v1/org`, {
+    const proxyResp = await proxyToApiGateway({
+      upstreamPath: "/api/v1/org",
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ orgName, orgSlug, planSlug, tenantDbConnectionString }),
-      cache: "no-store",
+      token,
+      body: { orgName, orgSlug, planSlug, tenantDbConnectionString },
     });
 
-    const data = await gatewayResp.json().catch(() => null);
-    if (!gatewayResp.ok) {
-      return NextResponse.json(data || { error: "Create org failed" }, { status: gatewayResp.status });
-    }
+    const data = await proxyResp.json().catch(() => null);
+    const response = NextResponse.json(data || { error: "Upstream error" }, { status: proxyResp.status });
 
     const accessToken = data?.tokens?.accessToken;
-    const response = NextResponse.json({ user: data.user, org: data.org }, { status: 201 });
     if (accessToken) {
       response.cookies.set({
         name: "auth_token",
@@ -57,3 +59,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
+
+export async function DELETE() {
+  const token = await getAuthTokenFromCookies();
+  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const proxyResp = await proxyToApiGateway({ upstreamPath: "/api/v1/org", method: "DELETE", token });
+
+  // Always clear local auth cookie after delete attempt.
+  proxyResp.cookies.set({
+    name: "auth_token",
+    value: "",
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
+
+  return proxyResp;
+}
+
