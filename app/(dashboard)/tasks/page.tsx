@@ -36,6 +36,17 @@ type Board = {
   done: BoardTask[];
 };
 
+type TaskFilterPreset = {
+  id: string;
+  name: string;
+  query: string;
+  priority: "all" | "high" | "medium" | "low";
+  assignee: "all" | "assigned" | "unassigned";
+  riskOnly: boolean;
+};
+
+const TASK_FILTER_PRESETS_KEY = "asm.taskBoard.filterPresets.v1";
+
 export default function TaskBoardPage() {
   const [sprints, setSprints] = useState<SprintListItem[]>([]);
   const [selectedSprintId, setSelectedSprintId] = useState<string>("");
@@ -50,11 +61,18 @@ export default function TaskBoardPage() {
   const [newTaskStoryPoints, setNewTaskStoryPoints] = useState<number | "">("");
   const [creatingTask, setCreatingTask] = useState(false);
 
+  const [query, setQuery] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState<"all" | "high" | "medium" | "low">("all");
+  const [assigneeFilter, setAssigneeFilter] = useState<"all" | "assigned" | "unassigned">("all");
+  const [riskOnly, setRiskOnly] = useState(false);
+  const [savedFilters, setSavedFilters] = useState<TaskFilterPreset[]>([]);
+  const [newFilterName, setNewFilterName] = useState("");
+
   const columns = [
     { key: 'todo', title: 'To Do', color: 'bg-slate-50 dark:bg-zinc-900/50 border border-slate-200 dark:border-zinc-800' },
-    { key: 'in_progress', title: 'In Progress', color: 'bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/30' },
-    { key: 'in_review', title: 'In Review', color: 'bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-100 dark:border-yellow-900/30' },
-    { key: 'blocked', title: 'Blocked', color: 'bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30' },
+    { key: 'in_progress', title: 'In Progress', color: 'bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/30', wipLimit: 5 },
+    { key: 'in_review', title: 'In Review', color: 'bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-100 dark:border-yellow-900/30', wipLimit: 3 },
+    { key: 'blocked', title: 'Blocked', color: 'bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30', wipLimit: 2 },
     { key: 'done', title: 'Done', color: 'bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-900/30' },
   ];
 
@@ -81,6 +99,70 @@ export default function TaskBoardPage() {
     if (!totalTasks) return 0;
     return Math.round((completedCount / totalTasks) * 100);
   }, [completedCount, totalTasks]);
+
+  const filteredBoard = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const matches = (task: BoardTask) => {
+      if (priorityFilter !== "all" && String(task.priority || "").toLowerCase() !== priorityFilter) return false;
+
+      if (assigneeFilter === "assigned" && !task.assignee?.id) return false;
+      if (assigneeFilter === "unassigned" && task.assignee?.id) return false;
+
+      if (riskOnly && !task.aiRiskScore) return false;
+
+      if (!q) return true;
+      const hay = [task.title, task.assignee?.name || "", ...(task.techTags || [])].join(" ").toLowerCase();
+      return hay.includes(q);
+    };
+
+    return {
+      todo: board.todo.filter(matches),
+      in_progress: board.in_progress.filter(matches),
+      in_review: board.in_review.filter(matches),
+      blocked: board.blocked.filter(matches),
+      done: board.done.filter(matches),
+    };
+  }, [assigneeFilter, board, priorityFilter, query, riskOnly]);
+
+  const filteredTotalTasks = useMemo(() => Object.values(filteredBoard).flat().length, [filteredBoard]);
+
+  function applyPreset(preset: TaskFilterPreset) {
+    setQuery(preset.query);
+    setPriorityFilter(preset.priority);
+    setAssigneeFilter(preset.assignee);
+    setRiskOnly(Boolean(preset.riskOnly));
+  }
+
+  function saveCurrentPreset() {
+    const name = newFilterName.trim();
+    if (!name) return;
+    const next: TaskFilterPreset = {
+      id: crypto.randomUUID(),
+      name,
+      query,
+      priority: priorityFilter,
+      assignee: assigneeFilter,
+      riskOnly,
+    };
+    setSavedFilters((prev) => {
+      const updated = [next, ...prev].slice(0, 10);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(TASK_FILTER_PRESETS_KEY, JSON.stringify(updated));
+      }
+      return updated;
+    });
+    setNewFilterName("");
+  }
+
+  function deletePreset(id: string) {
+    setSavedFilters((prev) => {
+      const updated = prev.filter((x) => x.id !== id);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(TASK_FILTER_PRESETS_KEY, JSON.stringify(updated));
+      }
+      return updated;
+    });
+  }
 
   async function loadSprints() {
     setError(null);
@@ -299,6 +381,18 @@ export default function TaskBoardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSprintId]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(TASK_FILTER_PRESETS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as TaskFilterPreset[];
+      if (Array.isArray(parsed)) setSavedFilters(parsed);
+    } catch {
+      setSavedFilters([]);
+    }
+  }, []);
+
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
       <div className="w-full">
@@ -372,11 +466,96 @@ export default function TaskBoardPage() {
         )}
 
         {/* Filter Bar */}
-        <div className="mb-6 flex gap-2">
-          <button className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-4 py-2 rounded-lg border border-slate-200 dark:border-zinc-800 flex items-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-700 transition">
-            <Filter className="w-4 h-4" />
-            Filter
-          </button>
+        <div className="mb-6 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Filter className="w-4 h-4 text-slate-600 dark:text-slate-300" />
+            <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Quick filters</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+            <input
+              className="md:col-span-2 bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded border border-slate-200 dark:border-zinc-800"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search title, assignee, tags"
+            />
+            <select
+              className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded border border-slate-200 dark:border-zinc-800"
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value as "all" | "high" | "medium" | "low")}
+            >
+              <option value="all">Any priority</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+            <select
+              className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded border border-slate-200 dark:border-zinc-800"
+              value={assigneeFilter}
+              onChange={(e) => setAssigneeFilter(e.target.value as "all" | "assigned" | "unassigned")}
+            >
+              <option value="all">Any assignee</option>
+              <option value="assigned">Assigned</option>
+              <option value="unassigned">Unassigned</option>
+            </select>
+            <label className="inline-flex items-center gap-2 px-3 py-2 rounded border border-slate-200 dark:border-zinc-800 text-sm text-slate-700 dark:text-slate-200">
+              <input type="checkbox" checked={riskOnly} onChange={(e) => setRiskOnly(e.target.checked)} />
+              Risk only
+            </label>
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+            <input
+              value={newFilterName}
+              onChange={(e) => setNewFilterName(e.target.value)}
+              placeholder="Save current filter as..."
+              className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded border border-slate-200 dark:border-zinc-800"
+            />
+            <button
+              type="button"
+              onClick={saveCurrentPreset}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded font-semibold text-sm disabled:opacity-60"
+              disabled={!newFilterName.trim()}
+            >
+              Save filter
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setQuery("");
+                setPriorityFilter("all");
+                setAssigneeFilter("all");
+                setRiskOnly(false);
+              }}
+              className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded border border-slate-200 dark:border-zinc-800 text-sm"
+            >
+              Clear filters
+            </button>
+          </div>
+
+          {savedFilters.length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {savedFilters.map((preset) => (
+                <div key={preset.id} className="inline-flex items-center gap-1 rounded-full border border-slate-200 dark:border-zinc-800 px-2 py-1">
+                  <button
+                    type="button"
+                    onClick={() => applyPreset(preset)}
+                    className="text-xs font-semibold text-slate-700 dark:text-slate-200"
+                  >
+                    {preset.name}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deletePreset(preset.id)}
+                    className="text-xs text-red-700 dark:text-red-300 px-1"
+                    aria-label={`Delete ${preset.name}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         {showCreateTask && (
@@ -437,16 +616,27 @@ export default function TaskBoardPage() {
 
         {/* Kanban Board */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
-          {columns.map((column) => (
+          {columns.map((column) => {
+            const columnKey = column.key as keyof Board;
+            const columnItems = filteredBoard[columnKey];
+            const rawColumnCount = board[columnKey].length;
+            const limitExceeded = Boolean(column.wipLimit && rawColumnCount > column.wipLimit);
+
+            return (
             <div key={column.key} className={`${column.color} rounded-lg p-4 min-h-96`}>
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-bold text-slate-900 dark:text-white">{column.title}</h2>
                 <span className="bg-slate-300 dark:bg-slate-600 text-slate-900 dark:text-white text-xs font-bold px-2 py-1 rounded">
-                  {board[column.key as keyof Board].length}
+                  {columnItems.length}
                 </span>
               </div>
+              {limitExceeded ? (
+                <div className="mb-3 rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 px-2 py-1 text-xs text-amber-800 dark:text-amber-200">
+                  WIP limit exceeded ({rawColumnCount}/{column.wipLimit})
+                </div>
+              ) : null}
               <div>
-                {board[column.key as keyof Board].map((task) => (
+                {columnItems.map((task) => (
                   <TaskCard key={task.id} task={task} />
                 ))}
               </div>
@@ -459,7 +649,7 @@ export default function TaskBoardPage() {
                 + Add Task
               </button>
             </div>
-          ))}
+          );})}
         </div>
 
         {/* Sprint Stats */}
@@ -469,6 +659,7 @@ export default function TaskBoardPage() {
             <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
               {totalTasks}
             </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Filtered: {filteredTotalTasks}</p>
           </div>
           <div className="bg-white dark:bg-zinc-900 rounded-lg p-4 border border-slate-200 dark:border-zinc-800">
             <p className="text-slate-600 dark:text-slate-400 text-sm font-medium">In Progress</p>

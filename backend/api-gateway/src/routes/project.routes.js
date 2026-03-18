@@ -10,6 +10,7 @@ router.use(authMiddleware, orgDbMiddleware);
 router.get('/', projectController.listProjects);
 router.post('/', projectController.createProject);
 router.get('/:projectId', projectController.getProject);
+router.get('/:projectId/backlog', projectController.listBacklog);
 router.patch('/:projectId', projectController.updateProject);
 router.delete('/:projectId', projectController.deleteProject);
 router.post('/:projectId/members', projectController.addMember);

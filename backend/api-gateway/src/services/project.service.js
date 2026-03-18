@@ -437,6 +437,66 @@ class ProjectService {
     });
   }
 
+  async listBacklog(req, projectId) {
+    const orgPool = requireOrgDb(req);
+
+    const resp = await orgPool.query(
+      `SELECT
+         b.id,
+         b.project_id,
+         b.epic_id,
+         b.sprint_id,
+         b.title,
+         b.description,
+         b.type,
+         b.priority,
+         b.status,
+         b.story_points,
+         b.ai_estimated_points,
+         b.business_value,
+         b.tech_tags,
+         b.acceptance_criteria,
+         b.jira_issue_id,
+         b.jira_issue_key,
+         b.sort_order,
+         b.created_at,
+         b.updated_at,
+         e.title AS epic_title,
+         s.name AS sprint_name
+       FROM backlog_items b
+       LEFT JOIN epics e ON e.id = b.epic_id
+       LEFT JOIN sprints s ON s.id = b.sprint_id
+       WHERE b.project_id = $1
+       ORDER BY b.sort_order ASC, b.created_at DESC`,
+      [String(projectId)]
+    );
+
+    return resp.rows.map((b) => ({
+      id: b.id,
+      projectId: b.project_id,
+      epicId: b.epic_id,
+      sprintId: b.sprint_id,
+      title: b.title,
+      description: b.description,
+      type: b.type,
+      priority: b.priority,
+      status: b.status,
+      storyPoints: b.story_points === null || b.story_points === undefined ? null : Number(b.story_points),
+      aiEstimatedPoints:
+        b.ai_estimated_points === null || b.ai_estimated_points === undefined ? null : Number(b.ai_estimated_points),
+      businessValue: Number(b.business_value || 0),
+      techTags: b.tech_tags || [],
+      acceptanceCriteria: b.acceptance_criteria,
+      jiraIssueId: b.jira_issue_id,
+      jiraIssueKey: b.jira_issue_key,
+      epicTitle: b.epic_title || null,
+      sprintName: b.sprint_name || null,
+      sortOrder: Number(b.sort_order || 0),
+      createdAt: b.created_at,
+      updatedAt: b.updated_at,
+    }));
+  }
+
   async createEpic(req, projectId, payload) {
     const orgPool = requireOrgDb(req);
 
