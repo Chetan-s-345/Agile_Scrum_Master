@@ -823,6 +823,7 @@ class AuthService {
         emailVerified: user.email_verified,
         createdAt: user.created_at,
       },
+      tenantProvisioningMode: env.TENANT_DB_PROVISIONING_MODE,
       activeOrgId: orgId || null,
       memberships: membershipsResp.rows.map((m) => ({
         org: { id: m.org_id, name: m.org_name, slug: m.org_slug },

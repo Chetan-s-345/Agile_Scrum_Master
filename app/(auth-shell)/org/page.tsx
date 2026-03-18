@@ -22,6 +22,7 @@ export default function OrgSetupPage() {
   const [orgName, setOrgName] = React.useState("");
   const [orgSlug, setOrgSlug] = React.useState("");
   const [tenantDbConnectionString, setTenantDbConnectionString] = React.useState("");
+  const [useCustomTenantDb, setUseCustomTenantDb] = React.useState(false);
 
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
@@ -35,6 +36,7 @@ export default function OrgSetupPage() {
   const [inviteError, setInviteError] = React.useState<string | null>(null);
 
   const hasOrg = Boolean(Array.isArray(me?.memberships) && me!.memberships!.length);
+  const tenantMode = me?.tenantProvisioningMode === "neon" ? "neon" : "manual";
 
   const refreshMe = React.useCallback(async () => {
     const data = await getMe();
@@ -81,10 +83,16 @@ export default function OrgSetupPage() {
     setCreating(true);
 
     try {
+      if (tenantMode === "manual" && !tenantDbConnectionString.trim()) {
+        setCreateError("Tenant DB connection string is required in manual mode.");
+        return;
+      }
+
       const result = await createOrg({
         orgName,
         orgSlug,
-        tenantDbConnectionString: tenantDbConnectionString || undefined,
+        tenantDbConnectionString:
+          tenantMode === "manual" || useCustomTenantDb ? tenantDbConnectionString || undefined : undefined,
       });
 
       if (!result.ok) {
@@ -166,7 +174,9 @@ export default function OrgSetupPage() {
         <div className="rounded-2xl border border-zinc-800 bg-[#121212] p-6">
           <h2 className="text-xl font-semibold text-white mb-1">Create Organization</h2>
           <p className="text-sm text-zinc-400 mb-6">
-            If the backend is in manual tenant DB mode, provide a per-org Postgres connection string.
+            {tenantMode === "neon"
+              ? "Neon mode is active. We will create a separate Neon project automatically for this organization."
+              : "Manual mode is active. Provide a per-org Postgres connection string to create the organization."}
           </p>
 
           <form className="space-y-5" onSubmit={onCreateOrg}>
@@ -192,16 +202,44 @@ export default function OrgSetupPage() {
               />
             </div>
 
-            <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-zinc-300">Tenant DB Connection String</label>
-              <textarea
-                value={tenantDbConnectionString}
-                onChange={(e) => setTenantDbConnectionString(e.target.value)}
-                rows={3}
-                className="w-full rounded-xl border border-zinc-800 bg-[#121212] px-4 py-3 text-[15px] text-white placeholder:text-zinc-500 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all duration-300"
-                placeholder="postgresql://user:pass@host/db?sslmode=require"
-              />
-            </div>
+            {tenantMode === "neon" ? (
+              <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+                <label className="flex items-center gap-2 text-sm text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={useCustomTenantDb}
+                    onChange={(e) => setUseCustomTenantDb(e.target.checked)}
+                    className="h-4 w-4 rounded border-zinc-700 bg-zinc-900"
+                  />
+                  Use custom tenant DB connection string instead of auto-provisioning Neon
+                </label>
+
+                {useCustomTenantDb ? (
+                  <div className="space-y-1.5">
+                    <label className="block text-sm font-medium text-zinc-300">Tenant DB Connection String (Optional Override)</label>
+                    <textarea
+                      value={tenantDbConnectionString}
+                      onChange={(e) => setTenantDbConnectionString(e.target.value)}
+                      rows={3}
+                      className="w-full rounded-xl border border-zinc-800 bg-[#121212] px-4 py-3 text-[15px] text-white placeholder:text-zinc-500 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all duration-300"
+                      placeholder="postgresql://user:pass@host/db?sslmode=require"
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-zinc-300">Tenant DB Connection String</label>
+                <textarea
+                  value={tenantDbConnectionString}
+                  onChange={(e) => setTenantDbConnectionString(e.target.value)}
+                  rows={3}
+                  required
+                  className="w-full rounded-xl border border-zinc-800 bg-[#121212] px-4 py-3 text-[15px] text-white placeholder:text-zinc-500 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all duration-300"
+                  placeholder="postgresql://user:pass@host/db?sslmode=require"
+                />
+              </div>
+            )}
 
             {createError ? <div className="text-sm text-red-400">{createError}</div> : null}
 

@@ -1,5 +1,6 @@
 export type MeResponse = {
   user?: { id: string; email: string; fullName?: string; emailVerified?: boolean; createdAt?: string };
+  tenantProvisioningMode?: "manual" | "neon";
   activeOrgId?: string | null;
   memberships?: Array<{
     org: { id: string; name?: string; slug?: string };

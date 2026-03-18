@@ -153,16 +153,46 @@ function buildInvitationContent({ orgName, role, invitedByName, acceptUrl }) {
   const safeInviter = invitedByName ? String(invitedByName) : 'Someone';
   const safeUrl = String(acceptUrl);
 
-  const subject = `You’ve been invited to join ${safeOrg}`;
+  const subject = `Invitation to join ${safeOrg}`;
   const htmlContent = `
-    <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-      <h2>Invitation</h2>
-      <p>${safeInviter} invited you to join <b>${safeOrg}</b> as <b>${safeRole}</b>.</p>
-      <p><a href="${safeUrl}">Accept invitation</a></p>
-      <p>If you were not expecting this, you can ignore this email.</p>
+    <div style="margin:0;padding:24px;background:#0b0b0f;color:#e5e7eb;font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.6;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;margin:0 auto;border:1px solid #27272a;border-radius:14px;overflow:hidden;background:#111113;">
+        <tr>
+          <td style="padding:24px 28px;border-bottom:1px solid #27272a;background:linear-gradient(135deg,#13131a 0%,#191923 100%);">
+            <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#a1a1aa;font-weight:700;">Agile Scrum Master</div>
+            <h1 style="margin:10px 0 0;font-size:24px;line-height:1.25;color:#fafafa;">You are invited</h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:24px 28px;">
+            <p style="margin:0 0 14px;color:#d4d4d8;">${safeInviter} invited you to join <strong style="color:#fff;">${safeOrg}</strong> as <strong style="color:#fff;">${safeRole}</strong>.</p>
+            <p style="margin:0 0 22px;color:#a1a1aa;">Accept this invitation to collaborate on planning, assignments, standups, and sprint tracking in one workspace.</p>
+
+            <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 18px;">
+              <tr>
+                <td style="border-radius:10px;background:#ffffff;">
+                  <a href="${safeUrl}" style="display:inline-block;padding:12px 18px;font-weight:700;font-size:14px;color:#09090b;text-decoration:none;">Accept Invitation</a>
+                </td>
+              </tr>
+            </table>
+
+            <p style="margin:0 0 8px;font-size:12px;color:#a1a1aa;">Or open this link directly:</p>
+            <p style="margin:0;font-size:12px;word-break:break-all;"><a href="${safeUrl}" style="color:#93c5fd;text-decoration:none;">${safeUrl}</a></p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:18px 28px;border-top:1px solid #27272a;background:#0f0f13;color:#71717a;font-size:12px;">
+            If you were not expecting this invitation, you can safely ignore this email.
+          </td>
+        </tr>
+      </table>
     </div>
   `;
-  const textContent = `${safeInviter} invited you to join ${safeOrg} as ${safeRole}.\n\nAccept: ${safeUrl}`;
+  const textContent =
+    `Invitation to join ${safeOrg}\n\n` +
+    `${safeInviter} invited you to join ${safeOrg} as ${safeRole}.\n\n` +
+    `Accept invitation: ${safeUrl}\n\n` +
+    `If you were not expecting this invitation, you can ignore this email.`;
 
   return { subject, htmlContent, textContent };
 }
