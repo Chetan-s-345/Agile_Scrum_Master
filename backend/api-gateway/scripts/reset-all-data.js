@@ -41,6 +41,29 @@ async function truncateAllPublicTables(client) {
   return { truncated: tableNames.length };
 }
 
+async function seedDefaultPlans(client) {
+  await client.query(
+    `INSERT INTO plans (name, slug, price_monthly, price_yearly, max_members, max_projects, max_sprints_per_mo, max_storage_gb, ai_requests_per_day, features, is_active)
+     VALUES
+      ('Free',       'free',       0.00,   0.00,    5,   2,   4,   2,   50,   '{"auto_assign":false,"burnout_detect":false,"ai_reporter":false,"skill_gap":false}'::jsonb, TRUE),
+      ('Starter',    'starter',   29.00, 290.00,   15,  10,  20,  10,  500,   '{"auto_assign":true,"burnout_detect":false,"ai_reporter":true,"skill_gap":false}'::jsonb, TRUE),
+      ('Pro',        'pro',       79.00, 790.00,   50,  50, 100,  50, 2000,   '{"auto_assign":true,"burnout_detect":true,"ai_reporter":true,"skill_gap":true}'::jsonb, TRUE),
+      ('Enterprise', 'enterprise', 0.00,   0.00, 9999,9999,9999,500,99999,   '{"auto_assign":true,"burnout_detect":true,"ai_reporter":true,"skill_gap":true,"custom_domain":true,"sso":true,"audit_log":true}'::jsonb, TRUE)
+     ON CONFLICT (slug) DO UPDATE
+     SET name = EXCLUDED.name,
+         price_monthly = EXCLUDED.price_monthly,
+         price_yearly = EXCLUDED.price_yearly,
+         max_members = EXCLUDED.max_members,
+         max_projects = EXCLUDED.max_projects,
+         max_sprints_per_mo = EXCLUDED.max_sprints_per_mo,
+         max_storage_gb = EXCLUDED.max_storage_gb,
+         ai_requests_per_day = EXCLUDED.ai_requests_per_day,
+         features = EXCLUDED.features,
+         is_active = TRUE,
+         updated_at = NOW()`
+  );
+}
+
 async function getTenantConnections(universalConnectionString) {
   return withClient(universalConnectionString, async (client) => {
     const columnsResp = await client.query(
@@ -88,6 +111,7 @@ async function main() {
 
   await withClient(universalConnectionString, async (client) => {
     await truncateAllPublicTables(client);
+    await seedDefaultPlans(client);
   });
 
   console.log(`Reset complete. Cleared universal DB and ${tenantCount} tenant DB(s).`);

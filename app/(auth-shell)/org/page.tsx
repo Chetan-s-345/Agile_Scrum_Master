@@ -91,6 +91,7 @@ export default function OrgSetupPage() {
       const result = await createOrg({
         orgName,
         orgSlug,
+        planSlug: "free",
         tenantDbConnectionString:
           tenantMode === "manual" || useCustomTenantDb ? tenantDbConnectionString || undefined : undefined,
       });
@@ -204,6 +205,9 @@ export default function OrgSetupPage() {
 
             {tenantMode === "neon" ? (
               <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+                <div className="text-xs text-zinc-400">
+                  Free plan setup note: you can still paste your own tenant DB URL if you do not want automatic Neon provisioning.
+                </div>
                 <label className="flex items-center gap-2 text-sm text-zinc-300">
                   <input
                     type="checkbox"
@@ -230,6 +234,7 @@ export default function OrgSetupPage() {
             ) : (
               <div className="space-y-1.5">
                 <label className="block text-sm font-medium text-zinc-300">Tenant DB Connection String</label>
+                <div className="text-xs text-zinc-400">Free plan requires a tenant DB URL in manual mode.</div>
                 <textarea
                   value={tenantDbConnectionString}
                   onChange={(e) => setTenantDbConnectionString(e.target.value)}
