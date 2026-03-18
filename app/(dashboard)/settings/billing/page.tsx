@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
 
 type SubscriptionInfo = {
   status?: string;
@@ -84,7 +83,6 @@ function extractError(data: unknown): string | null {
 }
 
 export default function BillingSettingsPage() {
-  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [billing, setBilling] = useState<BillingResponse | null>(null);
@@ -118,11 +116,12 @@ export default function BillingSettingsPage() {
     ? Math.max(0, Math.round(basePrice * (1 - validatedCoupon.discountValue / 100) * 100) / 100)
     : basePrice;
 
-  const initialPlan = searchParams.get("plan")?.toLowerCase() || "";
-  const initialCoupon = searchParams.get("coupon") || "";
-
   useEffect(() => {
     (async () => {
+      const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+      const initialPlan = params?.get("plan")?.toLowerCase() || "";
+      const initialCoupon = params?.get("coupon") || "";
+
       setLoading(true);
       setError(null);
       const [billingResp, plansResp] = await Promise.all([
@@ -158,7 +157,7 @@ export default function BillingSettingsPage() {
 
       setLoading(false);
     })();
-  }, [initialPlan, initialCoupon]);
+  }, []);
 
   async function validateCoupon() {
     if (!couponCode.trim()) {
