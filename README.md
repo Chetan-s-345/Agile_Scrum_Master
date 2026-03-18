@@ -709,3 +709,11 @@ copies or substantial portions of the Software.
 `Built with AI · Powered by Agents · Made by` [**deekshithgowda85**](https://github.com/deekshithgowda85)
 
 </div>
+
+
+Agile focuses on iterative progress and continuous feedback.
+This project explores how automation can support Agile Scrum Masters in managing workflows, improving team collaboration, and enhancing decision-making.
+
+It focuses on automating repetitive tasks such as sprint planning assistance, backlog prioritization insights, stand-up summaries, and progress tracking using intelligent systems.
+
+The goal is to reduce manual overhead for Scrum Masters and enable teams to focus more on value delivery, continuous improvement, and adaptive planning.
