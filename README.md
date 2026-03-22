@@ -656,26 +656,19 @@ CREATE TABLE merit_score_history (
 ## 📅 Development Roadmap
 
 ```
-2025 Q1 ████████████████████ Done
+2026 - Phase 1
 ├── Week 1  ✅ Infrastructure & Auth
 ├── Week 2  ✅ Jira Integration Layer
 ├── Week 3  ✅ Requirement & Task Generator Agents
 └── Week 4  ✅ Story Point Estimator & Developer Profiles
 
-2025 Q2 ████████████░░░░░░░░ In Progress
+2026 - Phase 2
 ├── Week 5  🔄 Smart Assignment Engine
 ├── Week 6  🔄 Sprint Monitor & Delay Prediction
 ├── Week 7  ⏳ Dashboard & Reporting Agent
 └── Week 8  ⏳ Testing, Optimization & Launch
 
-Future   ░░░░░░░░░░░░░░░░░░░░ Planned
-├── v1.1  📌 Mobile app (React Native)
-├── v1.2  📌 Linear & Asana integrations
-├── v1.3  📌 Voice standup via Whisper API
-└── v2.0  📌 Multi-team / Enterprise support
-```
 
----
 
 ## 🤝 Contributing
 
