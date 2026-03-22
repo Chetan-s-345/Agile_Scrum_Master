@@ -656,26 +656,19 @@ CREATE TABLE merit_score_history (
 ## 📅 Development Roadmap
 
 ```
-2025 Q1 ████████████████████ Done
+2026 - Phase 1
 ├── Week 1  ✅ Infrastructure & Auth
 ├── Week 2  ✅ Jira Integration Layer
 ├── Week 3  ✅ Requirement & Task Generator Agents
 └── Week 4  ✅ Story Point Estimator & Developer Profiles
 
-2025 Q2 ████████████░░░░░░░░ In Progress
+2026 - Phase 2
 ├── Week 5  🔄 Smart Assignment Engine
 ├── Week 6  🔄 Sprint Monitor & Delay Prediction
 ├── Week 7  ⏳ Dashboard & Reporting Agent
 └── Week 8  ⏳ Testing, Optimization & Launch
 
-Future   ░░░░░░░░░░░░░░░░░░░░ Planned
-├── v1.1  📌 Mobile app (React Native)
-├── v1.2  📌 Linear & Asana integrations
-├── v1.3  📌 Voice standup via Whisper API
-└── v2.0  📌 Multi-team / Enterprise support
-```
 
----
 
 ## 🤝 Contributing
 
@@ -708,42 +701,6 @@ git push origin feature/amazing-feature
 
 ---
 
-## 📊 GitHub Stats
-
-<div align="center">
-
-<img height="180em" src="https://github-readme-stats.vercel.app/api?username=deekshithgowda85&show_icons=true&theme=tokyonight&include_all_commits=true&count_private=true&hide_border=true&bg_color=0D1B2A&title_color=2563EB&icon_color=06B6D4&text_color=ffffff"/>
-
-<img height="180em" src="https://github-readme-stats.vercel.app/api/top-langs/?username=deekshithgowda85&layout=compact&theme=tokyonight&hide_border=true&bg_color=0D1B2A&title_color=2563EB&text_color=ffffff"/>
-
-</div>
-
-<div align="center">
-
-[![GitHub Streak](https://streak-stats.demolab.com?user=deekshithgowda85&theme=tokyonight&hide_border=true&background=0D1B2A&stroke=2563EB&ring=06B6D4&fire=F59E0B&currStreakLabel=ffffff&sideLabels=ffffff&dates=94A3B8)](https://github.com/deekshithgowda85)
-
-</div>
-
----
-
-## 👨‍💻 Author
-
-<div align="center">
-
-<img src="https://avatars.githubusercontent.com/u/deekshithgowda85?v=4" width="100" style="border-radius:50%"/>
-
-### Deekshith Gowda
-
-**Full Stack AI Developer**
-
-[![GitHub](https://img.shields.io/badge/GitHub-deekshithgowda85-181717?style=for-the-badge&logo=github)](https://github.com/deekshithgowda85)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0A66C2?style=for-the-badge&logo=linkedin)](https://linkedin.com/in/deekshithgowda85)
-[![Portfolio](https://img.shields.io/badge/Portfolio-Visit-2563EB?style=for-the-badge&logo=vercel)](https://github.com/deekshithgowda85)
-
-</div>
-
----
-
 ## 📄 License
 
 ```
@@ -763,17 +720,6 @@ copies or substantial portions of the Software.
 ```
 
 ---
-
-<div align="center">
-
-<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&color=0:06B6D4,50:2563EB,100:0D1B2A&height=100&section=footer"/>
-
-**⭐ Star this repo if you found it useful!**
-
-`Built with AI · Powered by Agents · Made by` [**deekshithgowda85**](https://github.com/deekshithgowda85)
-
-</div>
-
 
 Agile focuses on iterative progress and continuous feedback.
 This project explores how automation can support Agile Scrum Masters in managing workflows, improving team collaboration, and enhancing decision-making.
