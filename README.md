@@ -728,17 +728,6 @@ copies or substantial portions of the Software.
 
 ---
 
-<div align="center">
-
-<img width="100%" src="https://capsule-render.vercel.app/api?type=waving&color=0:06B6D4,50:2563EB,100:0D1B2A&height=100&section=footer"/>
-
-**⭐ Star this repo if you found it useful!**
-
-`Built with AI · Powered by Agents · Made by` [**deekshithgowda85**](https://github.com/deekshithgowda85)
-
-</div>
-
-
 Agile focuses on iterative progress and continuous feedback.
 This project explores how automation can support Agile Scrum Masters in managing workflows, improving team collaboration, and enhancing decision-making.
 
