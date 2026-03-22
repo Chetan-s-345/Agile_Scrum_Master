@@ -708,42 +708,6 @@ git push origin feature/amazing-feature
 
 ---
 
-## 📊 GitHub Stats
-
-<div align="center">
-
-<img height="180em" src="https://github-readme-stats.vercel.app/api?username=deekshithgowda85&show_icons=true&theme=tokyonight&include_all_commits=true&count_private=true&hide_border=true&bg_color=0D1B2A&title_color=2563EB&icon_color=06B6D4&text_color=ffffff"/>
-
-<img height="180em" src="https://github-readme-stats.vercel.app/api/top-langs/?username=deekshithgowda85&layout=compact&theme=tokyonight&hide_border=true&bg_color=0D1B2A&title_color=2563EB&text_color=ffffff"/>
-
-</div>
-
-<div align="center">
-
-[![GitHub Streak](https://streak-stats.demolab.com?user=deekshithgowda85&theme=tokyonight&hide_border=true&background=0D1B2A&stroke=2563EB&ring=06B6D4&fire=F59E0B&currStreakLabel=ffffff&sideLabels=ffffff&dates=94A3B8)](https://github.com/deekshithgowda85)
-
-</div>
-
----
-
-## 👨‍💻 Author
-
-<div align="center">
-
-<img src="https://avatars.githubusercontent.com/u/deekshithgowda85?v=4" width="100" style="border-radius:50%"/>
-
-### Deekshith Gowda
-
-**Full Stack AI Developer**
-
-[![GitHub](https://img.shields.io/badge/GitHub-deekshithgowda85-181717?style=for-the-badge&logo=github)](https://github.com/deekshithgowda85)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0A66C2?style=for-the-badge&logo=linkedin)](https://linkedin.com/in/deekshithgowda85)
-[![Portfolio](https://img.shields.io/badge/Portfolio-Visit-2563EB?style=for-the-badge&logo=vercel)](https://github.com/deekshithgowda85)
-
-</div>
-
----
-
 ## 📄 License
 
 ```
