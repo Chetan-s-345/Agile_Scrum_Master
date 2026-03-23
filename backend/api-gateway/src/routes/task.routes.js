@@ -11,6 +11,7 @@ router.get('/board/:sprintId', taskController.getBoard);
 router.get('/', taskController.listTasks);
 router.post('/', taskController.createTask);
 router.get('/:taskId', taskController.getTask);
+router.get('/:taskId/progress', taskController.getTaskProgress);
 router.patch('/:taskId/status', taskController.updateStatus);
 router.patch('/:taskId', taskController.updateTask);
 router.delete('/:taskId', taskController.deleteTask);

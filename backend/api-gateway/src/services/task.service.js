@@ -20,6 +20,181 @@ async function getActorMemberId(orgPool, userId) {
 }
 
 class TaskService {
+  async updateAssignee(jiraIssueKey, newAssigneeAccountId, orgPool) {
+    if (!orgPool) throw Object.assign(new Error('Org DB not provided'), { statusCode: 500 });
+    const issueKey = String(jiraIssueKey || '').trim();
+    if (!issueKey) return { ok: true, ignored: true, reason: 'missing_issue_key' };
+
+    const taskResp = await orgPool.query(
+      'SELECT id, assignee_id, story_points FROM tasks WHERE jira_issue_key = $1 LIMIT 1',
+      [issueKey]
+    );
+    const task = taskResp.rows[0] || null;
+    if (!task) return { ok: true, ignored: true, reason: 'task_not_found' };
+
+    let newAssigneeId = null;
+    if (newAssigneeAccountId) {
+      const devResp = await orgPool.query(
+        `SELECT dp.id
+         FROM developer_profiles dp
+         JOIN team_members tm ON tm.id = dp.member_id
+         WHERE tm.jira_account_id = $1
+         LIMIT 1`,
+        [String(newAssigneeAccountId)]
+      );
+      newAssigneeId = devResp.rows[0]?.id || null;
+    }
+
+    const currentAssigneeId = task.assignee_id || null;
+    if (String(currentAssigneeId || '') === String(newAssigneeId || '')) {
+      return { ok: true, changed: false };
+    }
+
+    await orgPool.query(
+      `UPDATE tasks
+       SET assignee_id = $2,
+           assigned_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [String(task.id), newAssigneeId]
+    );
+
+    const points = Number(task.story_points || 0);
+    if (points) {
+      if (currentAssigneeId) {
+        await orgPool.query(
+          `UPDATE developer_profiles
+           SET current_sprint_load = GREATEST(0, current_sprint_load - $2), updated_at = NOW()
+           WHERE id = $1`,
+          [String(currentAssigneeId), points]
+        );
+      }
+      if (newAssigneeId) {
+        await orgPool.query(
+          `UPDATE developer_profiles
+           SET current_sprint_load = GREATEST(0, current_sprint_load + $2), updated_at = NOW()
+           WHERE id = $1`,
+          [String(newAssigneeId), points]
+        );
+      }
+    }
+
+    return { ok: true, changed: true, assigneeId: newAssigneeId };
+  }
+
+  async updateStatus(jiraIssueKey, newStatusName, orgPool) {
+    if (!orgPool) throw Object.assign(new Error('Org DB not provided'), { statusCode: 500 });
+    const issueKey = String(jiraIssueKey || '').trim();
+    if (!issueKey) return { ok: true, ignored: true, reason: 'missing_issue_key' };
+
+    const statusRaw = String(newStatusName || '').trim().toLowerCase();
+    if (!statusRaw) return { ok: true, ignored: true, reason: 'missing_status_name' };
+
+    let mapped = 'todo';
+    if (statusRaw.includes('progress') || statusRaw.includes('doing')) mapped = 'in_progress';
+    else if (statusRaw.includes('review') || statusRaw.includes('qa')) mapped = 'in_review';
+    else if (statusRaw.includes('block')) mapped = 'blocked';
+    else if (statusRaw.includes('done') || statusRaw.includes('closed') || statusRaw.includes('resolve')) mapped = 'done';
+    else if (statusRaw.includes('cancel') || statusRaw.includes("won't") || statusRaw.includes('wont')) mapped = 'cancelled';
+
+    const taskResp = await orgPool.query(
+      'SELECT id, status, started_at, completed_at, sprint_id FROM tasks WHERE jira_issue_key = $1 LIMIT 1',
+      [issueKey]
+    );
+    const task = taskResp.rows[0] || null;
+    if (!task) return { ok: true, ignored: true, reason: 'task_not_found' };
+
+    if (String(task.status) === mapped) return { ok: true, changed: false, status: mapped };
+
+    const sets = ['status = $2', 'updated_at = NOW()'];
+    const params = [String(task.id), mapped];
+
+    if (mapped === 'in_progress' && !task.started_at) sets.push('started_at = NOW()');
+    if (mapped === 'done' && !task.completed_at) sets.push('completed_at = NOW()');
+
+    await orgPool.query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = $1`, params);
+
+    // Keep sprint rollups consistent (idempotent).
+    if (task.sprint_id) {
+      await orgPool.query(
+        `UPDATE sprints
+         SET completed_points = (
+           SELECT COALESCE(SUM(story_points), 0)::int FROM tasks WHERE sprint_id = $1 AND status = 'done'
+         ), updated_at = NOW()
+         WHERE id = $1`,
+        [String(task.sprint_id)]
+      );
+    }
+
+    return { ok: true, changed: true, status: mapped };
+  }
+
+  async updateStoryPoints(jiraIssueKey, newValue, orgPool) {
+    if (!orgPool) throw Object.assign(new Error('Org DB not provided'), { statusCode: 500 });
+    const issueKey = String(jiraIssueKey || '').trim();
+    if (!issueKey) return { ok: true, ignored: true, reason: 'missing_issue_key' };
+
+    const points = newValue === null || newValue === undefined || String(newValue).trim() === '' ? 0 : Number(newValue);
+    if (!Number.isFinite(points) || points < 0) return { ok: true, ignored: true, reason: 'invalid_story_points' };
+
+    const taskResp = await orgPool.query(
+      'SELECT id, story_points, assignee_id, sprint_id FROM tasks WHERE jira_issue_key = $1 LIMIT 1',
+      [issueKey]
+    );
+    const task = taskResp.rows[0] || null;
+
+    if (task) {
+      const before = Number(task.story_points || 0);
+      if (before === points) return { ok: true, changed: false, storyPoints: points };
+
+      await orgPool.query(
+        `UPDATE tasks
+         SET story_points = $2, updated_at = NOW()
+         WHERE id = $1`,
+        [String(task.id), points]
+      );
+
+      const delta = points - before;
+      if (delta !== 0 && task.assignee_id) {
+        await orgPool.query(
+          `UPDATE developer_profiles
+           SET current_sprint_load = GREATEST(0, current_sprint_load + $2), updated_at = NOW()
+           WHERE id = $1`,
+          [String(task.assignee_id), delta]
+        );
+      }
+
+      if (task.sprint_id) {
+        await orgPool.query(
+          `UPDATE sprints
+           SET planned_points = (
+             SELECT COALESCE(SUM(story_points), 0)::int FROM tasks WHERE sprint_id = $1 AND status <> 'cancelled'
+           ),
+           completed_points = (
+             SELECT COALESCE(SUM(story_points), 0)::int FROM tasks WHERE sprint_id = $1 AND status = 'done'
+           ),
+           updated_at = NOW()
+           WHERE id = $1`,
+          [String(task.sprint_id)]
+        );
+      }
+
+      return { ok: true, changed: true, storyPoints: points };
+    }
+
+    // Fallback: backlog item.
+    await orgPool.query(
+      `UPDATE backlog_items
+       SET story_points = $2,
+           updated_at = NOW()
+       WHERE jira_issue_key = $1
+         AND story_points IS DISTINCT FROM $2`,
+      [issueKey, points]
+    );
+
+    return { ok: true, updated: 'backlog_item', storyPoints: points };
+  }
+
   async getById(req, taskId) {
     const orgPool = requireOrgDb(req);
 
@@ -66,6 +241,33 @@ class TaskService {
             avatarUrl: t.assignee_avatar,
           }
         : null,
+    };
+  }
+
+  async getProgress(req, taskId) {
+    const orgPool = requireOrgDb(req);
+
+    const taskResp = await orgPool.query('SELECT id, progress FROM tasks WHERE id = $1 LIMIT 1', [String(taskId)]);
+    const task = taskResp.rows[0] || null;
+    if (!task) return null;
+
+    const evResp = await orgPool.query(
+      `SELECT event_type, branch_name, raw_payload, event_at
+       FROM github_events
+       WHERE task_id = $1
+       ORDER BY event_at DESC
+       LIMIT 1`,
+      [String(taskId)]
+    );
+
+    const ev = evResp.rows[0] || null;
+    const raw = ev?.raw_payload || {};
+
+    return {
+      progress: Number(task.progress || 0),
+      lastGithubEvent: ev?.event_type || null,
+      prUrl: raw?.pull_request?.html_url || raw?.html_url || null,
+      branch: ev?.branch_name || raw?.pull_request?.head?.ref || null,
     };
   }
 

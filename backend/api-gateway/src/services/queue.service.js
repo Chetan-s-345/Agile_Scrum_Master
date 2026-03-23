@@ -64,6 +64,8 @@ function getQueues() {
     reportGeneration: new Queue('report-generation', { connection }),
     modelRetraining: new Queue('model-retraining', { connection }),
     jiraSync: new Queue('jira-sync', { connection }),
+    webhookProcessing: new Queue('webhook-processing', { connection }),
+    prMetrics: new Queue('pr-metrics', { connection }),
   };
 
   return _queues;

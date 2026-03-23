@@ -14,27 +14,60 @@ import {
   Activity,
   Flag,
   Settings,
+  AlertTriangle,
   Menu,
   X
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const navigation = [
-  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { name: "Sprint Plan", href: "/sprint_plan", icon: Zap },
-  { name: "Agentic Scrum Master", href: "/scrum-master", icon: Bot },
-  { name: "Sprints", href: "/sprint", icon: Flag },
-  { name: "Tasks", href: "/tasks", icon: ListTodo },
-  { name: "Developers", href: "/developers", icon: Users },
-  { name: "Assignment", href: "/assign", icon: TouchpadOff },
-  { name: "Monitoring", href: "/monitoring", icon: Activity },
-  { name: "Reports", href: "/reports", icon: BarChart3 },
-  { name: "Settings", href: "/settings", icon: Settings },
+  { id: "dashboard", name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { id: "sprint-plan", name: "Sprint Plan", href: "/sprint_plan", icon: Zap },
+  { id: "scrum-master", name: "Agentic Scrum Master", href: "/scrum-master", icon: Bot },
+  { id: "sprints", name: "Sprints", href: "/sprint", icon: Flag },
+  { id: "tasks", name: "Tasks", href: "/tasks", icon: ListTodo },
+  { id: "developers", name: "Developers", href: "/developers", icon: Users },
+  { id: "assignment", name: "Assignment", href: "/assign", icon: TouchpadOff },
+  { id: "monitoring", name: "Monitoring", href: "/monitoring", icon: Activity },
+  { id: "reports", name: "Reports", href: "/reports", icon: BarChart3 },
+  { id: "admin-webhooks", name: "Admin Webhooks", href: "/admin/webhooks", icon: AlertTriangle },
+  { id: "settings", name: "Settings", href: "/settings", icon: Settings },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
+  const [dlqCount, setDlqCount] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDlqCount() {
+      try {
+        const resp = await fetch('/api/admin/webhooks/dlq?limit=1', { cache: 'no-store' });
+        const data = await resp.json().catch(() => null);
+        if (cancelled) return;
+        if (!resp.ok || !data || typeof data !== 'object') {
+          setDlqCount(0);
+          return;
+        }
+        const total = Number((data as { total?: unknown }).total || 0);
+        setDlqCount(Number.isFinite(total) ? total : 0);
+      } catch {
+        if (!cancelled) setDlqCount(0);
+      }
+    }
+
+    void loadDlqCount();
+    const id = window.setInterval(() => {
+      void loadDlqCount();
+    }, 30_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
 
   const isActive = (href: string) => {
     if (href === "/") {
@@ -46,6 +79,7 @@ export function Sidebar() {
   const NavLink = ({ item }: { item: typeof navigation[0] }) => {
     const Icon = item.icon;
     const active = isActive(item.href);
+    const showDlqBadge = item.id === 'admin-webhooks' && dlqCount > 0;
 
     return (
       <Link
@@ -59,6 +93,11 @@ export function Sidebar() {
       >
         <Icon className="w-5 h-5 flex-shrink-0" />
         <span className="font-medium text-sm">{item.name}</span>
+        {showDlqBadge ? (
+          <span className="ml-auto inline-flex min-w-5 justify-center rounded-full border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 dark:text-red-200">
+            {dlqCount}
+          </span>
+        ) : null}
       </Link>
     );
   };

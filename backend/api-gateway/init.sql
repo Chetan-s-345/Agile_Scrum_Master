@@ -661,6 +661,8 @@ CREATE TABLE backlog_items (
     acceptance_criteria TEXT,
     jira_issue_id       VARCHAR(100) UNIQUE,
     jira_issue_key      VARCHAR(50),
+    github_issue_number INT,
+    github_issue_url    TEXT,
     reporter_id         UUID REFERENCES team_members(id),
     sprint_id           UUID REFERENCES sprints(id),
     sort_order          INT DEFAULT 0,
@@ -698,9 +700,15 @@ CREATE TABLE tasks (
     -- Tracking
     estimated_hours     DECIMAL(6,2),
     logged_hours        DECIMAL(6,2) DEFAULT 0,
+    progress            INT DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
     -- Jira
     jira_issue_id       VARCHAR(100) UNIQUE,
     jira_issue_key      VARCHAR(50),
+    jira_synced         BOOLEAN DEFAULT TRUE,
+    github_issue_number INT,
+    github_issue_url    TEXT,
+    github_pr_number    INT,
+    github_pr_url       TEXT,
     -- AI flags
     ai_delay_risk       BOOLEAN DEFAULT FALSE,
     ai_risk_score       DECIMAL(5,2),
@@ -1114,6 +1122,15 @@ CREATE TABLE jira_sync_log (
     id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     sync_type           VARCHAR(50) NOT NULL,                -- full_sync, incremental, webhook
     direction           VARCHAR(20) NOT NULL,                -- inbound, outbound, bidirectional
+
+    -- Per-action (outbound task sync) details (optional)
+    action              VARCHAR(80),                         -- createIssue, updateStatus, etc
+    task_id             UUID,
+    jira_issue_key      VARCHAR(60),
+    request_payload     JSONB,
+    response_payload    JSONB,
+    error_message       TEXT,
+
     records_synced      INT DEFAULT 0,
     records_failed      INT DEFAULT 0,
     status              VARCHAR(30) DEFAULT 'success',       -- success, partial, failed
@@ -1121,6 +1138,31 @@ CREATE TABLE jira_sync_log (
     started_at          TIMESTAMP DEFAULT NOW(),
     completed_at        TIMESTAMP,
     duration_ms         INT
+);
+
+-- Tracks last sync per Jira project/board (for multi-project incremental sync UI)
+CREATE TABLE jira_project_sync_state (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_key     VARCHAR(50) NOT NULL,
+    board_id        VARCHAR(50) NOT NULL DEFAULT '',
+    last_synced_at  TIMESTAMP,
+    last_mode       VARCHAR(30),
+    last_status     VARCHAR(30),
+    last_error      TEXT,
+    updated_at      TIMESTAMP DEFAULT NOW(),
+    UNIQUE(project_key, board_id)
+);
+
+-- Stores a single daily auto-sync schedule for Jira (per org tenant DB)
+CREATE TABLE jira_sync_schedule (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    enabled         BOOLEAN DEFAULT FALSE,
+    project_key     VARCHAR(50),
+    board_id        VARCHAR(50),
+    mode            VARCHAR(30) DEFAULT 'incremental',
+    time_of_day     TIME DEFAULT '09:00',
+    timezone        VARCHAR(50) DEFAULT 'UTC',
+    updated_at      TIMESTAMP DEFAULT NOW()
 );
 
 -- ============================================================================
@@ -1152,6 +1194,49 @@ CREATE TABLE github_events (
     event_at            TIMESTAMP NOT NULL,
     raw_payload         JSONB DEFAULT '{}',
     created_at          TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE github_pr_events (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    pr_number           INT NOT NULL,
+    repo                VARCHAR(200) NOT NULL,
+    author              VARCHAR(120),
+    reviewer            VARCHAR(120),
+    opened_at           TIMESTAMP,
+    review_requested_at TIMESTAMP,
+    first_review_at     TIMESTAMP,
+    approved_at         TIMESTAMP,
+    merged_at           TIMESTAMP,
+    sprint_id           UUID REFERENCES sprints(id),
+    task_id             UUID REFERENCES tasks(id),
+    created_at          TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW(),
+    UNIQUE(repo, pr_number)
+);
+
+CREATE TABLE pr_review_weekly_summary (
+    id                                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    week_start                          TIMESTAMP NOT NULL,
+    week_end                            TIMESTAMP NOT NULL,
+    group_by                            VARCHAR(30) NOT NULL,   -- reviewer, project, sprint
+    group_key                           VARCHAR(200) NOT NULL,
+    avg_time_to_first_review_minutes    DECIMAL(10,2),
+    avg_time_to_approval_minutes        DECIMAL(10,2),
+    avg_time_to_merge_minutes           DECIMAL(10,2),
+    sample_size                         INT DEFAULT 0,
+    created_at                          TIMESTAMP DEFAULT NOW(),
+    updated_at                          TIMESTAMP DEFAULT NOW(),
+    UNIQUE(week_start, week_end, group_by, group_key)
+);
+
+CREATE TABLE github_auto_task_rules (
+    id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    create_from_issues      BOOLEAN DEFAULT TRUE,
+    create_from_unlinked_prs BOOLEAN DEFAULT TRUE,
+    sprint_ready_label      VARCHAR(80) DEFAULT 'sprint-ready',
+    label_mappings          JSONB DEFAULT '{"bug":"bug","enhancement":"story","task":"task"}',
+    created_at              TIMESTAMP DEFAULT NOW(),
+    updated_at              TIMESTAMP DEFAULT NOW()
 );
 
 -- ============================================================================
@@ -1221,6 +1306,10 @@ CREATE TABLE webhook_events (
     event_type          VARCHAR(100) NOT NULL,
     payload             JSONB NOT NULL,
     processed           BOOLEAN DEFAULT FALSE,
+    retry_count         INT DEFAULT 0,
+    max_retries         INT DEFAULT 3,
+    next_retry_at       TIMESTAMP,
+    dlq                 BOOLEAN DEFAULT FALSE,
     processed_at        TIMESTAMP,
     processing_error    TEXT,
     created_at          TIMESTAMP DEFAULT NOW()
@@ -1259,6 +1348,8 @@ CREATE INDEX idx_tasks_status               ON tasks(status);
 CREATE INDEX idx_tasks_project              ON tasks(project_id);
 CREATE INDEX idx_tasks_tech_tags            ON tasks USING GIN(tech_tags);
 CREATE INDEX idx_tasks_jira                 ON tasks(jira_issue_id);
+CREATE UNIQUE INDEX uq_tasks_project_issue  ON tasks(project_id, github_issue_number) WHERE github_issue_number IS NOT NULL;
+CREATE UNIQUE INDEX uq_tasks_project_pr     ON tasks(project_id, github_pr_number) WHERE github_pr_number IS NOT NULL;
 
 -- Sprints
 CREATE INDEX idx_sprints_project            ON sprints(project_id);
@@ -1268,6 +1359,7 @@ CREATE INDEX idx_sprints_status             ON sprints(status);
 CREATE INDEX idx_backlog_project            ON backlog_items(project_id);
 CREATE INDEX idx_backlog_sprint             ON backlog_items(sprint_id);
 CREATE INDEX idx_backlog_tech_tags          ON backlog_items USING GIN(tech_tags);
+CREATE UNIQUE INDEX uq_backlog_project_issue ON backlog_items(project_id, github_issue_number) WHERE github_issue_number IS NOT NULL;
 
 -- Assignment
 CREATE INDEX idx_assignment_log_task        ON assignment_log(task_id);
@@ -1297,6 +1389,12 @@ CREATE INDEX idx_org_audit_actor            ON org_audit_log(actor_member_id);
 -- GitHub events
 CREATE INDEX idx_github_events_dev          ON github_events(developer_id, event_at DESC);
 CREATE INDEX idx_github_events_task         ON github_events(task_id);
+CREATE INDEX idx_github_pr_events_repo_pr   ON github_pr_events(repo, pr_number);
+CREATE INDEX idx_github_pr_events_reviewer  ON github_pr_events(reviewer);
+CREATE INDEX idx_github_pr_events_task      ON github_pr_events(task_id);
+CREATE INDEX idx_pr_review_weekly_group     ON pr_review_weekly_summary(group_by, group_key);
+CREATE INDEX idx_webhook_events_retry_due   ON webhook_events(next_retry_at) WHERE processed = FALSE AND dlq = FALSE;
+CREATE INDEX idx_webhook_events_dlq         ON webhook_events(dlq, created_at DESC);
 
 -- Skill gap
 CREATE INDEX idx_skill_gap_skill            ON skill_gap_log(required_skill, logged_at DESC);

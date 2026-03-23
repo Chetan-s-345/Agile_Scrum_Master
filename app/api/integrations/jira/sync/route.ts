@@ -11,15 +11,24 @@ async function getAuthToken() {
   return cookieStore.get("auth_token")?.value || null;
 }
 
-export async function POST() {
+export async function POST(req: Request) {
   const token = await getAuthToken();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  let body: unknown = null;
+  try {
+    body = await req.json();
+  } catch {
+    body = null;
+  }
 
   const gatewayResp = await fetch(`${getGatewayBaseUrl()}/api/v1/integrations/jira/sync`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
     },
+    body: body ? JSON.stringify(body) : undefined,
     cache: "no-store",
   });
 

@@ -48,6 +48,22 @@ async function getTask(req, res, next) {
   }
 }
 
+async function getTaskProgress(req, res, next) {
+  try {
+    const parsedId = uuidSchema.safeParse(req.params.taskId);
+    if (!parsedId.success) {
+      return res.status(400).json({ error: 'Bad request', code: 400, detail: 'Invalid taskId' });
+    }
+
+    const progress = await taskService.getProgress(req, parsedId.data);
+    if (!progress) return res.status(404).json({ error: 'Not found', code: 404, detail: 'Task not found' });
+
+    return res.status(200).json(progress);
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function createTask(req, res, next) {
   try {
     const parsed = createTaskSchema.safeParse(req.body || {});
@@ -161,6 +177,7 @@ async function addTimeLog(req, res, next) {
 
 module.exports = {
   getTask,
+  getTaskProgress,
   listTasks,
   createTask,
   updateStatus,
