@@ -75,9 +75,23 @@ const EnvSchema = z
     z.string().url()
   ),
 
+  // Public URL of the API gateway (used for registering inbound webhooks).
+  // Example: https://your-gateway.example.com
+  PUBLIC_API_GATEWAY_URL: optionalNonEmptyString,
+
   JIRA_CLIENT_ID: z.string().optional(),
   JIRA_CLIENT_SECRET: z.string().optional(),
   GITHUB_WEBHOOK_SECRET: z.string().optional(),
+  GITHUB_TASK_PREFIX: optionalNonEmptyString,
+
+  // Optional verification secret for Jira webhooks.
+  JIRA_WEBHOOK_SECRET: z.string().optional(),
+
+  // Jira webhook verification strategy.
+  // - secret: require HMAC signature via X-Jira-Webhook-Secret (requires JIRA_WEBHOOK_SECRET)
+  // - atlassian-token: accept Jira Cloud callbacks using X-Atlassian-Token: no-check
+  // - both: allow either
+  JIRA_WEBHOOK_STRATEGY: z.enum(['secret', 'atlassian-token', 'both']).default('both'),
 })
   .superRefine((val, ctx) => {
     if (val.TENANT_DB_PROVISIONING_MODE !== 'neon') return;

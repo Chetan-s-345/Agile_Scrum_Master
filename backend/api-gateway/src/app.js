@@ -16,6 +16,9 @@ const { errorHandler } = require('./middleware/errorHandler');
 const { ensureRepeatableJobs } = require('./services/schedulerService');
 const { startSprintMonitoringWorker } = require('./workers/sprintMonitoring.worker');
 const { startJiraSyncWorker } = require('./workers/jiraSync.worker');
+const { startWebhookProcessingWorker } = require('./workers/webhookProcessing.worker');
+const { startPrMetricsWorker } = require('./workers/prMetrics.worker');
+const { startWebhookRetryWorker } = require('./jobs/webhookRetryWorker');
 const { pingRedis } = require('./services/queue.service');
 
 const authRoutes = require('./routes/auth.routes');
@@ -31,6 +34,8 @@ const monitoringRoutes = require('./routes/monitoring.routes');
 const integrationRoutes = require('./routes/integration.routes');
 const aiRoutes = require('./routes/ai.routes');
 const standupRoutes = require('./routes/standup.routes');
+const metricsRoutes = require('./routes/metrics');
+const adminWebhookRoutes = require('./routes/adminWebhook.routes');
 
 const app = express();
 
@@ -42,7 +47,14 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json({ limit: '1mb' }));
+
+// Important: webhook signature verification requires access to the raw request body.
+// So we skip global JSON parsing for /api/v1/webhooks and parse bodies per webhook route.
+const jsonParser = express.json({ limit: '1mb' });
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/v1/webhooks')) return next();
+  return jsonParser(req, res, next);
+});
 app.use(morgan('combined', { stream: morganStream }));
 
 app.get('/health', (req, res) => {
@@ -62,6 +74,8 @@ app.use('/api/v1/monitoring', monitoringRoutes);
 app.use('/api/v1/integrations', integrationRoutes);
 app.use('/api/v1/ai', aiRoutes);
 app.use('/api/v1/standup', standupRoutes);
+app.use('/api/v1/metrics', metricsRoutes);
+app.use('/api/v1/admin/webhooks', adminWebhookRoutes);
 
 // Ensure unmatched routes return JSON (prevents upstream non-JSON errors in the Next.js proxy).
 app.use((req, res) => {
@@ -113,6 +127,24 @@ app.listen(env.PORT, () => {
       startJiraSyncWorker();
     } catch (err) {
       logger.error({ err }, 'Failed to start jira sync worker');
+    }
+
+    try {
+      startWebhookProcessingWorker();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start webhook processing worker');
+    }
+
+    try {
+      startPrMetricsWorker();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start pr metrics worker');
+    }
+
+    try {
+      startWebhookRetryWorker();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start webhook retry worker');
     }
   }
 })().catch((err) => {

@@ -32,6 +32,8 @@ function normalizePriority(p) {
   return 0;
 }
 
+const { queueJiraTaskSync } = require('./jiraSync.service');
+
 class AssignmentService {
   async getSprintDates(orgPool, sprintId) {
     const resp = await orgPool.query('SELECT start_date, end_date FROM sprints WHERE id = $1', [String(sprintId)]);
@@ -232,6 +234,13 @@ class AssignmentService {
       throw e;
     }
 
+    // Best-effort Jira sync trigger (if integration active)
+    await queueJiraTaskSync(req, {
+      taskId: String(taskId),
+      action: 'assignee_update',
+      sprintId: String(sprintId),
+    });
+
     return {
       assigned: true,
       developer: winner.developer,
@@ -303,6 +312,13 @@ class AssignmentService {
       }
       throw e;
     }
+
+    // Best-effort Jira sync trigger (if integration active)
+    await queueJiraTaskSync(req, {
+      taskId: String(taskId),
+      action: 'assignee_update',
+      sprintId: String(sprintId),
+    });
 
     return { assigned: true, taskId: String(taskId), developerId: newAssignee, reason: assignmentReason };
   }
