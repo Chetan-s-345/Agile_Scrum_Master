@@ -1,13 +1,5 @@
-import { HeroSection } from "@/components/herosection";
-import { HomeNavbar } from "@/components/home-navbar";
-import SmoothScrollSections from "@/components/smooth-scroll";
+import { redirect } from "next/navigation";
 
 export default function Home() {
-  return (
-    <div className="bg-white dark:bg-black">
-      <HomeNavbar />
-      <HeroSection />
-      <SmoothScrollSections />
-    </div>
-  );
+  redirect("/board");
 }

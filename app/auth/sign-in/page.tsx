@@ -41,7 +41,7 @@ export default function SignInPage() {
         if (data?.requiresOrgSetup) {
           router.push("/org");
         } else {
-          router.push("/dashboard");
+          router.push("/board");
         }
       } else {
         const err = await response.json().catch(() => null);
@@ -162,7 +162,7 @@ export default function SignInPage() {
 
       <p className="mt-8 text-center text-sm text-zinc-400">
         New to our platform?{" "}
-        <Link href="/auth/sign-up" className="font-semibold text-purple-500 hover:text-purple-400 transition-colors">
+        <Link href="/register" className="font-semibold text-purple-500 hover:text-purple-400 transition-colors">
           Create Account
         </Link>
       </p>
