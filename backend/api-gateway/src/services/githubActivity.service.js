@@ -101,24 +101,37 @@ function errorFromGithub(err) {
 }
 
 async function linkedRepos(orgPool) {
-  const rows = await orgPool.query(
-    `SELECT DISTINCT full_name FROM (
-       SELECT TRIM(github_repo) AS full_name FROM projects WHERE github_repo IS NOT NULL AND TRIM(github_repo) <> ''
-       UNION ALL
-       SELECT TRIM(gr.full_name) AS full_name
-       FROM goal_repos gpr
-       JOIN github_repos gr ON gr.id = gpr.repo_id
-       WHERE gr.full_name IS NOT NULL AND TRIM(gr.full_name) <> ''
-     ) x
-     WHERE full_name LIKE '%/%'`
+  const merged = new Set();
+
+  const projectRows = await orgPool.query(
+    `SELECT TRIM(github_repo) AS full_name
+     FROM projects
+     WHERE github_repo IS NOT NULL AND TRIM(github_repo) <> ''`
   );
 
-  return rows.rows
-    .map((r) => parseRepo(r.full_name))
-    .filter(Boolean)
-    .map((r) => r.fullName);
-}
+  for (const row of projectRows.rows) {
+    const parsed = parseRepo(row.full_name);
+    if (parsed) merged.add(parsed.fullName);
+  }
 
+  try {
+    const goalRepoRows = await orgPool.query(
+      `SELECT TRIM(gr.full_name) AS full_name
+       FROM goal_repos gpr
+       JOIN github_repos gr ON gr.id = gpr.repo_id
+       WHERE gr.full_name IS NOT NULL AND TRIM(gr.full_name) <> ''`
+    );
+
+    for (const row of goalRepoRows.rows) {
+      const parsed = parseRepo(row.full_name);
+      if (parsed) merged.add(parsed.fullName);
+    }
+  } catch (err) {
+    if (String(err?.code || '') !== '42P01') throw err;
+  }
+
+  return Array.from(merged.values());
+}
 async function mapLimit(items, limit, fn) {
   const out = new Array(items.length);
   let i = 0;
@@ -618,3 +631,4 @@ class GithubActivityService {
 const githubActivityService = new GithubActivityService();
 
 module.exports = { githubActivityService };
+

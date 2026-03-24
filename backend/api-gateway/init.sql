@@ -503,6 +503,71 @@ CREATE TABLE team_members (
 );
 
 -- ============================================================================
+-- 2.2.1  USERS (RBAC mirror)
+-- ============================================================================
+CREATE TABLE users (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    member_id           UUID NOT NULL UNIQUE REFERENCES team_members(id) ON DELETE CASCADE,
+    role                VARCHAR(50) NOT NULL DEFAULT 'developer',
+    created_at          TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 2.2.2  TEAMS / MEMBERSHIPS / JOIN REQUESTS / SCORES
+-- ============================================================================
+CREATE TABLE teams (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name                VARCHAR(200) NOT NULL,
+    description         TEXT,
+    created_by          UUID REFERENCES team_members(id) ON DELETE SET NULL,
+    is_active           BOOLEAN DEFAULT TRUE,
+    created_at          TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW(),
+    UNIQUE(name)
+);
+
+CREATE TABLE team_memberships (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    team_id             UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    member_id           UUID NOT NULL REFERENCES team_members(id) ON DELETE CASCADE,
+    role                VARCHAR(30) NOT NULL DEFAULT 'developer' CHECK (role IN ('admin','developer')),
+    joined_at           TIMESTAMP DEFAULT NOW(),
+    created_at          TIMESTAMP DEFAULT NOW(),
+    UNIQUE(team_id, member_id)
+);
+
+CREATE TABLE join_requests (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    team_id             UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    member_id           UUID NOT NULL REFERENCES team_members(id) ON DELETE CASCADE,
+    status              VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected')),
+    requested_at        TIMESTAMP DEFAULT NOW(),
+    reviewed_by         UUID REFERENCES team_members(id) ON DELETE SET NULL,
+    reviewed_at         TIMESTAMP,
+    note                TEXT,
+    created_at          TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE scores (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    team_id             UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    member_id           UUID NOT NULL REFERENCES team_members(id) ON DELETE CASCADE,
+    score               DECIMAL(7,2) NOT NULL DEFAULT 0,
+    metric              VARCHAR(100) NOT NULL DEFAULT 'performance',
+    updated_by          UUID REFERENCES team_members(id) ON DELETE SET NULL,
+    updated_at          TIMESTAMP DEFAULT NOW(),
+    UNIQUE(team_id, member_id)
+);
+
+INSERT INTO users (member_id, role)
+SELECT tm.id, tm.role
+FROM team_members tm
+ON CONFLICT (member_id) DO UPDATE SET
+    role = EXCLUDED.role,
+    updated_at = NOW();
+
+-- ============================================================================
 -- 2.3  DEVELOPER PROFILES (AI Assignment Engine core data)
 -- ============================================================================
 CREATE TABLE developer_profiles (
@@ -1476,6 +1541,16 @@ CREATE INDEX idx_notifications_recipient    ON notifications(recipient_member_id
 -- Audit
 CREATE INDEX idx_org_audit_action           ON org_audit_log(action, created_at DESC);
 CREATE INDEX idx_org_audit_actor            ON org_audit_log(actor_member_id);
+
+-- Teams
+CREATE INDEX idx_users_member               ON users(member_id);
+CREATE INDEX idx_users_role                 ON users(role);
+CREATE INDEX idx_team_memberships_team      ON team_memberships(team_id);
+CREATE INDEX idx_team_memberships_member    ON team_memberships(member_id);
+CREATE INDEX idx_join_requests_team_status  ON join_requests(team_id, status, requested_at DESC);
+CREATE INDEX idx_join_requests_member       ON join_requests(member_id, requested_at DESC);
+CREATE INDEX idx_scores_team                ON scores(team_id, score DESC);
+CREATE INDEX idx_scores_member              ON scores(member_id);
 
 -- GitHub events
 CREATE INDEX idx_github_events_dev          ON github_events(developer_id, event_at DESC);

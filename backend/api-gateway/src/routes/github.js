@@ -50,7 +50,7 @@ router.post('/connect', async (req, res, next) => {
 
 router.get('/status', async (req, res, next) => {
   try {
-    if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
+    if (!requireRole(req, ['owner', 'admin', 'manager', 'developer'])) return res.status(403).json({ error: 'Forbidden' });
     const status = await githubService.getStatus(req.orgDb);
     return res.status(200).json(status);
   } catch (err) {
@@ -61,7 +61,7 @@ router.get('/status', async (req, res, next) => {
 // New repo discovery endpoints
 router.get('/repos', async (req, res, next) => {
   try {
-    if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
+    if (!requireRole(req, ['owner', 'admin', 'manager', 'developer'])) return res.status(403).json({ error: 'Forbidden' });
     return await listRepos(req, res, next);
   } catch (err) {
     return next(err);
@@ -70,7 +70,7 @@ router.get('/repos', async (req, res, next) => {
 
 router.get('/repos/:owner/:repo', async (req, res, next) => {
   try {
-    if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
+    if (!requireRole(req, ['owner', 'admin', 'manager', 'developer'])) return res.status(403).json({ error: 'Forbidden' });
     return await getRepo(req, res, next);
   } catch (err) {
     return next(err);

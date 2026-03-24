@@ -34,11 +34,12 @@ function toIso(value) {
 class DeveloperToolsService {
   async summary(req) {
     const orgPool = requireOrgDb(req);
-    const canRevealKey = ['owner', 'admin'].includes(String(req.user?.role || ''));
+    const actorId = await getActorMemberId(orgPool, req.user?.userId);
+    const canRevealAll = ['owner', 'admin'].includes(String(req.user?.role || ''));
 
     const [keysResp, hooksResp, todayResp, monthResp] = await Promise.all([
       orgPool.query(
-        `SELECT id, name, key_prefix, key_last4, key_value, is_active, created_at, last_used_at, revoked_at
+        `SELECT id, name, key_prefix, key_last4, key_value, created_by, is_active, created_at, last_used_at, revoked_at
          FROM developer_api_keys
          ORDER BY created_at DESC`
       ),
@@ -59,17 +60,20 @@ class DeveloperToolsService {
       ),
     ]);
 
-    const apiKeys = keysResp.rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      keyMasked: maskApiKey(String(row.key_prefix || 'sk-'), String(row.key_last4 || '')),
-      fullKey: canRevealKey ? String(row.key_value || '') : '',
-      canRevealKey,
-      createdAt: toIso(row.created_at),
-      lastUsedAt: toIso(row.last_used_at),
-      status: row.is_active ? 'active' : 'revoked',
-      revokedAt: toIso(row.revoked_at),
-    }));
+    const apiKeys = keysResp.rows.map((row) => {
+      const canRevealThis = canRevealAll || (actorId && String(row.created_by || '') === String(actorId));
+      return {
+        id: row.id,
+        name: row.name,
+        keyMasked: maskApiKey(String(row.key_prefix || 'sk-'), String(row.key_last4 || '')),
+        fullKey: canRevealThis ? String(row.key_value || '') : '',
+        canRevealKey: Boolean(canRevealThis),
+        createdAt: toIso(row.created_at),
+        lastUsedAt: toIso(row.last_used_at),
+        status: row.is_active ? 'active' : 'revoked',
+        revokedAt: toIso(row.revoked_at),
+      };
+    });
 
     const webhooks = hooksResp.rows.map((row) => ({
       id: row.id,
@@ -96,9 +100,10 @@ class DeveloperToolsService {
   }
 
   async createApiKey(req, { name }) {
-    requireRole(req, ['owner', 'admin']);
+    requireRole(req, ['owner', 'admin', 'manager', 'developer']);
     const orgPool = requireOrgDb(req);
     const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+    if (!actorMemberId) throw Object.assign(new Error('Team member not found'), { statusCode: 404 });
     const generated = newApiKey();
 
     const inserted = await orgPool.query(
@@ -122,8 +127,19 @@ class DeveloperToolsService {
   }
 
   async revokeApiKey(req, apiKeyId) {
-    requireRole(req, ['owner', 'admin']);
     const orgPool = requireOrgDb(req);
+    const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+    if (!actorMemberId) throw Object.assign(new Error('Team member not found'), { statusCode: 404 });
+
+    const isAdmin = ['owner', 'admin'].includes(String(req.user?.role || ''));
+
+    const keyResp = await orgPool.query('SELECT id, created_by FROM developer_api_keys WHERE id = $1 LIMIT 1', [String(apiKeyId)]);
+    const row = keyResp.rows[0];
+    if (!row) throw Object.assign(new Error('API key not found'), { statusCode: 404 });
+
+    if (!isAdmin && String(row.created_by || '') !== String(actorMemberId)) {
+      throw Object.assign(new Error('Forbidden'), { statusCode: 403 });
+    }
 
     const updated = await orgPool.query(
       `UPDATE developer_api_keys

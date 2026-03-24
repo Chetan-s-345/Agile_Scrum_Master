@@ -38,6 +38,7 @@ const goalRoutes = require('./routes/goal.routes');
 const developerToolsRoutes = require('./routes/developerTools.routes');
 const spaceRoutes = require('./routes/space.routes');
 const githubActivityRoutes = require('./routes/githubActivity.routes');
+const teamRoutes = require('./routes/team.routes');
 const metricsRoutes = require('./routes/metrics');
 const adminWebhookRoutes = require('./routes/adminWebhook.routes');
 
@@ -82,6 +83,7 @@ app.use('/api/v1/goals', goalRoutes);
 app.use('/api/v1/developer-tools', developerToolsRoutes);
 app.use('/api/v1/spaces', spaceRoutes);
 app.use('/api/v1/github', githubActivityRoutes);
+app.use('/api/v1/teams', teamRoutes);
 app.use('/api/v1/metrics', metricsRoutes);
 app.use('/api/v1/admin/webhooks', adminWebhookRoutes);
 
@@ -160,3 +162,4 @@ app.listen(env.PORT, () => {
 });
 
 module.exports = { app };
+

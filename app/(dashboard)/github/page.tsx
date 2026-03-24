@@ -89,11 +89,39 @@ export default function GithubHubPage() {
   useEffect(() => {
     const timer = window.setTimeout(async () => {
       const st = await fetchJson<{ connected?: boolean }>("/api/integrations/github/status");
-      setConnected(Boolean(st.data?.connected));
+      if (st.ok) {
+        setConnected(Boolean(st.data?.connected));
+        return;
+      }
+
+      // Keep hub reachable even when status endpoint is role-restricted.
+      setConnected(true);
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
 
+  useEffect(() => {
+    const timer = window.setTimeout(async () => {
+      if (!connected) return;
+
+      const repoResp = await fetchJson<any>("/api/integrations/github/repos?all=1");
+      if (!repoResp.ok) return;
+
+      const rows = Array.isArray(repoResp.data)
+        ? repoResp.data
+        : Array.isArray(repoResp.data?.items)
+          ? repoResp.data.items
+          : [];
+
+      const repoNames = rows
+        .map((r: any) => String(r?.fullName || r?.full_name || r?.name || "").trim())
+        .filter((v: string) => Boolean(v));
+
+      if (repoNames.length) setRepos(repoNames);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [connected]);
   function setTab(next: TabKey) {
     const qp = new URLSearchParams(searchParams.toString());
     qp.set("tab", next);
@@ -373,7 +401,7 @@ export default function GithubHubPage() {
                       <span className="font-semibold text-slate-900 dark:text-white truncate">{c.message}</span>
                       <span className="rounded-full border border-slate-200 dark:border-zinc-700 px-2 py-0.5 text-xs">{c.repo}</span>
                     </div>
-                    <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">{c.author} · {rel(c.authoredAt)}</div>
+                    <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">{c.author} -+ {rel(c.authoredAt)}</div>
                     <button
                       type="button"
                       onClick={() => void navigator.clipboard.writeText(String(c.sha || ""))}
@@ -390,7 +418,7 @@ export default function GithubHubPage() {
                 {overview?.pullRequests?.length ? overview.pullRequests.map((pr: any) => (
                   <div key={pr.id} className="py-2 border-b border-slate-100 dark:border-zinc-800 last:border-b-0 text-sm">
                     <a href={pr.htmlUrl} target="_blank" className="font-semibold text-slate-900 dark:text-white hover:underline">{pr.title}</a>
-                    <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">{pr.repo} · {pr.author} · {rel(pr.createdAt)}</div>
+                    <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">{pr.repo} -+ {pr.author} -+ {rel(pr.createdAt)}</div>
                   </div>
                 )) : <EmptyRow text="No open pull requests." />}
               </div>
@@ -402,7 +430,7 @@ export default function GithubHubPage() {
                 <div key={run.id} className="flex items-center justify-between gap-2 py-2 border-b border-slate-100 dark:border-zinc-800 last:border-b-0 text-sm">
                   <div className="truncate">
                     <span className="font-semibold text-slate-900 dark:text-white">{run.name}</span>
-                    <span className="ml-2 text-xs text-slate-600 dark:text-slate-300">{run.repo} · {run.branch}</span>
+                    <span className="ml-2 text-xs text-slate-600 dark:text-slate-300">{run.repo} -+ {run.branch}</span>
                   </div>
                   <StatusIcon status={run.conclusion || run.status} />
                 </div>
@@ -416,7 +444,7 @@ export default function GithubHubPage() {
             {commits?.items?.length ? commits.items.map((c: any) => (
               <div key={`${c.repo}-${c.sha}`} className="border-b border-slate-100 dark:border-zinc-800 last:border-b-0 py-2">
                 <div className="text-sm font-semibold text-slate-900 dark:text-white">{c.message}</div>
-                <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">{c.author} · {c.repo} · {rel(c.authoredAt)}</div>
+                <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">{c.author} -+ {c.repo} -+ {rel(c.authoredAt)}</div>
                 <div className="mt-1 flex items-center gap-3 text-xs">
                   <button type="button" onClick={() => void navigator.clipboard.writeText(String(c.sha || ""))} className="inline-flex items-center gap-1 font-mono">
                     {String(c.sha || "").slice(0, 7)} <Copy className="w-3 h-3" />
@@ -433,7 +461,7 @@ export default function GithubHubPage() {
             {prs?.items?.length ? prs.items.map((pr: any) => (
               <article key={pr.id} className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                 <a href={pr.htmlUrl} target="_blank" className="text-base font-semibold text-slate-900 dark:text-white hover:underline">{pr.title}</a>
-                <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">#{pr.number} · {pr.repo} · {pr.baseBranch} {"->"} {pr.headBranch}</div>
+                <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">#{pr.number} -+ {pr.repo} -+ {pr.baseBranch} {"->"} {pr.headBranch}</div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {(pr.labels || []).map((lb: any) => (
                     <span key={`${pr.id}-${lb.name}`} className="rounded-full border px-2 py-0.5 text-xs" style={{ borderColor: `#${lb.color || "94a3b8"}` }}>
@@ -442,7 +470,7 @@ export default function GithubHubPage() {
                   ))}
                 </div>
                 <div className="mt-3 flex items-center justify-between gap-2 text-xs">
-                  <div className="text-slate-600 dark:text-slate-300">{pr.author} · {rel(pr.createdAt)}</div>
+                  <div className="text-slate-600 dark:text-slate-300">{pr.author} -+ {rel(pr.createdAt)}</div>
                   {pr.linkedTask ? (
                     <Link href={`/tasks/${encodeURIComponent(pr.linkedTask.id)}`} className="rounded-lg border border-slate-200 dark:border-zinc-700 px-2 py-1 text-xs">{pr.linkedTask.title}</Link>
                   ) : (
@@ -465,7 +493,7 @@ export default function GithubHubPage() {
                     {issue.state === "open" ? <Circle className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
                     <a href={issue.htmlUrl} target="_blank" className="truncate font-semibold text-slate-900 dark:text-white hover:underline">{issue.title}</a>
                   </div>
-                  <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">#{issue.number} · {issue.repo} · {issue.author} · {rel(issue.createdAt)}</div>
+                  <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">#{issue.number} -+ {issue.repo} -+ {issue.author} -+ {rel(issue.createdAt)}</div>
                 </div>
                 <button type="button" onClick={() => void importIssue(String(issue.id))} className="rounded-lg border border-slate-200 dark:border-zinc-700 px-2 py-1 text-xs">
                   Import as task
@@ -498,7 +526,7 @@ export default function GithubHubPage() {
                 <div key={run.id} className="flex items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800 last:border-b-0 py-2">
                   <div className="min-w-0">
                     <div className="truncate font-semibold text-slate-900 dark:text-white">{run.workflowName} #{run.runNumber}</div>
-                    <div className="text-xs text-slate-600 dark:text-slate-300">{run.repo} · {run.branch} · {run.event} · {rel(run.startedAt)}</div>
+                    <div className="text-xs text-slate-600 dark:text-slate-300">{run.repo} -+ {run.branch} -+ {run.event} -+ {rel(run.startedAt)}</div>
                   </div>
                   <a href={run.htmlUrl} target="_blank" className="inline-flex items-center gap-1 text-xs hover:underline">View logs <ExternalLink className="w-3 h-3" /></a>
                 </div>
@@ -553,6 +581,7 @@ function StatusIcon({ status }: { status: string }) {
   if (s.includes("failure") || s.includes("failed") || s.includes("cancel")) return <Clock3 className="w-4 h-4 text-amber-500" />;
   return <Circle className="w-4 h-4 text-slate-500" />;
 }
+
 
 
 

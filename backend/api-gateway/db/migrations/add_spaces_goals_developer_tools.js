@@ -6,6 +6,10 @@
 */
 
 const { Pool } = require('pg');
+const path = require('node:path');
+
+require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+require('dotenv').config();
 
 function requiredEnv(name) {
   const value = process.env[name];
@@ -174,7 +178,10 @@ async function migrateTenant(orgId, connectionString) {
 }
 
 async function main() {
-  const universalUrl = requiredEnv('UNIVERSAL_DATABASE_URL');
+  const universalUrl =
+    normalizeConnectionString(process.env.UNIVERSAL_DATABASE_URL) ||
+    normalizeConnectionString(process.env.DATABASE_URL) ||
+    requiredEnv('UNIVERSAL_DATABASE_URL');
 
   const universalPool = new Pool({
     connectionString: universalUrl,

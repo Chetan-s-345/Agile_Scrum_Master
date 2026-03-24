@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { formatDistanceToNow } from "date-fns";
 import { BookOpen, Check, Copy, Eye, EyeOff, Link2, Pause, Pencil, Plus, Trash2, Webhook } from "lucide-react";
@@ -35,6 +35,19 @@ type SummaryResp = {
   usage?: Usage | null;
 };
 
+type Invitation = {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  created_at?: string;
+  expires_at?: string;
+};
+
+type InvitationsResp = {
+  items?: Invitation[];
+  invitations?: Invitation[];
+};
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
   const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
   const text = await resp.text().catch(() => "");
@@ -77,6 +90,7 @@ export default function DevelopersPage() {
   const [reveal, setReveal] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [revokeConfirmId, setRevokeConfirmId] = useState<string | null>(null);
+  const [pendingInvitations, setPendingInvitations] = useState<Invitation[]>([]);
 
   const [showAddWebhook, setShowAddWebhook] = useState(false);
   const [newWebhookUrl, setNewWebhookUrl] = useState("");
@@ -89,13 +103,24 @@ export default function DevelopersPage() {
     setLoading(true);
     setError(null);
 
-    const resp = await fetchJson<SummaryResp>("/api/developer-tools");
+    const [resp, invitationsResp] = await Promise.all([
+      fetchJson<SummaryResp>("/api/developer-tools"),
+      fetchJson<InvitationsResp>("/api/org/invitations"),
+    ]);
     if (!resp.ok) {
-      setError(`Failed to load developer tools (${resp.status})`);
+      setError("Failed to load developer tools (" + resp.status + ")");
       setSummary({ apiKeys: [], webhooks: [], usage: null });
       setLoading(false);
       return;
     }
+
+    const invitations = Array.isArray(invitationsResp.data?.items)
+      ? invitationsResp.data.items
+      : Array.isArray(invitationsResp.data?.invitations)
+      ? invitationsResp.data.invitations
+      : [];
+
+    setPendingInvitations(invitations.filter((inv) => String(inv.status || "").toLowerCase() === "pending"));
 
     setSummary({
       apiKeys: Array.isArray(resp.data?.apiKeys) ? resp.data!.apiKeys : [],
@@ -243,7 +268,7 @@ export default function DevelopersPage() {
       <div className="max-w-7xl mx-auto space-y-8">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Developers</h1>
+            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Developers Tools</h1>
             <p className="text-slate-600 dark:text-slate-300">Manage API keys, webhooks, and developer tools</p>
           </div>
           <button
@@ -402,6 +427,37 @@ export default function DevelopersPage() {
               </tbody>
             </table>
           </div>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Pending Requests</div>
+            <a href="/settings/team" className="text-xs font-semibold text-slate-700 dark:text-slate-200 hover:underline">
+              Manage team
+            </a>
+          </div>
+
+          {loading ? (
+            <div className="text-sm text-slate-600 dark:text-slate-300">Loading pending requests...</div>
+          ) : pendingInvitations.length ? (
+            <div className="space-y-2">
+              {pendingInvitations.map((inv) => (
+                <div key={inv.id} className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-slate-900 dark:text-white">{inv.email}</div>
+                      <div className="text-xs text-slate-600 dark:text-slate-300">Role: {inv.role}</div>
+                    </div>
+                    <span className="rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 px-2 py-1 text-xs font-semibold">
+                      Pending
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-slate-600 dark:text-slate-300">No pending requests.</div>
+          )}
         </section>
 
         <section className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">

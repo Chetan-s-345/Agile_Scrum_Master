@@ -410,10 +410,10 @@ export default function GoalsPage() {
       </div>
 
       {newGoalOpen ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4">
-          <div className="w-full max-w-2xl rounded-xl border border-[#343434] bg-[#1a1a1a] p-5">
+        <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 px-4 py-6 sm:items-center">
+          <div className="w-full max-w-2xl max-h-[92vh] overflow-hidden rounded-xl border border-[#343434] bg-[#1a1a1a] p-5">
             <div className="mb-4 text-lg font-semibold">New Goal</div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="grid max-h-[calc(92vh-130px)] grid-cols-1 gap-3 overflow-y-auto overflow-x-hidden pr-1 md:grid-cols-2">
               <label className="md:col-span-2">
                 <div className="mb-1 text-xs text-[#a9a9a9]">Title *</div>
                 <input value={newGoal.title} onChange={(e) => setNewGoal((p) => ({ ...p, title: e.target.value }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm" />
@@ -548,7 +548,7 @@ export default function GoalsPage() {
               ) : null}
             </div>
 
-            <div className="mt-5 flex items-center justify-end gap-2">
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
               <button className="rounded-md border border-[#3b3b3b] px-3 py-2 text-sm" onClick={() => setNewGoalOpen(false)}>
                 Cancel
               </button>

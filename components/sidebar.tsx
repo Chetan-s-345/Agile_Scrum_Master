@@ -52,6 +52,11 @@ type LinkItem = {
   external?: boolean;
 };
 
+type SavedNavItem = {
+  label: string;
+  href: string;
+};
+
 type SpaceChild = { id: string; name: string; status?: string };
 type Space = {
   id: string;
@@ -83,7 +88,8 @@ const appPages: LinkItem[] = [
   { label: "Agentic Scrum Master", href: "/scrum-master", icon: Bot },
   { label: "Sprints", href: "/sprints", icon: Flag },
   { label: "Tasks", href: "/tasks", icon: ListTodo },
-  { label: "Developers", href: "/developers", icon: Users },
+  { label: "Dev Tools", href: "/developers", icon: Users },
+  { label: "Teams", href: "/teams", icon: Users },
   { label: "GitHub", href: "/github", icon: GitBranch },
   { label: "Assignment", href: "/assignment", icon: Compass },
   { label: "Monitoring", href: "/monitoring", icon: Activity },
@@ -96,9 +102,40 @@ const bottomLinks: LinkItem[] = [
   { label: "Filters", href: "/tasks", icon: Filter },
   { label: "Dashboards", href: "/dashboard", icon: LayoutDashboard },
   { label: "Goals", href: "/goals", icon: Flag },
-  { label: "Teams", href: "/developers", icon: Users, external: true },
+  { label: "Teams", href: "/teams", icon: Users },
   { label: "More", href: "/settings", icon: Ellipsis },
 ];
+
+const RECENT_STORAGE_KEY = "asm.sidebar.recent.v1";
+const STARRED_STORAGE_KEY = "asm.sidebar.starred.v1";
+
+function safeParseItems(raw: string | null): SavedNavItem[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((it) => it && typeof it === "object")
+      .map((it) => ({
+        label: String((it as { label?: unknown }).label || "").trim(),
+        href: String((it as { href?: unknown }).href || "").trim(),
+      }))
+      .filter((it) => it.label && it.href);
+  } catch {
+    return [];
+  }
+}
+
+function inferLabel(href: string): string {
+  const fromAppPage = appPages.find((p) => p.href === href)?.label;
+  if (fromAppPage) return fromAppPage;
+  const fromMainLink = mainLinks.find((p) => p.href === href)?.label;
+  if (fromMainLink) return fromMainLink;
+  if (href.startsWith("/projects/")) return "Project";
+  const clean = href.replace(/^\//, "").replace(/[-_]/g, " ").trim();
+  if (!clean) return "Home";
+  return clean.charAt(0).toUpperCase() + clean.slice(1);
+}
 
 function Item({
   item,
@@ -302,6 +339,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const [renameId, setRenameId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [recentOpen, setRecentOpen] = useState(false);
+  const [starredOpen, setStarredOpen] = useState(false);
+  const [recentItems, setRecentItems] = useState<SavedNavItem[]>([]);
+  const [starredItems, setStarredItems] = useState<SavedNavItem[]>([]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -313,12 +354,36 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       } catch {
         setCollapsedById({});
       }
+
+      setRecentItems(safeParseItems(window.localStorage.getItem(RECENT_STORAGE_KEY)));
+      setStarredItems(safeParseItems(window.localStorage.getItem(STARRED_STORAGE_KEY)));
     }, 0);
 
     return () => {
       window.clearTimeout(timer);
     };
   }, []);
+
+  useEffect(() => {
+    if (!pathname || !pathname.startsWith("/")) return;
+
+    const timer = window.setTimeout(() => {
+      const nextEntry: SavedNavItem = { label: inferLabel(pathname), href: pathname };
+      setRecentItems((prev) => {
+        const next = [nextEntry, ...prev.filter((it) => it.href !== pathname)].slice(0, 8);
+        try {
+          window.localStorage.setItem(RECENT_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // ignore local storage failures
+        }
+        return next;
+      });
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [pathname]);
 
   const persistCollapsed = useCallback((next: Record<string, boolean>) => {
     setCollapsedById(next);
@@ -419,10 +484,23 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     [githubConnected]
   );
 
+  function toggleStarred(item: SavedNavItem) {
+    setStarredItems((prev) => {
+      const exists = prev.some((it) => it.href === item.href);
+      const next = exists ? prev.filter((it) => it.href !== item.href) : [item, ...prev].slice(0, 12);
+      try {
+        window.localStorage.setItem(STARRED_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // ignore local storage failures
+      }
+      return next;
+    });
+  }
+
   return (
-    <aside className={`fixed left-0 top-0 z-40 h-screen shrink-0 border-r border-[#2a2a2a] bg-[#0d0d0d] ${sidebarWidth}`}>
+    <aside className={`fixed left-0 top-0 z-50 h-screen shrink-0 overflow-hidden border-r border-[#2a2a2a] bg-[#0d0d0d] ${sidebarWidth}`}>
       <div className="flex h-full flex-col">
-        <div className="border-b border-[#2a2a2a] p-3">
+        <div className="flex-shrink-0 border-b border-[#2a2a2a] p-3">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="grid h-6 w-6 grid-cols-2 gap-0.5 rounded-sm border border-[#2a2a2a] p-0.5">
@@ -444,110 +522,188 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           </div>
 
           <div className="space-y-0.5">
-            {mainLinks.map((item) => (
-              <Item
-                key={item.label}
-                item={item}
-                active={item.label === "For you" && pathname === "/board"}
-                compact={collapsed}
-                right={item.label === "Recent" || item.label === "Starred" ? <ChevronDown className="ml-auto h-3.5 w-3.5" /> : null}
-              />
-            ))}
-
-            {!collapsed ? <p className="px-2 pb-1 pt-3 text-xs uppercase tracking-wide text-[#8f8f8f]">Spaces</p> : null}
-
-            {loadingSpaces ? (
-              <div className="px-2 py-2 text-xs text-[#8f8f8f]">Loading spaces...</div>
-            ) : (
-              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-                <SortableContext items={spaces.map((s) => s.id)} strategy={verticalListSortingStrategy}>
-                  <div className="space-y-0.5">
-                    {spaces.map((space) => (
-                      <SortableSpaceRow
-                        key={space.id}
-                        space={space}
-                        collapsed={collapsed}
-                        childrenOpen={!collapsedById[space.id]}
-                        renameId={renameId}
-                        renameValue={renameValue}
-                        setRenameValue={setRenameValue}
-                        onRenameSave={() => void renameSpace(space.id, renameValue.trim() || space.name)}
-                        onToggleChildren={() =>
-                          persistCollapsed({
-                            ...collapsedById,
-                            [space.id]: !collapsedById[space.id],
-                          })
-                        }
-                        onOpenAdd={() => {
-                          setAddMenuId((v) => (v === space.id ? null : space.id));
-                          setContextMenuId(null);
-                          setDeleteConfirmId(null);
-                        }}
-                        onOpenMenu={() => {
-                          if (deleteConfirmId === space.id) {
-                            setDeleteConfirmId(null);
-                            return;
-                          }
-                          if (contextMenuId === space.id) {
-                            setDeleteConfirmId(space.id);
-                          } else {
-                            setContextMenuId(space.id);
-                            setAddMenuId(null);
-                          }
-                        }}
-                        addOpen={addMenuId === space.id}
-                        menuOpen={contextMenuId === space.id}
-                        deleteConfirm={deleteConfirmId === space.id}
-                        onDeleteConfirm={() => void deleteSpace(space.id)}
-                        onDuplicate={() => void duplicateSpace(space.id)}
-                        onSetDefault={() => void setDefaultSpace(space.id)}
-                        onCopyLink={() => {
-                          void navigator.clipboard.writeText(`${window.location.origin}/projects/${encodeURIComponent(space.id)}`);
-                          setContextMenuId(null);
-                        }}
-                        onArchiveToggle={(v) => void archiveSpace(space.id, v)}
-                        onStartRename={() => {
-                          setRenameId(space.id);
-                          setRenameValue(space.name);
-                          setContextMenuId(null);
-                        }}
-                        onActionLink={(href) => {
-                          window.location.href = href;
-                        }}
-                        githubConnected={githubConnected}
-                      />
-                    ))}
-                  </div>
-                </SortableContext>
-              </DndContext>
-            )}
-
-            {!collapsed ? (
-              <div className="pt-2">
-                <button type="button" onClick={() => setArchivedOpen((v) => !v)} className="flex h-8 w-full items-center rounded-md px-2 text-xs text-[#bdbdbd] hover:bg-[#2a2a2a]">
-                  <Archive className="mr-2 h-3.5 w-3.5" /> Archived ({archivedSpaces.length})
-                  <span className="ml-auto">{archivedOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}</span>
-                </button>
-
-                {archivedOpen ? (
-                  <div className="ml-4 mt-1 space-y-1">
-                    {archivedSpaces.map((space) => (
-                      <div key={`arch-${space.id}`} className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-[#2a2a2a]">
-                        <span className="truncate text-xs">{space.name}</span>
-                        <button type="button" onClick={() => void archiveSpace(space.id, false)} className="ml-auto rounded px-1 py-0.5 text-[11px] hover:bg-[#1f1f1f]">Restore</button>
-                        <button type="button" onClick={() => void deleteSpace(space.id)} className="rounded px-1 py-0.5 text-[11px] hover:bg-[#1f1f1f]">Delete</button>
+            {mainLinks.map((item) => {
+              if (item.label === "Recent") {
+                return (
+                  <div key={item.label}>
+                    <button
+                      type="button"
+                      onClick={() => setRecentOpen((v) => !v)}
+                      className={`flex h-9 w-full items-center gap-2 rounded-md border border-transparent px-2 text-sm transition hover:bg-[#2a2a2a] ${
+                        pathname === item.href ? "bg-white text-black" : "text-white"
+                      }`}
+                    >
+                      <item.icon className="h-4 w-4 shrink-0" />
+                      {!collapsed ? <span className="truncate">{item.label}</span> : null}
+                      {!collapsed ? <ChevronDown className={`ml-auto h-3.5 w-3.5 transition ${recentOpen ? "rotate-180" : ""}`} /> : null}
+                    </button>
+                    {!collapsed && recentOpen ? (
+                      <div className="ml-6 mt-1 space-y-1">
+                        {recentItems.length ? (
+                          recentItems.map((it) => (
+                            <Link key={`recent-${it.href}`} href={it.href} className="block truncate rounded px-2 py-1 text-xs text-[#bdbdbd] hover:bg-[#1f1f1f]">
+                              {it.label}
+                            </Link>
+                          ))
+                        ) : (
+                          <div className="px-2 py-1 text-xs text-[#8f8f8f]">No recent pages.</div>
+                        )}
                       </div>
-                    ))}
+                    ) : null}
                   </div>
-                ) : null}
-              </div>
-            ) : null}
+                );
+              }
+
+              if (item.label === "Starred") {
+                return (
+                  <div key={item.label}>
+                    <button
+                      type="button"
+                      onClick={() => setStarredOpen((v) => !v)}
+                      className={`flex h-9 w-full items-center gap-2 rounded-md border border-transparent px-2 text-sm transition hover:bg-[#2a2a2a] ${
+                        pathname === item.href ? "bg-white text-black" : "text-white"
+                      }`}
+                    >
+                      <item.icon className="h-4 w-4 shrink-0" />
+                      {!collapsed ? <span className="truncate">{item.label}</span> : null}
+                      {!collapsed ? <ChevronDown className={`ml-auto h-3.5 w-3.5 transition ${starredOpen ? "rotate-180" : ""}`} /> : null}
+                    </button>
+                    {!collapsed && starredOpen ? (
+                      <div className="ml-6 mt-1 space-y-1">
+                        {starredItems.length ? (
+                          starredItems.map((it) => (
+                            <Link key={`star-${it.href}`} href={it.href} className="block truncate rounded px-2 py-1 text-xs text-[#bdbdbd] hover:bg-[#1f1f1f]">
+                              {it.label}
+                            </Link>
+                          ))
+                        ) : (
+                          <div className="px-2 py-1 text-xs text-[#8f8f8f]">No starred pages.</div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              }
+
+              return (
+                <Item
+                  key={item.label}
+                  item={item}
+                  active={item.label === "For you" && pathname === "/board"}
+                  compact={collapsed}
+                />
+              );
+            })}
+
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3">
+          {!collapsed ? <p className="px-2 pb-1 text-xs uppercase tracking-wide text-[#8f8f8f]">Spaces</p> : null}
+
+          {loadingSpaces ? (
+            <div className="px-2 py-2 text-xs text-[#8f8f8f]">Loading spaces...</div>
+          ) : (
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+              <SortableContext items={spaces.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+                <div className="space-y-0.5">
+                  {spaces.map((space) => (
+                    <SortableSpaceRow
+                      key={space.id}
+                      space={space}
+                      collapsed={collapsed}
+                      childrenOpen={!collapsedById[space.id]}
+                      renameId={renameId}
+                      renameValue={renameValue}
+                      setRenameValue={setRenameValue}
+                      onRenameSave={() => void renameSpace(space.id, renameValue.trim() || space.name)}
+                      onToggleChildren={() =>
+                        persistCollapsed({
+                          ...collapsedById,
+                          [space.id]: !collapsedById[space.id],
+                        })
+                      }
+                      onOpenAdd={() => {
+                        setAddMenuId((v) => (v === space.id ? null : space.id));
+                        setContextMenuId(null);
+                        setDeleteConfirmId(null);
+                      }}
+                      onOpenMenu={() => {
+                        if (deleteConfirmId === space.id) {
+                          setDeleteConfirmId(null);
+                          return;
+                        }
+                        if (contextMenuId === space.id) {
+                          setDeleteConfirmId(space.id);
+                        } else {
+                          setContextMenuId(space.id);
+                          setAddMenuId(null);
+                        }
+                      }}
+                      addOpen={addMenuId === space.id}
+                      menuOpen={contextMenuId === space.id}
+                      deleteConfirm={deleteConfirmId === space.id}
+                      onDeleteConfirm={() => void deleteSpace(space.id)}
+                      onDuplicate={() => void duplicateSpace(space.id)}
+                      onSetDefault={() => void setDefaultSpace(space.id)}
+                      onCopyLink={() => {
+                        void navigator.clipboard.writeText(`${window.location.origin}/projects/${encodeURIComponent(space.id)}`);
+                        setContextMenuId(null);
+                      }}
+                      onArchiveToggle={(v) => void archiveSpace(space.id, v)}
+                      onStartRename={() => {
+                        setRenameId(space.id);
+                        setRenameValue(space.name);
+                        setContextMenuId(null);
+                      }}
+                      onActionLink={(href) => {
+                        window.location.href = href;
+                      }}
+                      githubConnected={githubConnected}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          )}
+
+          {!collapsed ? (
+            <div className="pt-2">
+              <button type="button" onClick={() => setArchivedOpen((v) => !v)} className="flex h-8 w-full items-center rounded-md px-2 text-xs text-[#bdbdbd] hover:bg-[#2a2a2a]">
+                <Archive className="mr-2 h-3.5 w-3.5" /> Archived ({archivedSpaces.length})
+                <span className="ml-auto">{archivedOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}</span>
+              </button>
+
+              {archivedOpen ? (
+                <div className="ml-4 mt-1 space-y-1">
+                  {archivedSpaces.map((space) => (
+                    <div key={`arch-${space.id}`} className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-[#2a2a2a]">
+                      <span className="truncate text-xs">{space.name}</span>
+                      <button type="button" onClick={() => void archiveSpace(space.id, false)} className="ml-auto rounded px-1 py-0.5 text-[11px] hover:bg-[#1f1f1f]">Restore</button>
+                      <button type="button" onClick={() => void deleteSpace(space.id)} className="rounded px-1 py-0.5 text-[11px] hover:bg-[#1f1f1f]">Delete</button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           {!collapsed ? (
             <>
+              {starredItems.length ? (
+                <>
+                  <p className="px-2 pb-2 pt-4 text-xs uppercase tracking-wide text-[#8f8f8f]">Starred</p>
+                  <div className="space-y-1">
+                    {starredItems.map((it) => (
+                      <Link key={`star-middle-${it.href}`} href={it.href} className="flex h-8 items-center gap-2 rounded px-2 text-xs text-[#d8d8d8] hover:bg-[#2a2a2a]">
+                        <Star className="h-3.5 w-3.5 text-yellow-300" />
+                        <span className="truncate">{it.label}</span>
+                      </Link>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+
               <p className="px-2 pb-2 pt-4 text-xs uppercase tracking-wide text-[#8f8f8f]">Recommended</p>
               <Link href="/assignment" className="flex h-9 items-center gap-2 rounded-md px-2 text-sm hover:bg-[#2a2a2a]">
                 <Sparkles className="h-4 w-4" />
@@ -558,13 +714,28 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               <p className="px-2 pb-2 pt-5 text-xs uppercase tracking-wide text-[#8f8f8f]">Workspace</p>
               <div className="space-y-0.5">
                 {appPages.map((item) => (
-                  <Item
-                    key={item.label}
-                    item={item}
-                    compact={false}
-                    active={pathname.startsWith(item.href)}
-                    right={item.label === "GitHub" ? githubDot : null}
-                  />
+                  <div key={item.label} className="group flex items-center gap-1">
+                    <div className="min-w-0 flex-1">
+                      <Item
+                        item={item}
+                        compact={false}
+                        active={pathname === item.href || pathname.startsWith(`${item.href}/`)}
+                        right={item.label === "GitHub" ? githubDot : null}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => toggleStarred({ label: item.label, href: item.href })}
+                      className="rounded p-1 text-[#8f8f8f] hover:bg-[#2a2a2a] hover:text-yellow-300"
+                      title="Toggle starred"
+                    >
+                      <Star
+                        className={`h-3.5 w-3.5 ${
+                          starredItems.some((it) => it.href === item.href) ? "fill-yellow-300 text-yellow-300" : ""
+                        }`}
+                      />
+                    </button>
+                  </div>
                 ))}
               </div>
             </>
@@ -577,7 +748,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           )}
         </div>
 
-        <div className="border-t border-[#2a2a2a] p-3">
+        <div className="flex-shrink-0 border-t border-[#2a2a2a] p-3">
           <div className="space-y-0.5">
             {bottomLinks.map((item) => (
               <Item key={item.label} item={item} compact={collapsed} />

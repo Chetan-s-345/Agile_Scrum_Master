@@ -42,6 +42,36 @@ export default function SettingsPage() {
           </Link>
 
           <Link
+            href="/settings/developer-management"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Developer Management</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              Add, remove, and review developer roles.
+            </div>
+          </Link>
+
+          <Link
+            href="/teams"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Teams Hub</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              Collaboration, join requests, and team scoring.
+            </div>
+          </Link>
+
+          <Link
+            href="/developers"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Developer Tools</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              API keys, webhooks, and usage monitoring.
+            </div>
+          </Link>
+
+          <Link
             href="/settings/integrations"
             className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
           >
