@@ -34,7 +34,7 @@ export default function SignUpPage() {
         if (data?.requiresOrgSetup) {
           router.push("/org");
         } else {
-          router.push("/dashboard");
+          router.push("/board");
         }
       } else {
         const err = await response.json().catch(() => null);
@@ -138,7 +138,7 @@ export default function SignUpPage() {
 
       <p className="mt-8 text-center text-sm text-zinc-400">
         Already have an account?{" "}
-        <Link href="/auth/sign-in" className="font-semibold text-purple-500 hover:text-purple-400 transition-colors">
+        <Link href="/login" className="font-semibold text-purple-500 hover:text-purple-400 transition-colors">
           Sign In
         </Link>
       </p>

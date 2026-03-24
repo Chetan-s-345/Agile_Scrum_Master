@@ -5,10 +5,8 @@ export function middleware(request: NextRequest) {
   const token = request.cookies.get('auth_token');
   const { pathname } = request.nextUrl;
 
-  // Redirect unauthenticated users to sign-in page
-  // The matcher ensures this only runs on protected routes
-  if (!token && !pathname.startsWith('/auth/')) {
-    const loginUrl = new URL('/auth/sign-in', request.url);
+  if (!token && pathname !== '/login' && pathname !== '/register' && !pathname.startsWith('/auth/')) {
+    const loginUrl = new URL('/login', request.url);
     loginUrl.searchParams.set('from', pathname);
     return NextResponse.redirect(loginUrl);
   }
@@ -18,14 +16,21 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    '/board/:path*',
     '/dashboard/:path*',
+    '/sprint-plan/:path*',
+    '/sprints/:path*',
     '/developers/:path*',
     '/reports/:path*',
     '/settings/:path*',
+    '/assignment/:path*',
+    '/monitoring/:path*',
+    '/webhooks/:path*',
+
+    // Legacy protected paths retained for backward compatibility.
     '/sprint_plan/:path*',
+    '/sprint/:path*',
     '/tasks/:path*',
     '/assign/:path*',
-    '/auth/sign-in',
-    '/auth/sign-up', 
   ],
 };

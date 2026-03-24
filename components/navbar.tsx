@@ -1,105 +1,132 @@
 "use client";
-import * as React from "react";
+
 import Link from "next/link";
-import { Grid2x2PlusIcon, Sun, Moon } from "lucide-react";
-import { useTheme } from "./theme-provider";
-import { getMe, type MeResponse } from "@/lib/org-member-auth";
+import { usePathname } from "next/navigation";
+import { useState } from "react";
+import {
+  Bell,
+  CircleHelp,
+  Crown,
+  Plus,
+  Search,
+  Settings,
+} from "lucide-react";
 
 export function Navbar() {
-	const [mounted, setMounted] = React.useState(false);
-	const { theme, toggleTheme } = useTheme();
-	const [me, setMe] = React.useState<MeResponse | null>(null);
-	const [meLoaded, setMeLoaded] = React.useState(false);
+  const pathname = usePathname();
+  const [sendingNotification, setSendingNotification] = useState(false);
+  const [notificationStatus, setNotificationStatus] = useState<"idle" | "sent" | "error">("idle");
 
-	const activeMembership = React.useMemo(() => {
-		const memberships = Array.isArray(me?.memberships) ? me!.memberships! : [];
-		if (!memberships.length) return null;
-		const activeOrgId = me?.activeOrgId ? String(me.activeOrgId) : null;
-		if (activeOrgId) {
-			const m = memberships.find((x) => String(x?.org?.id || '') === activeOrgId);
-			if (m) return m;
-		}
-		return memberships[0];
-	}, [me]);
+  const topRoutes = [
+    { label: "Board", href: "/board" },
+    { label: "Dashboard", href: "/dashboard" },
+    { label: "Sprint Plan", href: "/sprint-plan" },
+    { label: "Scrum Master", href: "/scrum-master" },
+    { label: "Sprints", href: "/sprints" },
+    { label: "Tasks", href: "/tasks" },
+    { label: "Developers", href: "/developers" },
+    { label: "Assignment", href: "/assignment" },
+    { label: "Monitoring", href: "/monitoring" },
+    { label: "Reports", href: "/reports" },
+    { label: "Webhooks", href: "/webhooks" },
+    { label: "Settings", href: "/settings" },
+  ];
 
-	React.useEffect(() => {
-		setMounted(true);
-	}, []);
+  function isRouteActive(href: string) {
+    if (href === "/board") return pathname === "/board" || pathname.startsWith("/board/");
+    return pathname === href || pathname.startsWith(`${href}/`);
+  }
 
-	React.useEffect(() => {
-		let cancelled = false;
-		(async () => {
-			try {
-				const data = await getMe();
-				if (!cancelled) setMe(data);
-			} finally {
-				if (!cancelled) setMeLoaded(true);
-			}
-		})();
-		return () => {
-			cancelled = true;
-		};
-	}, []);
+  async function triggerEmailNotification() {
+    setSendingNotification(true);
+    setNotificationStatus("idle");
+    try {
+      const resp = await fetch("/api/notifications/brevo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trigger: "navbar-bell" }),
+      });
+      if (!resp.ok) throw new Error("Failed to send notification");
+      setNotificationStatus("sent");
+    } catch {
+      setNotificationStatus("error");
+    } finally {
+      setSendingNotification(false);
+    }
+  }
 
-	return (
-		<header className="sticky top-0 z-30 w-full border-b border-slate-200 dark:border-zinc-800 bg-white dark:bg-black backdrop-blur-sm lg:pl-0">
-			<nav className="flex h-14 w-full items-center justify-between px-4 lg:px-6">
-				{/* Mobile Logo */}
-				<Link href="/" className="flex items-center gap-2 lg:hidden" aria-label="home">
-					<Grid2x2PlusIcon className="size-6 text-blue-600" />
-					<span className="font-mono text-lg font-bold text-slate-900 dark:text-white">Sprint</span>
-				</Link>
+  return (
+    <header className="sticky top-0 z-30 w-full border-b border-[#2a2a2a] bg-[#0d0d0d]">
+      <nav className="flex h-16 items-center gap-3 border-b border-[#2a2a2a] px-4 sm:px-5">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9f9f9f]" />
+          <input
+            type="search"
+            placeholder="Search"
+            className="h-10 w-full rounded-md border border-[#2a2a2a] bg-[#121212] pl-9 pr-3 text-sm text-white outline-none placeholder:text-[#9f9f9f] focus:border-white"
+          />
+        </div>
 
-				{/* Mobile Spacer to avoid overlap with sidebar toggle */}
-				<div className="lg:hidden w-8" />
+        <button
+          type="button"
+          className="inline-flex h-10 items-center gap-2 rounded-md border border-white bg-white px-3 text-sm font-semibold text-black"
+        >
+          <Plus className="h-4 w-4" />
+          Create
+        </button>
 
-				{/* Desktop Spacer (to push profile + theme toggle to right) */}
-				<div className="hidden lg:block flex-1" />
+        <button
+          type="button"
+          className="hidden h-10 items-center gap-2 rounded-md border border-[#6a4aff] bg-[#231640] px-3 text-sm font-semibold text-[#d8c7ff] sm:inline-flex"
+        >
+          <Crown className="h-4 w-4" />
+          See plans
+        </button>
 
-				{/* Profile */}
-				{me?.user ? (
-					<div className="flex items-center gap-3 mr-2">
-						<div className="hidden sm:block text-right leading-tight">
-							<p className="text-sm font-semibold text-slate-900 dark:text-white">
-								{me.user.fullName || me.user.email}
-							</p>
-							<p className="text-xs text-slate-600 dark:text-slate-300">
-								{activeMembership?.org?.name || activeMembership?.org?.slug ? (
-									activeMembership.org.name || activeMembership.org.slug
-								) : (
-									<Link href="/org" className="hover:underline">
-										Create Org
-									</Link>
-								)}
-							</p>
-						</div>
-						<div className="w-9 h-9 rounded-full border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900 flex items-center justify-center text-sm font-bold text-slate-900 dark:text-white">
-							{String(me.user.fullName || me.user.email || "U")
-								.trim()
-								.slice(0, 1)
-								.toUpperCase()}
-						</div>
-					</div>
-				) : meLoaded ? (
-					<div className="mr-2">
-						<Link href="/auth/sign-in" className="text-sm font-semibold text-slate-900 dark:text-white hover:underline">
-							Sign In
-						</Link>
-					</div>
-				) : null}
+        <button
+          type="button"
+          onClick={() => void triggerEmailNotification()}
+          disabled={sendingNotification}
+          title={
+            sendingNotification
+              ? "Sending email..."
+              : notificationStatus === "sent"
+                ? "Email notification sent"
+                : notificationStatus === "error"
+                  ? "Failed to send email"
+                  : "Send notification email"
+          }
+          className="rounded-md border border-[#2a2a2a] p-2.5 hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Bell className="h-4 w-4" />
+        </button>
+        <button type="button" className="rounded-md border border-[#2a2a2a] p-2.5 hover:bg-[#2a2a2a]">
+          <CircleHelp className="h-4 w-4" />
+        </button>
+        <button type="button" className="rounded-md border border-[#2a2a2a] p-2.5 hover:bg-[#2a2a2a]">
+          <Settings className="h-4 w-4" />
+        </button>
 
-				{/* Theme Toggle */}
-				<div className="flex items-center gap-2">
-					<button
-						onClick={toggleTheme}
-						className="p-2 rounded-lg border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-900 transition text-slate-700 dark:text-slate-300"
-						aria-label="Toggle theme"
-					>
-						{mounted && (theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />)}
-						{!mounted && <div className="w-5 h-5" />}
-					</button>
-				</div>
-			</nav>
-	</header>
-	);
+        <div className="ml-1 flex h-9 w-9 items-center justify-center rounded-full border border-[#2a2a2a] bg-[#1a1a1a] text-xs font-bold">
+          DS
+        </div>
+      </nav>
+
+      <div className="flex h-11 items-center gap-2 overflow-x-auto px-4 sm:px-5">
+        {topRoutes.map((route) => (
+          <Link
+            key={route.href}
+            href={route.href}
+            className={`whitespace-nowrap rounded-md border px-2.5 py-1.5 text-xs font-semibold transition ${
+              isRouteActive(route.href)
+                ? "border-white bg-white text-black"
+                : "border-[#2a2a2a] text-[#b0b0b0] hover:bg-[#1a1a1a] hover:text-white"
+            }`}
+          >
+            {route.label}
+          </Link>
+        ))}
+      </div>
+    </header>
+  );
 }
