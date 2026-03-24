@@ -42,3 +42,24 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   const data = await gatewayResp.json().catch(() => null);
   return NextResponse.json(data || { error: "Upstream error" }, { status: gatewayResp.status });
 }
+
+export async function PATCH(request: Request, { params }: { params: Promise<{ sprintId: string }> }) {
+  const token = await getAuthToken();
+  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { sprintId } = await params;
+  const body = await request.json().catch(() => null) as { startDate?: string; endDate?: string } | null;
+
+  // Backend currently has no generic sprint date PATCH endpoint.
+  return NextResponse.json(
+    {
+      ok: true,
+      persisted: false,
+      sprintId,
+      startDate: body?.startDate,
+      endDate: body?.endDate,
+      detail: "Sprint date update endpoint is not available upstream yet",
+    },
+    { status: 202 }
+  );
+}

@@ -1,132 +1,765 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
+  ChevronDown,
   Bell,
   CircleHelp,
   Crown,
   Plus,
   Search,
   Settings,
+  FileText,
+  ClipboardList,
+  Clock3,
+  User,
+  X,
 } from "lucide-react";
 
+type Project = { id: string; name: string };
+type Sprint = { id: string; name: string; projectId: string };
+type Developer = { id: string; name?: string; fullName?: string; email?: string };
+type SearchItem = { id: string; type: "task" | "sprint" | "developer" | "page"; title: string; subtitle: string; href: string };
+type NotificationsItem = {
+  id: string;
+  text: string;
+  href: string;
+  createdAt: string;
+  actor: { initials: string };
+  read: boolean;
+};
+
+type ChangelogItem = { id: string; title: string; date: string; detail: string };
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function relTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "just now";
+  const diff = Date.now() - date.getTime();
+  const mins = Math.max(1, Math.floor(diff / 60000));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function useOutsideClick<T extends HTMLElement>(onClose: () => void) {
+  const ref = useRef<T | null>(null);
+  useEffect(() => {
+    function onMouseDown(event: MouseEvent) {
+      if (!ref.current) return;
+      if (ref.current.contains(event.target as Node)) return;
+      onClose();
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [onClose]);
+  return ref;
+}
+
 export function Navbar() {
-  const pathname = usePathname();
-  const [sendingNotification, setSendingNotification] = useState(false);
-  const [notificationStatus, setNotificationStatus] = useState<"idle" | "sent" | "error">("idle");
+  const router = useRouter();
 
-  const topRoutes = [
-    { label: "Board", href: "/board" },
-    { label: "Dashboard", href: "/dashboard" },
-    { label: "Sprint Plan", href: "/sprint-plan" },
-    { label: "Scrum Master", href: "/scrum-master" },
-    { label: "Sprints", href: "/sprints" },
-    { label: "Tasks", href: "/tasks" },
-    { label: "Developers", href: "/developers" },
-    { label: "Assignment", href: "/assignment" },
-    { label: "Monitoring", href: "/monitoring" },
-    { label: "Reports", href: "/reports" },
-    { label: "Webhooks", href: "/webhooks" },
-    { label: "Settings", href: "/settings" },
-  ];
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProjectId, setCurrentProjectId] = useState("");
+  const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [developers, setDevelopers] = useState<Developer[]>([]);
 
-  function isRouteActive(href: string) {
-    if (href === "/board") return pathname === "/board" || pathname.startsWith("/board/");
-    return pathname === href || pathname.startsWith(`${href}/`);
+  const [searchInput, setSearchInput] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState<{ tasks: SearchItem[]; sprints: SearchItem[]; developers: SearchItem[]; pages: SearchItem[] }>({
+    tasks: [],
+    sprints: [],
+    developers: [],
+    pages: [],
+  });
+  const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createTab, setCreateTab] = useState<"task" | "sprint" | "page" | "form">("task");
+  const [creating, setCreating] = useState(false);
+
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskDescription, setTaskDescription] = useState("");
+  const [taskAssigneeId, setTaskAssigneeId] = useState("");
+  const [taskPriority, setTaskPriority] = useState("medium");
+  const [taskSprintId, setTaskSprintId] = useState("");
+  const [taskPoints, setTaskPoints] = useState<number | "">("");
+
+  const [sprintName, setSprintName] = useState("");
+  const [sprintGoal, setSprintGoal] = useState("");
+  const [sprintStartDate, setSprintStartDate] = useState("");
+  const [sprintEndDate, setSprintEndDate] = useState("");
+
+  const [pageTitle, setPageTitle] = useState("");
+  const [pageContent, setPageContent] = useState("");
+  const [formName, setFormName] = useState("");
+  const [formDescription, setFormDescription] = useState("");
+
+  const [plansOpen, setPlansOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [changelog, setChangelog] = useState<ChangelogItem[]>([]);
+
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationsItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+
+  const [avatarOpen, setAvatarOpen] = useState(false);
+  const [switchProjectOpen, setSwitchProjectOpen] = useState(false);
+  const [userName, setUserName] = useState("Developer");
+  const [userEmail, setUserEmail] = useState("unknown@local");
+
+  const [toast, setToast] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
+  const searchRef = useOutsideClick<HTMLDivElement>(() => setSearchOpen(false));
+  const helpRef = useOutsideClick<HTMLDivElement>(() => setHelpOpen(false));
+  const notifRef = useOutsideClick<HTMLDivElement>(() => setNotificationsOpen(false));
+  const avatarRef = useOutsideClick<HTMLDivElement>(() => setAvatarOpen(false));
+
+  const flatSearchResults = useMemo(
+    () => [...searchResults.tasks, ...searchResults.sprints, ...searchResults.developers, ...searchResults.pages],
+    [searchResults]
+  );
+
+  useEffect(() => {
+    let ignore = false;
+    async function loadBootData() {
+      const [projectsResp, sprintsResp, devResp, meResp] = await Promise.all([
+        fetch("/api/projects", { cache: "no-store" }),
+        fetch("/api/sprints", { cache: "no-store" }),
+        fetch("/api/developers", { cache: "no-store" }),
+        fetch("/api/auth/me", { cache: "no-store" }),
+      ]);
+      const projectsData = await projectsResp.json().catch(() => null) as { items?: Project[] } | null;
+      const sprintsData = await sprintsResp.json().catch(() => null) as { items?: Sprint[] } | null;
+      const devData = await devResp.json().catch(() => null) as { items?: Developer[] } | null;
+      const meData = await meResp.json().catch(() => null) as Record<string, unknown> | null;
+      if (ignore) return;
+
+      const projectItems = Array.isArray(projectsData?.items) ? projectsData!.items : [];
+      setProjects(projectItems);
+      if (!currentProjectId && projectItems[0]?.id) setCurrentProjectId(String(projectItems[0].id));
+      setSprints(Array.isArray(sprintsData?.items) ? sprintsData!.items : []);
+      setDevelopers(Array.isArray(devData?.items) ? devData!.items : []);
+
+      const user = (meData?.user || meData?.member || meData || {}) as Record<string, unknown>;
+      const nextName = asString(user.name) || asString(user.fullName) || asString(user.email) || "Developer";
+      const nextEmail = asString(user.email) || "unknown@local";
+      setUserName(nextName);
+      setUserEmail(nextEmail);
+    }
+    void loadBootData();
+    return () => {
+      ignore = true;
+    };
+  }, [currentProjectId]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 2800);
+    return () => window.clearTimeout(t);
+  }, [toast]);
+
+  useEffect(() => {
+    const query = searchInput.trim();
+    if (query.length < 2) {
+      setSearchResults({ tasks: [], sprints: [], developers: [], pages: [] });
+      setSearchLoading(false);
+      return;
+    }
+    const timeoutId = window.setTimeout(async () => {
+      setSearchLoading(true);
+      const searchParams = new URLSearchParams({ q: query });
+      if (currentProjectId) searchParams.set("projectId", currentProjectId);
+      const resp = await fetch(`/api/search?${searchParams.toString()}`, { cache: "no-store" });
+      const data = await resp.json().catch(() => null) as {
+        tasks?: SearchItem[];
+        sprints?: SearchItem[];
+        developers?: SearchItem[];
+        pages?: SearchItem[];
+      } | null;
+      setSearchResults({
+        tasks: Array.isArray(data?.tasks) ? data!.tasks : [],
+        sprints: Array.isArray(data?.sprints) ? data!.sprints : [],
+        developers: Array.isArray(data?.developers) ? data!.developers : [],
+        pages: Array.isArray(data?.pages) ? data!.pages : [],
+      });
+      setSearchOpen(true);
+      setSearchLoading(false);
+      setActiveSearchIndex(-1);
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [currentProjectId, searchInput]);
+
+  useEffect(() => {
+    async function loadNotifications() {
+      setNotificationsLoading(true);
+      const [listResp, unreadResp] = await Promise.all([
+        fetch("/api/notifications", { cache: "no-store" }),
+        fetch("/api/notifications?unread=true", { cache: "no-store" }),
+      ]);
+
+      const listData = await listResp.json().catch(() => null) as { items?: NotificationsItem[] } | null;
+      const unreadData = await unreadResp.json().catch(() => null) as { unreadCount?: number; items?: NotificationsItem[] } | null;
+
+      setNotifications(Array.isArray(listData?.items) ? listData!.items : []);
+      const unreadFallback = Array.isArray(unreadData?.items) ? unreadData!.items.length : 0;
+      setUnreadCount(Number(unreadData?.unreadCount || unreadFallback || 0));
+      setNotificationsLoading(false);
+    }
+
+    void loadNotifications();
+    const pollId = window.setInterval(() => {
+      void loadNotifications();
+    }, 25000);
+
+    let socketCleanup: (() => void) | null = null;
+    void import("socket.io-client")
+      .then(({ io }) => {
+        const socket = io(process.env.NEXT_PUBLIC_API_URL || "", { autoConnect: true, transports: ["websocket", "polling"] });
+        socket.on("notifications", () => {
+          void loadNotifications();
+        });
+        socketCleanup = () => socket.disconnect();
+      })
+      .catch(() => {
+        socketCleanup = null;
+      });
+
+    return () => {
+      window.clearInterval(pollId);
+      if (socketCleanup) socketCleanup();
+    };
+  }, []);
+
+  async function markAllRead() {
+    await fetch("/api/notifications/read-all", { method: "PATCH" });
+    const resp = await fetch("/api/notifications", { cache: "no-store" });
+    const data = await resp.json().catch(() => null) as { items?: NotificationsItem[] } | null;
+    setNotifications(Array.isArray(data?.items) ? data!.items : []);
+    setUnreadCount(0);
   }
 
-  async function triggerEmailNotification() {
-    setSendingNotification(true);
-    setNotificationStatus("idle");
+  async function openNotification(item: NotificationsItem) {
+    await fetch(`/api/notifications/${encodeURIComponent(item.id)}/read`, { method: "PATCH" });
+    setNotifications((prev) => prev.map((n) => (n.id === item.id ? { ...n, read: true } : n)));
+    setUnreadCount((prev) => Math.max(0, prev - 1));
+    setNotificationsOpen(false);
+    router.push(item.href);
+  }
+
+  async function submitCreate() {
+    setCreating(true);
     try {
-      const resp = await fetch("/api/notifications/brevo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trigger: "navbar-bell" }),
-      });
-      if (!resp.ok) throw new Error("Failed to send notification");
-      setNotificationStatus("sent");
+      if (createTab === "task") {
+        const selectedSprint = sprints.find((s) => String(s.id) === String(taskSprintId));
+        const projectId = selectedSprint?.projectId || currentProjectId;
+        const resp = await fetch("/api/tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: taskTitle,
+            description: taskDescription || undefined,
+            projectId,
+            sprintId: taskSprintId,
+            priority: taskPriority,
+            storyPoints: taskPoints === "" ? 0 : Number(taskPoints),
+          }),
+        });
+        const payload = await resp.json().catch(() => null) as { task?: { id?: string } } | null;
+        if (!resp.ok) throw new Error("Failed to create task");
+
+        const createdTaskId = asString(payload?.task?.id);
+        if (createdTaskId && taskAssigneeId) {
+          await fetch("/api/assignment/assign-explicit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ taskId: createdTaskId, sprintId: taskSprintId, developerId: taskAssigneeId }),
+          });
+        }
+        setToast({ text: "Task created", type: "success" });
+      }
+
+      if (createTab === "sprint") {
+        const resp = await fetch("/api/sprints", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: sprintName,
+            goal: sprintGoal,
+            startDate: sprintStartDate,
+            endDate: sprintEndDate,
+            projectId: currentProjectId,
+          }),
+        });
+        if (!resp.ok) throw new Error("Failed to create sprint");
+        setToast({ text: "Sprint created", type: "success" });
+      }
+
+      if (createTab === "page") {
+        const resp = await fetch("/api/pages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: pageTitle, content: pageContent }),
+        });
+        if (!resp.ok) throw new Error("Failed to create page");
+        setToast({ text: "Page created", type: "success" });
+      }
+
+      if (createTab === "form") {
+        const resp = await fetch("/api/forms", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: formName, description: formDescription }),
+        });
+        if (!resp.ok) throw new Error("Failed to create form");
+        setToast({ text: "Form created", type: "success" });
+      }
+
+      setCreateOpen(false);
     } catch {
-      setNotificationStatus("error");
+      setToast({ text: "Create failed", type: "error" });
     } finally {
-      setSendingNotification(false);
+      setCreating(false);
     }
   }
 
+  async function loadChangelog() {
+    const resp = await fetch("/api/changelog", { cache: "no-store" });
+    const data = await resp.json().catch(() => null) as { items?: ChangelogItem[] } | null;
+    setChangelog(Array.isArray(data?.items) ? data!.items : []);
+    setWhatsNewOpen(true);
+  }
+
+  function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (!searchOpen || !flatSearchResults.length) {
+      if (event.key === "Escape") setSearchOpen(false);
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveSearchIndex((prev) => Math.min(prev + 1, flatSearchResults.length - 1));
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveSearchIndex((prev) => Math.max(prev - 1, 0));
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const item = flatSearchResults[activeSearchIndex] || flatSearchResults[0];
+      if (item) {
+        setSearchOpen(false);
+        router.push(item.href);
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      setSearchOpen(false);
+    }
+  }
+
+  async function logout() {
+    await fetch("/api/auth/sign-out", { method: "POST" });
+    router.push("/login");
+  }
+
   return (
-    <header className="sticky top-0 z-30 w-full border-b border-[#2a2a2a] bg-[#0d0d0d]">
-      <nav className="flex h-16 items-center gap-3 border-b border-[#2a2a2a] px-4 sm:px-5">
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9f9f9f]" />
-          <input
-            type="search"
-            placeholder="Search"
-            className="h-10 w-full rounded-md border border-[#2a2a2a] bg-[#121212] pl-9 pr-3 text-sm text-white outline-none placeholder:text-[#9f9f9f] focus:border-white"
-          />
+    <>
+      <header className="sticky top-0 z-30 w-full border-b border-[#2a2a2a] bg-[#0d0d0d]">
+        <nav className="flex h-16 items-center gap-2 px-4 sm:px-5">
+          <div ref={searchRef} className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9f9f9f]" />
+            <input
+              type="search"
+              value={searchInput}
+              onFocus={() => {
+                setSearchFocused(true);
+                if (searchInput.trim().length >= 2) setSearchOpen(true);
+              }}
+              onBlur={() => setSearchFocused(false)}
+              onChange={(event) => setSearchInput(event.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Search tasks, sprints, developers, pages"
+              className={`h-10 w-full rounded-md border bg-[#121212] pl-9 pr-3 text-sm text-white outline-none transition-all duration-200 placeholder:text-[#9f9f9f] ${searchFocused ? "border-white shadow-[0_0_0_2px_rgba(255,255,255,0.15)]" : "border-[#2a2a2a]"}`}
+            />
+
+            {searchOpen ? (
+              <div className="absolute left-0 right-0 top-12 max-h-[65vh] overflow-auto rounded-md border border-[#2a2a2a] bg-[#111111] p-2 shadow-2xl">
+                {searchLoading ? <p className="px-2 py-2 text-xs text-[#999]">Searching...</p> : null}
+                {!searchLoading && !flatSearchResults.length ? <p className="px-2 py-2 text-xs text-[#999]">No results</p> : null}
+                <SearchGroup
+                  title="Tasks"
+                  icon={<ClipboardList className="h-3.5 w-3.5" />}
+                  items={searchResults.tasks}
+                  activeSearchIndex={activeSearchIndex}
+                  offset={0}
+                  onClick={(item) => {
+                    setSearchOpen(false);
+                    router.push(item.href);
+                  }}
+                />
+                <SearchGroup
+                  title="Sprints"
+                  icon={<Clock3 className="h-3.5 w-3.5" />}
+                  items={searchResults.sprints}
+                  activeSearchIndex={activeSearchIndex}
+                  offset={searchResults.tasks.length}
+                  onClick={(item) => {
+                    setSearchOpen(false);
+                    router.push(item.href);
+                  }}
+                />
+                <SearchGroup
+                  title="Developers"
+                  icon={<User className="h-3.5 w-3.5" />}
+                  items={searchResults.developers}
+                  activeSearchIndex={activeSearchIndex}
+                  offset={searchResults.tasks.length + searchResults.sprints.length}
+                  onClick={(item) => {
+                    setSearchOpen(false);
+                    router.push(item.href);
+                  }}
+                />
+                <SearchGroup
+                  title="Pages"
+                  icon={<FileText className="h-3.5 w-3.5" />}
+                  items={searchResults.pages}
+                  activeSearchIndex={activeSearchIndex}
+                  offset={searchResults.tasks.length + searchResults.sprints.length + searchResults.developers.length}
+                  onClick={(item) => {
+                    setSearchOpen(false);
+                    router.push(item.href);
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+
+          <button type="button" onClick={() => setCreateOpen(true)} className="inline-flex h-10 items-center gap-2 rounded-md border border-white bg-white px-3 text-sm font-semibold text-black">
+            <Plus className="h-4 w-4" />
+            Create
+          </button>
+
+          <button type="button" onClick={() => setPlansOpen(true)} className="hidden h-10 items-center gap-2 rounded-md border border-[#5d3ff7] bg-[#5d3ff7] px-3 text-sm font-semibold text-white sm:inline-flex">
+            <Crown className="h-4 w-4" />
+            See plans
+          </button>
+
+          <div ref={notifRef} className="relative">
+            <button type="button" onClick={() => setNotificationsOpen((prev) => !prev)} className="relative rounded-md border border-[#2a2a2a] p-2.5 hover:bg-[#2a2a2a]" title="Notifications">
+              <Bell className="h-4 w-4" />
+              {unreadCount > 0 ? <span className="absolute -right-1 -top-1 rounded-full bg-white px-1.5 text-[10px] font-bold text-black">{unreadCount}</span> : null}
+            </button>
+
+            {notificationsOpen ? (
+              <div className="absolute right-0 top-12 w-[360px] rounded-md border border-[#2a2a2a] bg-[#111111] p-2 shadow-2xl">
+                <div className="mb-2 flex items-center justify-between px-2 py-1">
+                  <p className="text-xs font-semibold text-white">Notifications</p>
+                  <button onClick={() => void markAllRead()} className="text-xs text-[#a9a9a9] hover:text-white">Mark all read</button>
+                </div>
+                {notificationsLoading ? <p className="px-2 py-3 text-xs text-[#919191]">Loading...</p> : null}
+                {!notificationsLoading && !notifications.length ? <p className="px-2 py-3 text-xs text-[#919191]">No notifications</p> : null}
+                <div className="max-h-[320px] overflow-auto">
+                  {notifications.slice(0, 10).map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => void openNotification(item)}
+                      className={`flex w-full items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-[#1c1c1c] ${item.read ? "opacity-70" : "opacity-100"}`}
+                    >
+                      <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#333] bg-[#181818] text-[10px] font-bold text-white">{item.actor.initials}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs text-white">{item.text}</span>
+                        <span className="text-[11px] text-[#9a9a9a]">{relTime(item.createdAt)}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div ref={helpRef} className="relative">
+            <button type="button" onClick={() => setHelpOpen((prev) => !prev)} className="rounded-md border border-[#2a2a2a] p-2.5 hover:bg-[#2a2a2a]">
+              <CircleHelp className="h-4 w-4" />
+            </button>
+
+            {helpOpen ? (
+              <div className="absolute right-0 top-12 w-56 rounded-md border border-[#2a2a2a] bg-[#111111] p-1.5 shadow-2xl">
+                <a href="https://docs.github.com/copilot" target="_blank" rel="noreferrer" className="block rounded-md px-3 py-2 text-xs text-[#d3d3d3] hover:bg-[#1c1c1c] hover:text-white">Documentation</a>
+                <button onClick={() => setShortcutsOpen(true)} className="block w-full rounded-md px-3 py-2 text-left text-xs text-[#d3d3d3] hover:bg-[#1c1c1c] hover:text-white">Keyboard shortcuts</button>
+                <button
+                  onClick={() => {
+                    setHelpOpen(false);
+                    void loadChangelog();
+                  }}
+                  className="block w-full rounded-md px-3 py-2 text-left text-xs text-[#d3d3d3] hover:bg-[#1c1c1c] hover:text-white"
+                >
+                  What&apos;s new
+                </button>
+                <a href="mailto:support@agilescrummaster.local" className="block rounded-md px-3 py-2 text-xs text-[#d3d3d3] hover:bg-[#1c1c1c] hover:text-white">Contact support</a>
+              </div>
+            ) : null}
+          </div>
+
+          <button type="button" onClick={() => router.push("/settings")} className="rounded-md border border-[#2a2a2a] p-2.5 hover:bg-[#2a2a2a]">
+            <Settings className="h-4 w-4" />
+          </button>
+
+          <div ref={avatarRef} className="relative">
+            <button type="button" onClick={() => setAvatarOpen((prev) => !prev)} className="ml-1 inline-flex h-9 items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#1a1a1a] px-2 text-xs font-bold">
+              {userName.slice(0, 2).toUpperCase() || "DS"}
+              <ChevronDown className="h-3 w-3 text-[#9f9f9f]" />
+            </button>
+
+            {avatarOpen ? (
+              <div className="absolute right-0 top-12 w-64 rounded-md border border-[#2a2a2a] bg-[#111111] p-2 shadow-2xl">
+                <div className="mb-2 rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2">
+                  <p className="text-xs font-semibold text-white">{userName}</p>
+                  <p className="text-[11px] text-[#9a9a9a]">{userEmail}</p>
+                </div>
+                <Link href="/settings/profile" className="block rounded-md px-3 py-2 text-xs text-[#d3d3d3] hover:bg-[#1c1c1c] hover:text-white">Profile</Link>
+                <Link href="/settings/preferences" className="block rounded-md px-3 py-2 text-xs text-[#d3d3d3] hover:bg-[#1c1c1c] hover:text-white">Preferences</Link>
+                <button onClick={() => setSwitchProjectOpen(true)} className="block w-full rounded-md px-3 py-2 text-left text-xs text-[#d3d3d3] hover:bg-[#1c1c1c] hover:text-white">Switch project</button>
+                <hr className="my-2 border-[#2a2a2a]" />
+                <button onClick={() => void logout()} className="block w-full rounded-md px-3 py-2 text-left text-xs text-[#ffb4b4] hover:bg-[#2a1616]">Log out</button>
+              </div>
+            ) : null}
+          </div>
+        </nav>
+      </header>
+
+      {createOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4">
+          <div className="w-full max-w-2xl rounded-lg border border-[#2a2a2a] bg-[#101010] p-4">
+            <div className="mb-4 flex items-center justify-between">
+              <p className="text-sm font-semibold text-white">Global Create</p>
+              <button onClick={() => setCreateOpen(false)} className="rounded-md border border-[#2a2a2a] p-1.5 text-[#bbb] hover:bg-[#212121]"><X className="h-4 w-4" /></button>
+            </div>
+
+            <div className="mb-4 flex gap-2 border-b border-[#2a2a2a] pb-2">
+              {(["task", "sprint", "page", "form"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setCreateTab(tab)}
+                  className={`rounded-md border px-3 py-1.5 text-xs font-semibold capitalize ${createTab === tab ? "border-white bg-white text-black" : "border-[#2a2a2a] text-[#b9b9b9]"}`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+
+            {createTab === "task" ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <input className="rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Title" value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} />
+                <select className="rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" value={taskAssigneeId} onChange={(e) => setTaskAssigneeId(e.target.value)}>
+                  <option value="">Assignee</option>
+                  {developers.map((dev) => <option key={dev.id} value={dev.id}>{dev.name || dev.fullName || dev.email || "Developer"}</option>)}
+                </select>
+                <textarea className="sm:col-span-2 min-h-[88px] rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Description" value={taskDescription} onChange={(e) => setTaskDescription(e.target.value)} />
+                <select className="rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" value={taskPriority} onChange={(e) => setTaskPriority(e.target.value)}>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="critical">Critical</option>
+                </select>
+                <select className="rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" value={taskSprintId} onChange={(e) => setTaskSprintId(e.target.value)}>
+                  <option value="">Sprint</option>
+                  {sprints.map((sprint) => <option key={sprint.id} value={sprint.id}>{sprint.name}</option>)}
+                </select>
+                <input className="rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Story points" type="number" min={0} value={taskPoints} onChange={(e) => setTaskPoints(e.target.value === "" ? "" : Number(e.target.value))} />
+              </div>
+            ) : null}
+
+            {createTab === "sprint" ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <input className="rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Name" value={sprintName} onChange={(e) => setSprintName(e.target.value)} />
+                <input className="rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Goal" value={sprintGoal} onChange={(e) => setSprintGoal(e.target.value)} />
+                <input className="rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" type="date" value={sprintStartDate} onChange={(e) => setSprintStartDate(e.target.value)} />
+                <input className="rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" type="date" value={sprintEndDate} onChange={(e) => setSprintEndDate(e.target.value)} />
+              </div>
+            ) : null}
+
+            {createTab === "page" ? (
+              <div className="space-y-3">
+                <input className="w-full rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Page title" value={pageTitle} onChange={(e) => setPageTitle(e.target.value)} />
+                <textarea className="min-h-[160px] w-full rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 font-mono text-sm text-white" placeholder="# Markdown content" value={pageContent} onChange={(e) => setPageContent(e.target.value)} />
+              </div>
+            ) : null}
+
+            {createTab === "form" ? (
+              <div className="space-y-3">
+                <input className="w-full rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Form name" value={formName} onChange={(e) => setFormName(e.target.value)} />
+                <textarea className="min-h-[120px] w-full rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Description" value={formDescription} onChange={(e) => setFormDescription(e.target.value)} />
+              </div>
+            ) : null}
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button onClick={() => setCreateOpen(false)} className="rounded-md border border-[#2a2a2a] px-3 py-2 text-xs text-[#ccc]">Cancel</button>
+              <button onClick={() => void submitCreate()} disabled={creating} className="rounded-md border border-white bg-white px-3 py-2 text-xs font-semibold text-black disabled:opacity-60">{creating ? "Creating..." : "Create"}</button>
+            </div>
+          </div>
         </div>
+      ) : null}
 
-        <button
-          type="button"
-          className="inline-flex h-10 items-center gap-2 rounded-md border border-white bg-white px-3 text-sm font-semibold text-black"
-        >
-          <Plus className="h-4 w-4" />
-          Create
-        </button>
-
-        <button
-          type="button"
-          className="hidden h-10 items-center gap-2 rounded-md border border-[#6a4aff] bg-[#231640] px-3 text-sm font-semibold text-[#d8c7ff] sm:inline-flex"
-        >
-          <Crown className="h-4 w-4" />
-          See plans
-        </button>
-
-        <button
-          type="button"
-          onClick={() => void triggerEmailNotification()}
-          disabled={sendingNotification}
-          title={
-            sendingNotification
-              ? "Sending email..."
-              : notificationStatus === "sent"
-                ? "Email notification sent"
-                : notificationStatus === "error"
-                  ? "Failed to send email"
-                  : "Send notification email"
-          }
-          className="rounded-md border border-[#2a2a2a] p-2.5 hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <Bell className="h-4 w-4" />
-        </button>
-        <button type="button" className="rounded-md border border-[#2a2a2a] p-2.5 hover:bg-[#2a2a2a]">
-          <CircleHelp className="h-4 w-4" />
-        </button>
-        <button type="button" className="rounded-md border border-[#2a2a2a] p-2.5 hover:bg-[#2a2a2a]">
-          <Settings className="h-4 w-4" />
-        </button>
-
-        <div className="ml-1 flex h-9 w-9 items-center justify-center rounded-full border border-[#2a2a2a] bg-[#1a1a1a] text-xs font-bold">
-          DS
+      {plansOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4">
+          <div className="w-full max-w-4xl rounded-lg border border-[#2a2a2a] bg-[#101010] p-4">
+            <div className="mb-4 flex items-center justify-between">
+              <p className="text-sm font-semibold text-white">Plans</p>
+              <button onClick={() => setPlansOpen(false)} className="rounded-md border border-[#2a2a2a] p-1.5 text-[#bbb]"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <PlanCard title="Free" price="$0" features={["1 project", "Basic board", "Community support"]} />
+              <PlanCard title="Pro" price="$29" features={["Unlimited projects", "Automation", "Advanced reporting"]} featured />
+              <PlanCard title="Enterprise" price="Custom" features={["SAML/SSO", "Audit logs", "Dedicated support"]} />
+            </div>
+            <div className="mt-4 overflow-auto rounded-md border border-[#2a2a2a]">
+              <table className="min-w-full text-left text-xs">
+                <thead className="bg-[#171717] text-[#dfdfdf]"><tr><th className="px-3 py-2">Feature</th><th className="px-3 py-2">Free</th><th className="px-3 py-2">Pro</th><th className="px-3 py-2">Enterprise</th></tr></thead>
+                <tbody>
+                  <tr className="border-t border-[#2a2a2a]"><td className="px-3 py-2">Boards</td><td className="px-3 py-2">1</td><td className="px-3 py-2">Unlimited</td><td className="px-3 py-2">Unlimited</td></tr>
+                  <tr className="border-t border-[#2a2a2a]"><td className="px-3 py-2">Automation</td><td className="px-3 py-2">No</td><td className="px-3 py-2">Yes</td><td className="px-3 py-2">Yes</td></tr>
+                  <tr className="border-t border-[#2a2a2a]"><td className="px-3 py-2">Support</td><td className="px-3 py-2">Community</td><td className="px-3 py-2">Priority</td><td className="px-3 py-2">Dedicated</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4 flex justify-end"><button onClick={() => router.push("/settings/billing")} className="rounded-md border border-white bg-white px-3 py-2 text-xs font-semibold text-black">Go to billing</button></div>
+          </div>
         </div>
-      </nav>
+      ) : null}
 
-      <div className="flex h-11 items-center gap-2 overflow-x-auto px-4 sm:px-5">
-        {topRoutes.map((route) => (
-          <Link
-            key={route.href}
-            href={route.href}
-            className={`whitespace-nowrap rounded-md border px-2.5 py-1.5 text-xs font-semibold transition ${
-              isRouteActive(route.href)
-                ? "border-white bg-white text-black"
-                : "border-[#2a2a2a] text-[#b0b0b0] hover:bg-[#1a1a1a] hover:text-white"
-            }`}
-          >
-            {route.label}
-          </Link>
-        ))}
+      {shortcutsOpen ? (
+        <SimpleModal title="Keyboard Shortcuts" onClose={() => setShortcutsOpen(false)}>
+          <table className="min-w-full text-left text-xs">
+            <tbody>
+              <tr className="border-t border-[#2a2a2a]"><td className="px-2 py-2 text-[#9f9f9f]">Search</td><td className="px-2 py-2">/</td></tr>
+              <tr className="border-t border-[#2a2a2a]"><td className="px-2 py-2 text-[#9f9f9f]">Open create</td><td className="px-2 py-2">C</td></tr>
+              <tr className="border-t border-[#2a2a2a]"><td className="px-2 py-2 text-[#9f9f9f]">Close dialog</td><td className="px-2 py-2">Esc</td></tr>
+              <tr className="border-t border-[#2a2a2a]"><td className="px-2 py-2 text-[#9f9f9f]">Search navigate</td><td className="px-2 py-2">↑ / ↓ / Enter</td></tr>
+            </tbody>
+          </table>
+        </SimpleModal>
+      ) : null}
+
+      {whatsNewOpen ? (
+        <SimpleModal title="What's New" onClose={() => setWhatsNewOpen(false)}>
+          <div className="space-y-2">
+            {changelog.map((item) => (
+              <div key={item.id} className="rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2">
+                <p className="text-xs font-semibold text-white">{item.title}</p>
+                <p className="text-[11px] text-[#9a9a9a]">{item.date}</p>
+                <p className="mt-1 text-xs text-[#cccccc]">{item.detail}</p>
+              </div>
+            ))}
+          </div>
+        </SimpleModal>
+      ) : null}
+
+      {switchProjectOpen ? (
+        <SimpleModal title="Switch Project" onClose={() => setSwitchProjectOpen(false)}>
+          <div className="space-y-2">
+            {projects.map((project) => (
+              <button
+                key={project.id}
+                onClick={() => {
+                  setCurrentProjectId(project.id);
+                  setSwitchProjectOpen(false);
+                  setToast({ text: `Switched to ${project.name}`, type: "success" });
+                }}
+                className={`block w-full rounded-md border px-3 py-2 text-left text-xs ${String(project.id) === String(currentProjectId) ? "border-white bg-white text-black" : "border-[#2a2a2a] bg-[#151515] text-white"}`}
+              >
+                {project.name}
+              </button>
+            ))}
+          </div>
+        </SimpleModal>
+      ) : null}
+
+      {toast ? (
+        <div className={`fixed bottom-5 right-5 z-50 rounded-md border px-3 py-2 text-xs font-semibold ${toast.type === "success" ? "border-[#3c8a56] bg-[#183523] text-[#b5f1c7]" : "border-[#8a3c3c] bg-[#351818] text-[#ffcccc]"}`}>
+          {toast.text}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function SearchGroup({
+  title,
+  icon,
+  items,
+  activeSearchIndex,
+  offset,
+  onClick,
+}: {
+  title: string;
+  icon: ReactNode;
+  items: SearchItem[];
+  activeSearchIndex: number;
+  offset: number;
+  onClick: (item: SearchItem) => void;
+}) {
+  if (!items.length) return null;
+  return (
+    <div className="mb-2">
+      <p className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-wide text-[#969696]">{title}</p>
+      <div className="space-y-1">
+        {items.map((item, index) => {
+          const isActive = offset + index === activeSearchIndex;
+          return (
+            <button
+              key={`${item.type}-${item.id}`}
+              onClick={() => onClick(item)}
+              className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left ${isActive ? "bg-[#262626]" : "hover:bg-[#1a1a1a]"}`}
+            >
+              <span className="text-[#a5a5a5]">{icon}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs text-white">{item.title}</span>
+                <span className="text-[11px] text-[#979797]">{item.subtitle}</span>
+              </span>
+            </button>
+          );
+        })}
       </div>
-    </header>
+    </div>
+  );
+}
+
+function SimpleModal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4">
+      <div className="w-full max-w-xl rounded-lg border border-[#2a2a2a] bg-[#101010] p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-sm font-semibold text-white">{title}</p>
+          <button onClick={onClose} className="rounded-md border border-[#2a2a2a] p-1.5 text-[#bbb]"><X className="h-4 w-4" /></button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function PlanCard({ title, price, features, featured = false }: { title: string; price: string; features: string[]; featured?: boolean }) {
+  return (
+    <div className={`rounded-md border p-3 ${featured ? "border-white bg-[#191919]" : "border-[#2a2a2a] bg-[#151515]"}`}>
+      <p className="text-sm font-semibold text-white">{title}</p>
+      <p className="mt-1 text-xl font-bold text-white">{price}</p>
+      <ul className="mt-2 space-y-1 text-xs text-[#c7c7c7]">
+        {features.map((item) => <li key={item}>• {item}</li>)}
+      </ul>
+    </div>
   );
 }

@@ -577,9 +577,16 @@ CREATE TABLE projects (
     color               VARCHAR(7) DEFAULT '#2563EB',
     avatar_emoji        VARCHAR(10) DEFAULT '🚀',
     settings            JSONB DEFAULT '{}',
+    space_order         INT DEFAULT 0,
+    is_space_archived   BOOLEAN DEFAULT FALSE,
+    is_default_space    BOOLEAN DEFAULT FALSE,
     created_at          TIMESTAMP DEFAULT NOW(),
     updated_at          TIMESTAMP DEFAULT NOW()
 );
+
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS space_order INT DEFAULT 0;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_space_archived BOOLEAN DEFAULT FALSE;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_default_space BOOLEAN DEFAULT FALSE;
 
 CREATE TABLE project_members (
     id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1179,6 +1186,65 @@ CREATE TABLE github_integration (
     created_at          TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE github_repos (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    github_repo_id      BIGINT,
+    owner_connection_id UUID REFERENCES github_integration(id) ON DELETE SET NULL,
+    name                VARCHAR(200) NOT NULL,
+    full_name           VARCHAR(260) NOT NULL,
+    description         TEXT,
+    private             BOOLEAN DEFAULT FALSE,
+    language            VARCHAR(80),
+    stars               INT DEFAULT 0,
+    html_url            TEXT,
+    synced_at           TIMESTAMP,
+    created_at          TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW(),
+    UNIQUE(full_name)
+);
+
+CREATE TABLE goals (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    title               VARCHAR(300) NOT NULL,
+    description         TEXT,
+    status              VARCHAR(30) NOT NULL DEFAULT 'planned' CHECK (status IN ('planned','in_progress','completed')),
+    priority            VARCHAR(20) NOT NULL DEFAULT 'medium' CHECK (priority IN ('high','medium','low')),
+    quarter             VARCHAR(10),
+    category            VARCHAR(80),
+    due_date            DATE,
+    progress            INT NOT NULL DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
+    project_id          UUID REFERENCES projects(id) ON DELETE SET NULL,
+    created_by          UUID REFERENCES team_members(id),
+    key_results         JSONB DEFAULT '[]'::jsonb,
+    activity_log        JSONB DEFAULT '[]'::jsonb,
+    created_at          TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE goal_assignees (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    goal_id             UUID NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    user_id             UUID NOT NULL REFERENCES team_members(id) ON DELETE CASCADE,
+    created_at          TIMESTAMP DEFAULT NOW(),
+    UNIQUE(goal_id, user_id)
+);
+
+CREATE TABLE goal_repos (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    goal_id             UUID NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    repo_id             UUID NOT NULL REFERENCES github_repos(id) ON DELETE CASCADE,
+    created_at          TIMESTAMP DEFAULT NOW(),
+    UNIQUE(goal_id, repo_id)
+);
+
+CREATE TABLE goal_sprints (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    goal_id             UUID NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    sprint_id           UUID NOT NULL REFERENCES sprints(id) ON DELETE CASCADE,
+    created_at          TIMESTAMP DEFAULT NOW(),
+    UNIQUE(goal_id, sprint_id)
+);
+
 CREATE TABLE github_events (
     id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     event_type          VARCHAR(50) NOT NULL,                -- push, pull_request, review, issue
@@ -1235,6 +1301,31 @@ CREATE TABLE github_auto_task_rules (
     create_from_unlinked_prs BOOLEAN DEFAULT TRUE,
     sprint_ready_label      VARCHAR(80) DEFAULT 'sprint-ready',
     label_mappings          JSONB DEFAULT '{"bug":"bug","enhancement":"story","task":"task"}',
+    created_at              TIMESTAMP DEFAULT NOW(),
+    updated_at              TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE developer_api_keys (
+    id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name                    VARCHAR(140) NOT NULL,
+    key_prefix              VARCHAR(20) NOT NULL,
+    key_last4               VARCHAR(8) NOT NULL,
+    key_value               TEXT NOT NULL,
+    created_by              UUID REFERENCES team_members(id) ON DELETE SET NULL,
+    last_used_at            TIMESTAMP,
+    is_active               BOOLEAN DEFAULT TRUE,
+    revoked_at              TIMESTAMP,
+    created_at              TIMESTAMP DEFAULT NOW(),
+    updated_at              TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE developer_webhooks (
+    id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    endpoint_url            TEXT NOT NULL,
+    events                  TEXT[] DEFAULT '{}',
+    is_active               BOOLEAN DEFAULT TRUE,
+    last_triggered_at       TIMESTAMP,
+    created_by              UUID REFERENCES team_members(id) ON DELETE SET NULL,
     created_at              TIMESTAMP DEFAULT NOW(),
     updated_at              TIMESTAMP DEFAULT NOW()
 );
@@ -1393,6 +1484,19 @@ CREATE INDEX idx_github_pr_events_repo_pr   ON github_pr_events(repo, pr_number)
 CREATE INDEX idx_github_pr_events_reviewer  ON github_pr_events(reviewer);
 CREATE INDEX idx_github_pr_events_task      ON github_pr_events(task_id);
 CREATE INDEX idx_pr_review_weekly_group     ON pr_review_weekly_summary(group_by, group_key);
+CREATE INDEX idx_github_repos_owner         ON github_repos(owner_connection_id);
+
+-- Goals
+CREATE INDEX idx_goals_status               ON goals(status);
+CREATE INDEX idx_goals_project              ON goals(project_id);
+CREATE INDEX idx_goal_assignees_goal        ON goal_assignees(goal_id);
+CREATE INDEX idx_goal_sprints_goal          ON goal_sprints(goal_id);
+CREATE INDEX idx_goal_repos_goal            ON goal_repos(goal_id);
+CREATE INDEX idx_projects_space_order       ON projects(space_order, created_at DESC);
+CREATE INDEX idx_projects_space_archived    ON projects(is_space_archived);
+CREATE INDEX idx_projects_default_space     ON projects(is_default_space);
+CREATE INDEX idx_dev_api_keys_active        ON developer_api_keys(is_active, created_at DESC);
+CREATE INDEX idx_dev_webhooks_active        ON developer_webhooks(is_active, created_at DESC);
 CREATE INDEX idx_webhook_events_retry_due   ON webhook_events(next_retry_at) WHERE processed = FALSE AND dlq = FALSE;
 CREATE INDEX idx_webhook_events_dlq         ON webhook_events(dlq, created_at DESC);
 

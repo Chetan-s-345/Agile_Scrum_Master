@@ -211,27 +211,48 @@ async function listRepos(req, res, next) {
 
     const page = toInt(req.query.page, { def: 1, min: 1, max: 1000 });
     const perPage = toInt(req.query.per_page, { def: 20, min: 1, max: 100 });
+    const allRepos = safeText(req.query.all) === '1';
     const languageFilter = safeText(req.query.language).toLowerCase() || '';
 
-    const key = cacheKey(['repos', orgId, page, perPage, languageFilter]);
+    const key = cacheKey(['repos', orgId, page, perPage, languageFilter, allRepos ? 'all' : 'paged']);
     const cached = getCache(key);
     if (cached) return res.status(200).json(cached);
 
     const accessToken = await getStoredAccessToken(orgPool);
     const gh = githubHttp(accessToken);
 
-    let reposResp;
+    let repos = [];
     try {
-      reposResp = await gh.get('/user/repos', {
-        params: {
-          per_page: 100,
-          page: 1,
-          sort: 'updated',
-          direction: 'desc',
-          visibility: 'all',
-          affiliation: 'owner,collaborator,organization_member',
-        },
-      });
+      if (allRepos) {
+        const maxPages = 20;
+        for (let ghPage = 1; ghPage <= maxPages; ghPage += 1) {
+          const reposResp = await gh.get('/user/repos', {
+            params: {
+              per_page: 100,
+              page: ghPage,
+              sort: 'updated',
+              direction: 'desc',
+              visibility: 'all',
+              affiliation: 'owner,collaborator,organization_member',
+            },
+          });
+          const pageItems = Array.isArray(reposResp.data) ? reposResp.data : [];
+          repos.push(...pageItems);
+          if (pageItems.length < 100) break;
+        }
+      } else {
+        const reposResp = await gh.get('/user/repos', {
+          params: {
+            per_page: 100,
+            page: 1,
+            sort: 'updated',
+            direction: 'desc',
+            visibility: 'all',
+            affiliation: 'owner,collaborator,organization_member',
+          },
+        });
+        repos = Array.isArray(reposResp.data) ? reposResp.data : [];
+      }
     } catch (err) {
       if (isMissingRepoScope(err)) {
         return res
@@ -246,8 +267,6 @@ async function listRepos(req, res, next) {
 
       throw err;
     }
-
-    let repos = Array.isArray(reposResp.data) ? reposResp.data : [];
 
     if (languageFilter) {
       repos = repos.filter((r) => safeText(r?.language).toLowerCase() === languageFilter);
