@@ -1,7 +1,7 @@
 "use client";
 
 import Link from 'next/link';
-import { Settings, AlertCircle } from 'lucide-react';
+import { Settings } from 'lucide-react';
 
 export default function SettingsPage() {
   return (
@@ -42,6 +42,36 @@ export default function SettingsPage() {
           </Link>
 
           <Link
+            href="/settings/developer-management"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Developer Management</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              Add, remove, and review developer roles.
+            </div>
+          </Link>
+
+          <Link
+            href="/teams"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Teams Hub</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              Collaboration, join requests, and team scoring.
+            </div>
+          </Link>
+
+          <Link
+            href="/developers"
+            className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
+          >
+            <div className="text-lg font-bold text-slate-900 dark:text-white">Developer Tools</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              API keys, webhooks, and usage monitoring.
+            </div>
+          </Link>
+
+          <Link
             href="/settings/integrations"
             className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
           >
@@ -67,20 +97,6 @@ export default function SettingsPage() {
           <p className="text-sm text-slate-700 dark:text-slate-200">
              Total weights must equal 100% to save configuration
           </p>
-        </div>
-
-        {/* Danger Zone */}
-        <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-6">
-          <h2 className="text-2xl font-bold text-red-900 dark:text-red-200 mb-4 flex items-center gap-2">
-            <AlertCircle className="w-6 h-6" />
-            Danger Zone
-          </h2>
-          <p className="text-sm text-red-800 dark:text-red-300 mb-4">
-            Warning: These actions can not be undone. Proceed with caution.
-          </p>
-          <button className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg transition">
-            Clear All Cache
-          </button>
         </div>
 
       </div>

@@ -52,7 +52,7 @@ export function HomeNavbar() {
   const links = [
     { label: "Features", href: "/features" },
     { label: "Pricing", href: "/pricing" },
-    { label: "Solution", href: "/solution" },
+    { label: "Docs", href: "/solution" },
     { label: "About", href: "/about" },
   ];
 

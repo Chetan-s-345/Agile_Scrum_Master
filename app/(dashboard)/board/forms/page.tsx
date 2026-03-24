@@ -1,25 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 type FormField = { id: string; type: "text" | "textarea" | "dropdown" | "checkbox" | "date"; label: string };
 type FormSchema = { id: string; title: string; active: boolean; fields: FormField[]; createdAt: string };
 const LS_KEY = "sprint.board.forms.v1";
 
 export default function FormsTabPage() {
-  const [forms, setForms] = useState<FormSchema[]>([]);
-  const [title, setTitle] = useState("New Intake Form");
-  const [selected, setSelected] = useState<string>("");
-
-  useEffect(() => {
+  const [forms, setForms] = useState<FormSchema[]>(() => {
+    if (typeof window === "undefined") return [];
     try {
       const raw = window.localStorage.getItem(LS_KEY);
       const parsed = raw ? (JSON.parse(raw) as FormSchema[]) : [];
-      if (Array.isArray(parsed)) setForms(parsed);
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
-      setForms([]);
+      return [];
     }
-  }, []);
+  });
+  const [title, setTitle] = useState("New Intake Form");
+  const [selected, setSelected] = useState<string>("");
 
   function persist(next: FormSchema[]) {
     setForms(next);

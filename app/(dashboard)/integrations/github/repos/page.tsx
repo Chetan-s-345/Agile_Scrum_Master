@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { GithubConnectEmptyState } from "@/components/github-connect-empty-state";
 
 type GithubRepo = {
   id: number | null;
@@ -23,6 +25,9 @@ type GithubStatus = {
 type ConnectState = "idle" | "connecting" | "success" | "error";
 
 type ConnectMap = Record<string, { state: ConnectState; message?: string }>;
+
+type ProjectState = "idle" | "creating" | "success" | "error";
+type ProjectMap = Record<string, { state: ProjectState; message?: string }>;
 
 const LANGUAGE_CHIPS = [
   "All",
@@ -94,6 +99,7 @@ function loadingCards() {
 }
 
 export default function GithubRepoDiscoveryPage() {
+  const router = useRouter();
   const [repos, setRepos] = useState<GithubRepo[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -102,6 +108,7 @@ export default function GithubRepoDiscoveryPage() {
   const [search, setSearch] = useState("");
   const [selectedLanguage, setSelectedLanguage] = useState("All");
   const [connectState, setConnectState] = useState<ConnectMap>({});
+  const [projectState, setProjectState] = useState<ProjectMap>({});
 
   const loadRepos = useCallback(async () => {
     setError(null);
@@ -109,7 +116,7 @@ export default function GithubRepoDiscoveryPage() {
 
     const [statusResp, reposResp] = await Promise.all([
       fetchJson<GithubStatus>("/api/integrations/github/status"),
-      fetchJson<GithubRepo[]>("/api/integrations/github/repos?page=1&per_page=100"),
+      fetchJson<GithubRepo[]>("/api/integrations/github/repos?all=1"),
     ]);
 
     if (!reposResp.ok) {
@@ -186,6 +193,50 @@ export default function GithubRepoDiscoveryPage() {
     await loadRepos();
   }
 
+  function projectNameFromRepo(repo: GithubRepo): string {
+    const base = String(repo.name || repo.fullName || "").trim();
+    if (!base) return "GitHub Project";
+    return base
+      .replace(/[._-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b\w/g, (ch) => ch.toUpperCase());
+  }
+
+  async function onUseAsProject(repo: GithubRepo) {
+    const fullName = String(repo.fullName || "").trim();
+    if (!fullName) return;
+
+    setProjectState((prev) => ({ ...prev, [fullName]: { state: "creating" } }));
+    const payload = {
+      name: projectNameFromRepo(repo),
+      description: `Linked to GitHub repository ${fullName}`,
+      githubRepo: fullName,
+      techStack: repo.language ? [String(repo.language)] : [],
+    };
+
+    const resp = await fetchJson<Record<string, unknown>>("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!resp.ok) {
+      setProjectState((prev) => ({ ...prev, [fullName]: { state: "error", message: extractError(resp.data) } }));
+      return;
+    }
+
+    const projectId = typeof resp.data?.id === "string" ? resp.data.id : "";
+    setProjectState((prev) => ({ ...prev, [fullName]: { state: "success" } }));
+    if (projectId) {
+      router.push(`/projects/${encodeURIComponent(projectId)}`);
+      return;
+    }
+    window.setTimeout(() => {
+      setProjectState((prev) => ({ ...prev, [fullName]: { state: "idle" } }));
+    }, 1800);
+  }
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 px-4 py-8">
       <div className="mx-auto max-w-7xl">
@@ -205,7 +256,7 @@ export default function GithubRepoDiscoveryPage() {
               {refreshing ? "Refreshing..." : "Refresh"}
             </button>
             <Link
-              href="/settings/integrations"
+              href="/api/auth/github/start"
               className="rounded-lg bg-emerald-500/20 px-4 py-2 text-sm font-semibold text-emerald-300 border border-emerald-400/30 hover:bg-emerald-500/30"
             >
               Connect GitHub
@@ -214,18 +265,10 @@ export default function GithubRepoDiscoveryPage() {
         </div>
 
         {noTokenConfigured ? (
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-10 text-center">
-            <h2 className="text-xl font-semibold">No GitHub token configured</h2>
-            <p className="mt-2 text-zinc-400">Connect GitHub first to discover repositories accessible to your token.</p>
-            <div className="mt-5">
-              <Link
-                href="/settings/integrations"
-                className="inline-flex rounded-lg bg-emerald-500/20 px-5 py-2.5 text-sm font-semibold text-emerald-300 border border-emerald-400/30 hover:bg-emerald-500/30"
-              >
-                Connect GitHub
-              </Link>
-            </div>
-          </div>
+          <GithubConnectEmptyState
+            title="No GitHub token configured"
+            description="Connect GitHub first to discover repositories accessible to your token."
+          />
         ) : null}
 
         {!noTokenConfigured ? (
@@ -279,6 +322,7 @@ export default function GithubRepoDiscoveryPage() {
                   {connectedRepos.map((repo) => {
                     const fullName = String(repo.fullName || "");
                     const languageClass = LANGUAGE_COLORS[repo.language || ""] || LANGUAGE_COLORS.default;
+                    const pState = projectState[fullName]?.state || "idle";
                     return (
                       <article key={`connected-${repo.id}-${fullName}`} className="rounded-2xl border border-emerald-500/30 bg-zinc-900 p-4">
                         <div className="flex items-start justify-between gap-3">
@@ -312,7 +356,23 @@ export default function GithubRepoDiscoveryPage() {
                           >
                             View
                           </a>
+                          <button
+                            type="button"
+                            onClick={() => void onUseAsProject(repo)}
+                            disabled={pState === "creating"}
+                            className={
+                              "rounded-lg border px-3 py-1.5 text-xs font-semibold disabled:opacity-60 transition " +
+                              (pState === "success"
+                                ? "border-sky-300/60 bg-sky-500/30 text-sky-100"
+                                : "border-sky-400/40 bg-sky-500/20 text-sky-200 hover:bg-sky-500/30")
+                            }
+                          >
+                            {pState === "creating" ? "Creating..." : pState === "success" ? "Project Ready" : "Use as Project"}
+                          </button>
                         </div>
+                        {pState === "error" ? (
+                          <p className="mt-2 text-xs text-red-300">{projectState[fullName]?.message || "Create project failed"}</p>
+                        ) : null}
                       </article>
                     );
                   })}
@@ -341,6 +401,7 @@ export default function GithubRepoDiscoveryPage() {
                   {otherRepos.map((repo) => {
                     const fullName = String(repo.fullName || "");
                     const state = connectState[fullName]?.state || "idle";
+                    const pState = projectState[fullName]?.state || "idle";
                     const languageClass = LANGUAGE_COLORS[repo.language || ""] || LANGUAGE_COLORS.default;
 
                     return (
@@ -365,14 +426,29 @@ export default function GithubRepoDiscoveryPage() {
                         <p className="mt-3 text-xs text-zinc-400">Updated {formatDate(repo.updatedAt)}</p>
 
                         <div className="mt-4 flex items-center justify-between gap-2">
-                          <a
-                            href={`https://github.com/${fullName}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-semibold hover:bg-zinc-700"
-                          >
-                            View
-                          </a>
+                          <div className="flex items-center gap-2">
+                            <a
+                              href={`https://github.com/${fullName}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-semibold hover:bg-zinc-700"
+                            >
+                              View
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => void onUseAsProject(repo)}
+                              disabled={pState === "creating"}
+                              className={
+                                "rounded-lg border px-3 py-1.5 text-xs font-semibold disabled:opacity-60 transition " +
+                                (pState === "success"
+                                  ? "border-sky-300/60 bg-sky-500/30 text-sky-100"
+                                  : "border-sky-400/40 bg-sky-500/20 text-sky-200 hover:bg-sky-500/30")
+                              }
+                            >
+                              {pState === "creating" ? "Creating..." : pState === "success" ? "Project Ready" : "Use as Project"}
+                            </button>
+                          </div>
 
                           <button
                             type="button"
@@ -392,6 +468,9 @@ export default function GithubRepoDiscoveryPage() {
 
                         {state === "error" ? (
                           <p className="mt-2 text-xs text-red-300">{connectState[fullName]?.message || "Connect failed"}</p>
+                        ) : null}
+                        {pState === "error" ? (
+                          <p className="mt-2 text-xs text-red-300">{projectState[fullName]?.message || "Create project failed"}</p>
                         ) : null}
                       </article>
                     );

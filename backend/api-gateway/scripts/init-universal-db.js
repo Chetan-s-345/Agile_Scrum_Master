@@ -133,7 +133,6 @@ async function main() {
         await client.query(stmt);
       } catch (err) {
         if (isIgnorableInitError(err)) {
-          // eslint-disable-next-line no-console
           console.warn('Init skip (already exists):', err?.message || err);
           continue;
         }

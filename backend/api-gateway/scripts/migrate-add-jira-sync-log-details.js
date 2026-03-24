@@ -109,7 +109,6 @@ async function main() {
     const results = [];
     for (const org of orgs.rows) {
       // Serialize on purpose: reduces DB pressure and simplifies logs.
-      // eslint-disable-next-line no-await-in-loop
       const r = await migrateOrg(org.id, org.db_connection_string);
       results.push(r);
       const status = r.ok ? 'OK' : r.skipped ? 'SKIP' : 'FAIL';

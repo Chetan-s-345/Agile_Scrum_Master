@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { JiraSyncLogPanel } from "@/components/jira-sync-log-panel";
 import { AutoTaskRulesPanel } from "@/components/auto-task-rules-panel";
 
@@ -159,10 +160,24 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: bool
   return { ok: resp.ok, status: resp.status, data };
 }
 
-export default function IntegrationsSettingsPage() {
+function IntegrationsSettingsContent() {
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const oauthMessage = useMemo(() => {
+    const status = searchParams.get("github_oauth");
+    const repo = searchParams.get("repo");
+    const detail = searchParams.get("detail");
+
+    if (!status) return null;
+    if (status === "connected") {
+      return repo ? `GitHub OAuth connected. Auto-connected ${repo}.` : "GitHub OAuth connected and repository auto-linked.";
+    }
+    if (status === "no_repo") return "GitHub OAuth connected, but no repositories were found to auto-connect.";
+    if (status === "failed") return detail ? `GitHub OAuth failed: ${detail}` : "GitHub OAuth failed. Please try again.";
+    return null;
+  }, [searchParams]);
 
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -196,11 +211,6 @@ export default function IntegrationsSettingsPage() {
   const [projectKey, setProjectKey] = useState("");
   const [boardId, setBoardId] = useState("");
   const [storyPointsField, setStoryPointsField] = useState("");
-
-  const [githubOrg, setGithubOrg] = useState("");
-  const [repoName, setRepoName] = useState("");
-  const [accessToken, setAccessToken] = useState("");
-  const [createIfMissing, setCreateIfMissing] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -476,32 +486,6 @@ export default function IntegrationsSettingsPage() {
     if (pjResp.ok && pjResp.data) setJiraProjects(pjResp.data);
   }
 
-  async function connectGithub(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    setError(null);
-
-    const resp = await fetchJson<unknown>("/api/integrations/github/connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        githubOrg,
-        repoName,
-        accessToken,
-        createIfMissing,
-      }),
-    });
-
-    setSaving(false);
-
-    if (!resp.ok) {
-      setError(extractError(resp.data) || `GitHub connect failed (${resp.status})`);
-      return;
-    }
-
-    await load();
-  }
-
   async function copyGithubCallbackUrl(text: string) {
     setGithubCopyOk(false);
     try {
@@ -539,6 +523,12 @@ export default function IntegrationsSettingsPage() {
         {error ? (
           <div className="mt-6 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950 px-4 py-3 text-sm text-red-800 dark:text-red-200">
             {error}
+          </div>
+        ) : null}
+
+        {oauthMessage ? (
+          <div className="mt-4 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 px-4 py-3 text-sm text-emerald-800 dark:text-emerald-200">
+            {oauthMessage}
           </div>
         ) : null}
 
@@ -697,6 +687,27 @@ export default function IntegrationsSettingsPage() {
               <div>Pending sync (5m): {typeof status?.pendingSync === "number" ? status.pendingSync : "—"}</div>
             </div>
           )}
+
+          <div className="mt-5 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950/40 p-4">
+            <div className="text-sm font-semibold text-slate-900 dark:text-white">OAuth Auto-Connect</div>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              Authorize GitHub once, then auto-connect your latest active repository and list all accessible repos in discovery.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <a
+                href="/api/auth/github/start"
+                className="rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-200 text-white dark:text-black px-4 py-2 text-sm font-semibold"
+              >
+                Authorize GitHub
+              </a>
+              <Link
+                href="/integrations/github/repos"
+                className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-2 text-sm font-semibold text-slate-900 dark:text-white"
+              >
+                Open Repo Discovery
+              </Link>
+            </div>
+          </div>
 
           <div className="mt-6 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950/40 p-4">
             <div className="flex items-center justify-between gap-3">
@@ -921,8 +932,7 @@ export default function IntegrationsSettingsPage() {
             <div className="mt-4 text-slate-600 dark:text-slate-300">Loading…</div>
           ) : (
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-slate-700 dark:text-slate-200">
-              <div>Org: {githubStatus?.githubOrg || "—"}</div>
-              <div>Repo: {githubStatus?.repoName || "—"}</div>
+              <div>Connection: {githubStatus?.connected ? "active" : "inactive"}</div>
               <div>Last event: {githubStatus?.lastEventAt || "—"}</div>
               <div>
                 Webhook ready: {githubStatus?.publicGatewayUrlConfigured ? "yes" : "no"}
@@ -1118,55 +1128,25 @@ export default function IntegrationsSettingsPage() {
 
             <AutoTaskRulesPanel />
           </div>
-
-          <form onSubmit={connectGithub} className="mt-6 grid grid-cols-1 gap-3">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <label>
-                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">GitHub org</div>
-                <input
-                  value={githubOrg}
-                  onChange={(e) => setGithubOrg(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 px-3 py-2 text-sm text-slate-900 dark:text-white outline-none"
-                  placeholder="my-org"
-                />
-              </label>
-              <label>
-                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Repo name</div>
-                <input
-                  value={repoName}
-                  onChange={(e) => setRepoName(e.target.value)}
-                  className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 px-3 py-2 text-sm text-slate-900 dark:text-white outline-none"
-                  placeholder="ai-sprint-manager"
-                />
-              </label>
-            </div>
-
-            <label>
-              <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Access token</div>
-              <input
-                value={accessToken}
-                onChange={(e) => setAccessToken(e.target.value)}
-                type="password"
-                className="w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 px-3 py-2 text-sm text-slate-900 dark:text-white outline-none"
-                placeholder="••••••••••"
-              />
-            </label>
-
-            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-              <input type="checkbox" checked={createIfMissing} onChange={(e) => setCreateIfMissing(e.target.checked)} />
-              Create repo if missing
-            </label>
-
-            <button
-              type="submit"
-              disabled={saving || !githubOrg || !repoName || !accessToken}
-              className="mt-2 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-200 text-white dark:text-black px-4 py-2 text-sm font-semibold disabled:opacity-60"
-            >
-              {saving ? "Saving…" : "Connect GitHub"}
-            </button>
-          </form>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function IntegrationsSettingsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
+          <div className="max-w-4xl mx-auto">
+            <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">Integrations</h1>
+            <p className="text-slate-600 dark:text-slate-300">Loading integrations...</p>
+          </div>
+        </div>
+      }
+    >
+      <IntegrationsSettingsContent />
+    </Suspense>
   );
 }

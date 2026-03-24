@@ -310,7 +310,6 @@ class SprintService {
 
         // Best-effort Jira sync trigger for newly created tasks (if integration active)
         for (const t of createdTasks) {
-          // eslint-disable-next-line no-await-in-loop
           await queueJiraTaskSync(req, {
             taskId: String(t.id),
             action: 'create',

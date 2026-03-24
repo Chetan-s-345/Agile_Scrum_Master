@@ -2,6 +2,7 @@ const { logger } = require('./logger');
 const { env } = require('../config/env');
 
 function errorHandler(err, req, res, next) {
+  void next;
   logger.error({ err }, 'Unhandled error');
   const statusCode = err?.statusCode || err?.status || 500;
   const isServerError = statusCode >= 500;

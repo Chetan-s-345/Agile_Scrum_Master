@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, RefreshCw, Save, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { RefreshCw, Save } from "lucide-react";
 
 type Org = {
   id: string;
@@ -59,7 +59,6 @@ export default function OrgSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [provisioning, setProvisioning] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -75,12 +74,10 @@ export default function OrgSettingsPage() {
   const [dbSetupMode, setDbSetupMode] = useState<"manual" | "auto">("manual");
   const [tenantDbConnectionString, setTenantDbConnectionString] = useState("");
 
-  const confirmSlug = useMemo(() => org?.slug || "", [org?.slug]);
   const planSlug = String(plan?.slug || "").trim().toLowerCase();
   const supportsAutoProvision = planSlug === "pro" || planSlug === "enterprise";
   const effectiveDbSetupMode: "manual" | "auto" = supportsAutoProvision ? dbSetupMode : "manual";
   const isDbProvisioned = Boolean(dbStatus?.provisioned) || Boolean(dbStatus?.connected);
-  const [typedSlug, setTypedSlug] = useState("");
 
   async function load() {
     setLoading(true);
@@ -154,28 +151,6 @@ export default function OrgSettingsPage() {
 
     setSuccess("Saved");
     await load();
-  }
-
-  async function deleteOrg() {
-    if (!org?.slug) return;
-    if (typedSlug.trim() !== org.slug) {
-      setError(`Type ${org.slug} to confirm deletion.`);
-      return;
-    }
-
-    setDeleting(true);
-    setError(null);
-    setSuccess(null);
-
-    const resp = await fetchJson<unknown>("/api/org", { method: "DELETE" });
-    setDeleting(false);
-
-    if (!resp.ok) {
-      setError(extractError(resp.data) || `Delete failed (${resp.status})`);
-      return;
-    }
-
-    window.location.href = "/org";
   }
 
   async function provisionDatabase(e: React.FormEvent) {
@@ -428,39 +403,6 @@ export default function OrgSettingsPage() {
               </div>
             </form>
 
-            <div className="mt-6 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-6">
-              <div className="flex items-start gap-3">
-                <div className="mt-1">
-                  <AlertCircle className="w-5 h-5 text-red-700 dark:text-red-300" />
-                </div>
-                <div className="flex-1">
-                  <div className="text-lg font-semibold text-red-900 dark:text-red-100">Danger Zone</div>
-                  <div className="mt-1 text-sm text-red-800 dark:text-red-200">
-                    Delete this organization. This action is not reversible.
-                  </div>
-
-                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 items-end">
-                    <label>
-                      <div className="text-sm font-semibold text-red-900 dark:text-red-100 mb-2">Type org slug to confirm</div>
-                      <input
-                        value={typedSlug}
-                        onChange={(e) => setTypedSlug(e.target.value)}
-                        className="w-full rounded-lg border border-red-200 dark:border-red-900 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-slate-900 dark:text-white outline-none"
-                        placeholder={confirmSlug}
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      onClick={deleteOrg}
-                      disabled={deleting || !confirmSlug}
-                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 hover:bg-red-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-60"
-                    >
-                      <Trash2 className="w-4 h-4" /> {deleting ? "Deleting…" : "Delete organization"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
           </>
         )}
       </div>

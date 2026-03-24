@@ -186,7 +186,7 @@ class AuthService {
     this.neon = env.TENANT_DB_PROVISIONING_MODE === 'neon' ? new NeonProjectManager() : null;
   }
 
-  async _ensureOrgDbProvisionedForLogin({ orgId, orgSlug, user }) {
+  async _ensureOrgDbProvisionedForLogin({ orgId, orgSlug }) {
     if (env.TENANT_DB_PROVISIONING_MODE !== 'neon') return;
     if (!this.neon) return;
     try {
@@ -630,7 +630,6 @@ class AuthService {
     await this._ensureOrgDbProvisionedForLogin({
       orgId: selected.org_id,
       orgSlug: selected.org_slug,
-      user: { id: user.id, email: user.email, full_name: user.full_name },
     });
 
     await db.universalPool.query(

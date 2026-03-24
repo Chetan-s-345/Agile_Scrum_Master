@@ -278,7 +278,6 @@ router.patch('/jira/sync-schedule', async (req, res, next) => {
       const reps = await queues.jiraSync.getRepeatableJobs();
       const matches = reps.filter((j) => j.id === jobId);
       for (const m of matches) {
-        // eslint-disable-next-line no-await-in-loop
         await queues.jiraSync.removeRepeatableByKey(m.key);
       }
     } catch {
@@ -560,7 +559,6 @@ router.post('/jira/retry-sync', async (req, res, next) => {
 
     const jobIds = [];
     for (const taskId of taskIds) {
-      // eslint-disable-next-line no-await-in-loop
       const job = await queues.jiraSync.add(
         'jira-task-sync',
         { orgId: String(orgId), taskId: String(taskId), action: 'sync_snapshot' },

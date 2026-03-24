@@ -620,14 +620,12 @@ function startJiraSyncWorker() {
         for (const orgId of orgIds) {
           let orgPool = null;
           try {
-            // eslint-disable-next-line no-await-in-loop
             orgPool = await db.getOrgPool(String(orgId));
           } catch {
             results.push({ orgId, ok: false, reason: 'org_pool_unavailable' });
             continue;
           }
 
-          // eslint-disable-next-line no-await-in-loop
           const active = await isJiraIntegrationActive(orgPool);
           if (!active) {
             results.push({ orgId, ok: true, skipped: true, reason: 'inactive' });
@@ -636,7 +634,6 @@ function startJiraSyncWorker() {
 
           let taskIds = [];
           try {
-            // eslint-disable-next-line no-await-in-loop
             const resp = await orgPool.query(
               `SELECT id
                FROM tasks
@@ -653,7 +650,6 @@ function startJiraSyncWorker() {
 
           for (const taskId of taskIds) {
             try {
-              // eslint-disable-next-line no-await-in-loop
               await processTaskSync(orgPool, { taskId, action: 'sync_snapshot' });
             } catch (e) {
               // Keep going; individual task errors should not stop the batch.
