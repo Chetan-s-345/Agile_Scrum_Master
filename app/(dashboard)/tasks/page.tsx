@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Filter, RefreshCw } from "lucide-react";
 import Link from "next/link";
 
@@ -164,7 +164,7 @@ export default function TaskBoardPage() {
     });
   }
 
-  async function loadSprints() {
+  const loadSprints = useCallback(async () => {
     setError(null);
     setLoading(true);
     setShowCreateTask(false);
@@ -192,9 +192,9 @@ export default function TaskBoardPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [selectedSprintId]);
 
-  async function loadBoard(sprintId: string) {
+  const loadBoard = useCallback(async (sprintId: string) => {
     setError(null);
     setLoading(true);
     setShowCreateTask(false);
@@ -218,7 +218,7 @@ export default function TaskBoardPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   async function createTask() {
     if (!selectedSprintId) return;
@@ -373,13 +373,11 @@ export default function TaskBoardPage() {
 
   useEffect(() => {
     void loadSprints();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadSprints]);
 
   useEffect(() => {
     if (selectedSprintId) void loadBoard(selectedSprintId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSprintId]);
+  }, [selectedSprintId, loadBoard]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

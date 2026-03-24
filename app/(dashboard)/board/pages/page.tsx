@@ -1,27 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 
 type WikiPage = { id: string; title: string; content: string };
 const LS_KEY = "sprint.board.pages.v1";
 
 export default function PagesTabPage() {
-  const [pages, setPages] = useState<WikiPage[]>([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [draftTitle, setDraftTitle] = useState("Untitled Page");
-
-  useEffect(() => {
+  const initialPages = useMemo(() => {
+    if (typeof window === "undefined") return [] as WikiPage[];
     try {
       const raw = window.localStorage.getItem(LS_KEY);
       const parsed = raw ? (JSON.parse(raw) as WikiPage[]) : [];
-      if (Array.isArray(parsed) && parsed.length) {
-        setPages(parsed);
-        setSelectedId(parsed[0].id);
-      }
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
-      setPages([]);
+      return [] as WikiPage[];
     }
   }, []);
+
+  const [pages, setPages] = useState<WikiPage[]>(initialPages);
+  const [selectedId, setSelectedId] = useState(() => initialPages[0]?.id || "");
+  const [draftTitle, setDraftTitle] = useState("Untitled Page");
 
   function persist(next: WikiPage[]) {
     setPages(next);

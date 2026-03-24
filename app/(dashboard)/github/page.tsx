@@ -4,7 +4,6 @@
 import { formatDistanceToNow } from "date-fns";
 import { CheckCircle2, Circle, Clock3, Copy, ExternalLink, Github, Loader2 } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { GithubConnectEmptyState } from "@/components/github-connect-empty-state";
@@ -57,10 +56,15 @@ function useDebouncedValue<T>(value: T, ms: number) {
 }
 
 export default function GithubHubPage() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const tab = (searchParams.get("tab") as TabKey) || "overview";
+  const [tab, setTabState] = useState<TabKey>("overview");
+
+  useEffect(() => {
+    const qp = new URLSearchParams(window.location.search);
+    const value = qp.get("tab");
+    if (value && TABS.some((t) => t.key === value)) {
+      setTabState(value as TabKey);
+    }
+  }, []);
 
   const [connected, setConnected] = useState<boolean | null>(null);
   const [repos, setRepos] = useState<string[]>([]);
@@ -123,9 +127,10 @@ export default function GithubHubPage() {
     return () => window.clearTimeout(timer);
   }, [connected]);
   function setTab(next: TabKey) {
-    const qp = new URLSearchParams(searchParams.toString());
+    setTabState(next);
+    const qp = new URLSearchParams(window.location.search);
     qp.set("tab", next);
-    router.replace(`${pathname}?${qp.toString()}`);
+    window.history.replaceState(null, "", `${window.location.pathname}?${qp.toString()}`);
   }
 
   async function loadTab() {
@@ -581,6 +586,8 @@ function StatusIcon({ status }: { status: string }) {
   if (s.includes("failure") || s.includes("failed") || s.includes("cancel")) return <Clock3 className="w-4 h-4 text-amber-500" />;
   return <Circle className="w-4 h-4 text-slate-500" />;
 }
+
+
 
 
 

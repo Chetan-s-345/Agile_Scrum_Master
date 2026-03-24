@@ -1,6 +1,5 @@
 const axios = require('axios');
 const { env } = require('./env');
-const { URL } = require('node:url');
 
 class NeonApiError extends Error {
   constructor(message, { status, data } = {}) {
@@ -19,13 +18,6 @@ class ProjectCreationError extends Error {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function deriveRoleAndDatabaseFromConnectionString(connectionString) {
-  const u = new URL(String(connectionString));
-  const roleName = decodeURIComponent(u.username || '');
-  const databaseName = String(u.pathname || '').replace(/^\//, '');
-  return { roleName, databaseName };
-}
 
 async function withRetries(fn, { retries = 3, baseDelayMs = 300 } = {}) {
   let lastErr;
@@ -121,7 +113,7 @@ class NeonProjectManager {
             throw new NeonApiError('Failed to fetch Neon user profile', { status, data });
           }
         });
-      } catch (e) {
+      } catch {
         // Ignore errors and try the next step.
       }
 
@@ -148,7 +140,7 @@ class NeonProjectManager {
             throw new NeonApiError('Failed to list Neon projects', { status, data });
           }
         });
-      } catch (e) {
+      } catch {
         // Ignore errors and try the next step.
       }
 
@@ -179,7 +171,7 @@ class NeonProjectManager {
             throw new NeonApiError('Failed to list Neon organizations', { status, data });
           }
         });
-      } catch (e) {
+      } catch {
         // Ignore fallback errors
       }
 

@@ -12,7 +12,6 @@ function loadNeon() {
   process.env.NEON_API_KEY = process.env.NEON_API_KEY || 'napi_test_key';
 
   jest.resetModules();
-  // eslint-disable-next-line global-require
   return require('../neon');
 }
 

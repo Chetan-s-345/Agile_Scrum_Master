@@ -5,7 +5,7 @@ async function isJiraIntegrationActive(orgPool) {
   try {
     const resp = await orgPool.query('SELECT 1 FROM jira_integration WHERE is_active = TRUE LIMIT 1');
     return resp.rows.length > 0;
-  } catch (e) {
+  } catch {
     // Table might not exist in some environments; treat as inactive.
     return false;
   }

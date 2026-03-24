@@ -258,7 +258,6 @@ class JiraService {
       let processed = 0;
       const pageSize = 50;
       for (let startAt = 0; startAt < total; startAt += pageSize) {
-        // eslint-disable-next-line no-await-in-loop
         const page = await this.http.get(`${baseUrl}/rest/api/3/search`, {
           headers: { Authorization: authHeader, Accept: 'application/json' },
           params: {
@@ -312,7 +311,6 @@ class JiraService {
           let processed = 0;
           const pageSize = 50;
           for (let startAt = 0; startAt < total; startAt += pageSize) {
-            // eslint-disable-next-line no-await-in-loop
             const page = await this.http.get(`${baseUrl}/rest/agile/1.0/sprint/${encodeURIComponent(jiraSprintId)}/issue`, {
               headers: { Authorization: authHeader, Accept: 'application/json' },
               params: {
@@ -486,7 +484,6 @@ class JiraService {
 
     const pageSize = 50;
     for (let startAt = 0; startAt < total; startAt += pageSize) {
-      // eslint-disable-next-line no-await-in-loop
       const searchResp = await this.http.get(`${baseUrl}/rest/api/3/search`, {
         headers: { Authorization: authHeader, Accept: 'application/json' },
         params: {
@@ -522,7 +519,6 @@ class JiraService {
           const labels = Array.isArray(fields.labels) ? fields.labels : [];
           const storyPoints = pickStoryPoints(fields, storyPointsField);
 
-          // eslint-disable-next-line no-await-in-loop
           await orgPool.query(
             `INSERT INTO backlog_items (project_id, title, description, type, priority, status, story_points, tech_tags, jira_issue_id, jira_issue_key)
              VALUES ($1,$2,$3,$4,$5,'backlog',$6,$7,$8,$9)
@@ -758,7 +754,6 @@ class JiraService {
     const errors = [];
 
     for (let startAt = 0; startAt < total; startAt += pageSize) {
-      // eslint-disable-next-line no-await-in-loop
       const issuesResp = await this.http.get(`${baseUrl}/rest/agile/1.0/sprint/${encodeURIComponent(sprintInfo.jiraSprintId)}/issue`, {
         headers: { Authorization: authHeader, Accept: 'application/json' },
         params: {
@@ -791,7 +786,6 @@ class JiraService {
           const storyPoints = pickStoryPoints(fields, storyPointsField);
           const status = mapJiraStatusToTaskStatus(issue);
 
-          // eslint-disable-next-line no-await-in-loop
           await orgPool.query(
             `INSERT INTO tasks (sprint_id, project_id, title, description, type, status, priority, story_points, tech_tags, jira_issue_id, jira_issue_key)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)

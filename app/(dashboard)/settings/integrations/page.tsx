@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { JiraSyncLogPanel } from "@/components/jira-sync-log-panel";
 import { AutoTaskRulesPanel } from "@/components/auto-task-rules-panel";
 
@@ -160,7 +160,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: bool
   return { ok: resp.ok, status: resp.status, data };
 }
 
-export default function IntegrationsSettingsPage() {
+function IntegrationsSettingsContent() {
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1131,5 +1131,22 @@ export default function IntegrationsSettingsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function IntegrationsSettingsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
+          <div className="max-w-4xl mx-auto">
+            <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">Integrations</h1>
+            <p className="text-slate-600 dark:text-slate-300">Loading integrations...</p>
+          </div>
+        </div>
+      }
+    >
+      <IntegrationsSettingsContent />
+    </Suspense>
   );
 }
