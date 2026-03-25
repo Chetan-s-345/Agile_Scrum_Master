@@ -1,5 +1,7 @@
 const { assignmentService } = require('./assignment.service');
 const { queueJiraTaskSync } = require('./jiraSync.service');
+const { queueEmbedTask } = require('../../server/lib/githubIngestion');
+const { sendInngestEvent } = require('./inngestEvent.service');
 
 function requireOrgDb(req) {
   const pool = req.orgDb;
@@ -20,6 +22,121 @@ async function getActorMemberId(orgPool, userId) {
 }
 
 class TaskService {
+  mapSubtaskRow(row) {
+    return {
+      id: row.id,
+      parentTaskId: row.parent_task_id,
+      projectId: row.project_id,
+      sprintId: row.sprint_id,
+      title: row.title,
+      status: row.status,
+      priority: row.priority,
+      storyPoints: Number(row.story_points || 0),
+      taskKey: row.jira_issue_key || null,
+      assignee: row.assignee_id
+        ? {
+            id: row.assignee_id,
+            name: row.assignee_name || null,
+            avatarUrl: row.assignee_avatar || null,
+          }
+        : null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  async listSubtasks(req, taskId) {
+    const orgPool = requireOrgDb(req);
+
+    const parentResp = await orgPool.query('SELECT id FROM tasks WHERE id = $1 LIMIT 1', [String(taskId)]);
+    if (!parentResp.rows[0]) throw Object.assign(new Error('Task not found'), { statusCode: 404 });
+
+    const resp = await orgPool.query(
+      `SELECT
+         t.id,
+         t.parent_task_id,
+         t.project_id,
+         t.sprint_id,
+         t.title,
+         t.status,
+         t.priority,
+         t.story_points,
+         t.jira_issue_key,
+         t.assignee_id,
+         t.created_at,
+         t.updated_at,
+         tm.full_name AS assignee_name,
+         tm.avatar_url AS assignee_avatar
+       FROM tasks t
+       LEFT JOIN developer_profiles dp ON dp.id = t.assignee_id
+       LEFT JOIN team_members tm ON tm.id = dp.member_id
+       WHERE t.parent_task_id = $1
+       ORDER BY t.created_at ASC`,
+      [String(taskId)]
+    );
+
+    return resp.rows.map((row) => this.mapSubtaskRow(row));
+  }
+
+  async createSubtask(req, taskId, payload) {
+    const orgPool = requireOrgDb(req);
+    const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+    if (!actorMemberId) throw Object.assign(new Error('Team member not found'), { statusCode: 403 });
+
+    const parentResp = await orgPool.query(
+      `SELECT id, project_id, sprint_id
+       FROM tasks
+       WHERE id = $1
+       LIMIT 1`,
+      [String(taskId)]
+    );
+    const parent = parentResp.rows[0] || null;
+    if (!parent) throw Object.assign(new Error('Task not found'), { statusCode: 404 });
+
+    const insertResp = await orgPool.query(
+      `INSERT INTO tasks (
+         project_id,
+         sprint_id,
+         parent_task_id,
+         is_subtask,
+         title,
+         description,
+         status,
+         priority,
+         type,
+         story_points,
+         created_by
+       ) VALUES ($1,$2,$3,TRUE,$4,$5,'todo',$6,'task',$7,$8)
+       RETURNING *`,
+      [
+        String(parent.project_id),
+        parent.sprint_id ? String(parent.sprint_id) : null,
+        String(parent.id),
+        String(payload.title),
+        payload.description || null,
+        payload.priority || 'medium',
+        Number(payload.storyPoints || 0),
+        actorMemberId,
+      ]
+    );
+
+    const row = insertResp.rows[0];
+    const assigneeResp = await orgPool.query(
+      `SELECT tm.full_name AS assignee_name, tm.avatar_url AS assignee_avatar
+       FROM developer_profiles dp
+       JOIN team_members tm ON tm.id = dp.member_id
+       WHERE dp.id = $1
+       LIMIT 1`,
+      [row.assignee_id || null]
+    );
+
+    return this.mapSubtaskRow({
+      ...row,
+      assignee_name: assigneeResp.rows[0]?.assignee_name || null,
+      assignee_avatar: assigneeResp.rows[0]?.assignee_avatar || null,
+    });
+  }
+
   async updateAssignee(jiraIssueKey, newAssigneeAccountId, orgPool) {
     if (!orgPool) throw Object.assign(new Error('Org DB not provided'), { statusCode: 500 });
     const issueKey = String(jiraIssueKey || '').trim();
@@ -214,6 +331,8 @@ class TaskService {
     const t = resp.rows[0];
     if (!t) return null;
 
+    const subtasks = await this.listSubtasks(req, taskId);
+
     return {
       id: t.id,
       sprintId: t.sprint_id,
@@ -241,6 +360,7 @@ class TaskService {
             avatarUrl: t.assignee_avatar,
           }
         : null,
+      subtasks,
     };
   }
 
@@ -405,6 +525,24 @@ class TaskService {
         sprintId: String(task.sprint_id),
       });
 
+      queueEmbedTask({ task, orgPool });
+
+      try {
+        await sendInngestEvent('task/created', {
+          orgId: String(req.user?.orgId || ''),
+          projectId: String(task.project_id),
+          sprintId: String(task.sprint_id),
+          taskId: String(task.id),
+          title: String(task.title || ''),
+          priority: String(task.priority || 'medium'),
+          storyPoints: Number(task.story_points || 0),
+          techTags: Array.isArray(task.tech_tags) ? task.tech_tags : [],
+          assigneeId: task.assignee_id ? String(task.assignee_id) : null,
+        });
+      } catch {
+        // Do not fail task creation if event dispatch fails.
+      }
+
       return { task, assignment };
     } catch (e) {
       try {
@@ -491,6 +629,23 @@ class TaskService {
         sprintId: String(after.sprint_id),
       });
 
+      try {
+        await sendInngestEvent('task/updated', {
+          orgId: String(req.user?.orgId || ''),
+          projectId: String(after.project_id),
+          sprintId: String(after.sprint_id),
+          taskId: String(after.id),
+          title: String(after.title || ''),
+          previousStatus: String(before.status || ''),
+          status: String(after.status || ''),
+          priority: String(after.priority || 'medium'),
+          storyPoints: Number(after.story_points || 0),
+          assigneeId: after.assignee_id ? String(after.assignee_id) : null,
+        });
+      } catch {
+        // Do not fail status updates if event dispatch fails.
+      }
+
       return after;
     } catch (e) {
       try {
@@ -556,6 +711,26 @@ class TaskService {
       projectId: String(after.project_id),
       sprintId: String(after.sprint_id),
     });
+
+    queueEmbedTask({ task: after, orgPool });
+
+    try {
+      await sendInngestEvent('task/updated', {
+        orgId: String(req.user?.orgId || ''),
+        projectId: String(after.project_id),
+        sprintId: String(after.sprint_id),
+        taskId: String(after.id),
+        title: String(after.title || ''),
+        previousStatus: String(before.status || ''),
+        status: String(after.status || ''),
+        priority: String(after.priority || 'medium'),
+        storyPoints: Number(after.story_points || 0),
+        assigneeId: after.assignee_id ? String(after.assignee_id) : null,
+        changedFields: Object.keys(patch || {}),
+      });
+    } catch {
+      // Do not fail task updates if event dispatch fails.
+    }
 
     return after;
   }
@@ -754,6 +929,26 @@ class TaskService {
   async board(req, sprintId) {
     const orgPool = requireOrgDb(req);
 
+    const subtaskCountsResp = await orgPool.query(
+      `SELECT
+         parent_task_id,
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE status = 'done')::int AS done
+       FROM tasks
+       WHERE sprint_id = $1
+         AND parent_task_id IS NOT NULL
+       GROUP BY parent_task_id`,
+      [String(sprintId)]
+    );
+
+    const subtaskMap = new Map();
+    for (const row of subtaskCountsResp.rows) {
+      subtaskMap.set(String(row.parent_task_id), {
+        total: Number(row.total || 0),
+        done: Number(row.done || 0),
+      });
+    }
+
     const resp = await orgPool.query(
       `SELECT
          t.id,
@@ -770,6 +965,7 @@ class TaskService {
        LEFT JOIN developer_profiles dp ON dp.id = t.assignee_id
        LEFT JOIN team_members tm ON tm.id = dp.member_id
        WHERE t.sprint_id = $1
+         AND COALESCE(t.is_subtask, FALSE) = FALSE
        ORDER BY t.created_at ASC`,
       [String(sprintId)]
     );
@@ -785,6 +981,7 @@ class TaskService {
         priority: t.priority,
         techTags: t.tech_tags || [],
         aiRiskScore: t.ai_risk_score,
+        subtaskProgress: subtaskMap.get(String(t.id)) || { done: 0, total: 0 },
       });
     }
 

@@ -1,6 +1,7 @@
 const express = require('express');
 
 const { authMiddleware } = require('../middleware/auth');
+const { orgDbMiddleware } = require('../middleware/orgDb');
 
 const aiController = require('../controllers/ai.controller');
 
@@ -11,8 +12,19 @@ router.use(authMiddleware);
 router.post('/sprint-planning/scope', aiController.finalizeScope);
 router.post('/sprint-planning/plan', aiController.planSprint);
 
+// Autonomous planning and intelligence
+router.get('/sprint-plan', orgDbMiddleware, aiController.sprintPlan);
+router.post('/sprint-plan/start', orgDbMiddleware, aiController.startSprintPlan);
+router.post('/rebalance', orgDbMiddleware, aiController.rebalance);
+router.get('/briefing', orgDbMiddleware, aiController.briefing);
+
 // Agentic: project details -> generated backlog -> plan/assign
 router.post('/agentic/sprint-build', aiController.agenticSprintBuild);
+
+// Autonomous command-center endpoints
+router.post('/autonomous/autopilot', aiController.autonomousAutopilot);
+router.post('/autonomous/team-rebalance', aiController.autonomousTeamRebalance);
+router.post('/autonomous/briefing', aiController.autonomousBriefing);
 
 // Groq SSE streaming features
 router.post('/ticket-enrichment/stream', aiController.ticketEnrichmentStream);
@@ -32,5 +44,10 @@ router.post('/ml/complexity/predict', aiController.complexityPredict);
 
 router.post('/ml/burndown/train', aiController.burndownTrain);
 router.post('/ml/burndown/detect', aiController.burndownDetect);
+
+// RAG Chat + history
+router.post('/chat', orgDbMiddleware, aiController.chat);
+router.post('/confirm-action', orgDbMiddleware, aiController.confirmAction);
+router.get('/history', orgDbMiddleware, aiController.history);
 
 module.exports = router;

@@ -8,6 +8,7 @@ const {
   addCommentSchema,
   sprintBoardParamsSchema,
   timeLogSchema,
+  createSubtaskSchema,
 } = require('../validators/task.schemas');
 const { taskService } = require('../services/task.service');
 
@@ -43,6 +44,37 @@ async function getTask(req, res, next) {
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     return res.status(200).json({ task });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function listSubtasks(req, res, next) {
+  try {
+    const parsedId = uuidSchema.safeParse(req.params.taskId);
+    if (!parsedId.success) {
+      return res.status(400).json({ error: 'Bad request', code: 400, detail: 'Invalid taskId' });
+    }
+
+    const items = await taskService.listSubtasks(req, parsedId.data);
+    return res.status(200).json({ items });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function createSubtask(req, res, next) {
+  try {
+    const parsedId = uuidSchema.safeParse(req.params.taskId);
+    if (!parsedId.success) {
+      return res.status(400).json({ error: 'Bad request', code: 400, detail: 'Invalid taskId' });
+    }
+
+    const parsed = createSubtaskSchema.safeParse(req.body || {});
+    if (!parsed.success) return validationError(res, parsed);
+
+    const subtask = await taskService.createSubtask(req, parsedId.data, parsed.data);
+    return res.status(201).json({ item: subtask });
   } catch (err) {
     return next(err);
   }
@@ -177,6 +209,8 @@ async function addTimeLog(req, res, next) {
 
 module.exports = {
   getTask,
+  listSubtasks,
+  createSubtask,
   getTaskProgress,
   listTasks,
   createTask,

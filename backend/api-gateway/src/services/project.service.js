@@ -33,6 +33,20 @@ async function audit(orgPool, { actorMemberId, action, resourceType, resourceId,
   );
 }
 
+async function ensureProjectAutomationPoliciesTable(orgPool) {
+  await orgPool.query(
+    `CREATE TABLE IF NOT EXISTS project_automation_policies (
+      project_id TEXT PRIMARY KEY,
+      create_from_issue BOOLEAN NOT NULL DEFAULT TRUE,
+      create_from_pr BOOLEAN NOT NULL DEFAULT TRUE,
+      auto_assign BOOLEAN NOT NULL DEFAULT TRUE,
+      monitoring_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      guarded_mode BOOLEAN NOT NULL DEFAULT FALSE,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`
+  );
+}
+
 class ProjectService {
   buildSlug(name) {
     return String(name || '')
@@ -525,6 +539,85 @@ class ProjectService {
     );
 
     return resp.rows[0];
+  }
+
+  async getAutomationPolicy(req, projectId) {
+    const orgPool = requireOrgDb(req);
+    await ensureProjectAutomationPoliciesTable(orgPool);
+    const resp = await orgPool.query(
+      `SELECT create_from_issue, create_from_pr, auto_assign, monitoring_enabled, guarded_mode, updated_at
+       FROM project_automation_policies
+       WHERE project_id = $1
+       LIMIT 1`,
+      [String(projectId)]
+    );
+    const row = resp.rows[0];
+    if (!row) {
+      return {
+        createFromIssue: true,
+        createFromPr: true,
+        autoAssign: true,
+        monitoringEnabled: true,
+        guardedMode: false,
+      };
+    }
+    return {
+      createFromIssue: Boolean(row.create_from_issue),
+      createFromPr: Boolean(row.create_from_pr),
+      autoAssign: Boolean(row.auto_assign),
+      monitoringEnabled: Boolean(row.monitoring_enabled),
+      guardedMode: Boolean(row.guarded_mode),
+      updatedAt: row.updated_at,
+    };
+  }
+
+  async updateAutomationPolicy(req, projectId, patch, context) {
+    const orgPool = requireOrgDb(req);
+    await ensureProjectAutomationPoliciesTable(orgPool);
+
+    const before = await this.getAutomationPolicy(req, projectId);
+    const next = {
+      createFromIssue: patch.createFromIssue === undefined ? before.createFromIssue : Boolean(patch.createFromIssue),
+      createFromPr: patch.createFromPr === undefined ? before.createFromPr : Boolean(patch.createFromPr),
+      autoAssign: patch.autoAssign === undefined ? before.autoAssign : Boolean(patch.autoAssign),
+      monitoringEnabled: patch.monitoringEnabled === undefined ? before.monitoringEnabled : Boolean(patch.monitoringEnabled),
+      guardedMode: patch.guardedMode === undefined ? before.guardedMode : Boolean(patch.guardedMode),
+    };
+
+    await orgPool.query(
+      `INSERT INTO project_automation_policies (
+         project_id, create_from_issue, create_from_pr, auto_assign, monitoring_enabled, guarded_mode, updated_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,NOW())
+       ON CONFLICT (project_id) DO UPDATE
+       SET create_from_issue = EXCLUDED.create_from_issue,
+           create_from_pr = EXCLUDED.create_from_pr,
+           auto_assign = EXCLUDED.auto_assign,
+           monitoring_enabled = EXCLUDED.monitoring_enabled,
+           guarded_mode = EXCLUDED.guarded_mode,
+           updated_at = NOW()`,
+      [
+        String(projectId),
+        next.createFromIssue,
+        next.createFromPr,
+        next.autoAssign,
+        next.monitoringEnabled,
+        next.guardedMode,
+      ]
+    );
+
+    const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
+    await audit(orgPool, {
+      actorMemberId,
+      action: 'project.automation_policy.update',
+      resourceType: 'project',
+      resourceId: String(projectId),
+      oldValue: before,
+      newValue: next,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
+
+    return next;
   }
 }
 

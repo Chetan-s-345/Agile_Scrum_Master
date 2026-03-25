@@ -160,6 +160,32 @@ async function createEpic(req, res, next) {
   }
 }
 
+async function getAutomationPolicy(req, res, next) {
+  try {
+    const parsedId = uuidSchema.safeParse(req.params.projectId);
+    if (!parsedId.success) return res.status(400).json({ error: 'Invalid projectId' });
+    const policy = await projectService.getAutomationPolicy(req, parsedId.data);
+    return res.status(200).json({ policy });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function updateAutomationPolicy(req, res, next) {
+  try {
+    const parsedId = uuidSchema.safeParse(req.params.projectId);
+    if (!parsedId.success) return res.status(400).json({ error: 'Invalid projectId' });
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const policy = await projectService.updateAutomationPolicy(req, parsedId.data, body, {
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') || null,
+    });
+    return res.status(200).json({ policy });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 module.exports = {
   listProjects,
   createProject,
@@ -171,4 +197,6 @@ module.exports = {
   listEpics,
   listBacklog,
   createEpic,
+  getAutomationPolicy,
+  updateAutomationPolicy,
 };

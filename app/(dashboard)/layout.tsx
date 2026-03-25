@@ -3,6 +3,7 @@
 import { Navbar } from "@/components/navbar";
 import { Sidebar } from "@/components/sidebar";
 import { useUIStore } from "@/lib/ui-store";
+import AgentBubble from "@/src/components/AgentBubble";
 import { useState } from "react";
 
 export default function DashboardLayout({
@@ -32,6 +33,7 @@ export default function DashboardLayout({
           {children}
         </div>
       </div>
+      <AgentBubble />
     </div>
   );
 }

@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   sprint_id uuid REFERENCES sprints(id) ON DELETE SET NULL,
+  parent_task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
+  is_subtask boolean NOT NULL DEFAULT false,
   title text NOT NULL,
   description text,
   status text NOT NULL DEFAULT 'todo',

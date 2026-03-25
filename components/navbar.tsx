@@ -555,10 +555,10 @@ export function Navbar() {
 
       {createOpen ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4">
-          <div className="w-full max-w-2xl rounded-lg border border-[var(--border)] bg-[#101010] p-4">
+          <div className="w-full max-w-2xl rounded-lg border border-[var(--border)] bg-[var(--bg-modal)] p-4">
             <div className="mb-4 flex items-center justify-between">
-              <p className="text-sm font-semibold text-white">Global Create</p>
-              <button onClick={() => setCreateOpen(false)} className="rounded-md border border-[var(--border)] p-1.5 text-[#bbb] hover:bg-[#212121]"><X className="h-4 w-4" /></button>
+              <p className="text-sm font-semibold text-[var(--text-primary)]">Global Create</p>
+              <button onClick={() => setCreateOpen(false)} className="rounded-md p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"><X className="h-4 w-4" /></button>
             </div>
 
             <div className="mb-4 flex gap-2 border-b border-[var(--border)] pb-2">
@@ -566,7 +566,7 @@ export function Navbar() {
                 <button
                   key={tab}
                   onClick={() => setCreateTab(tab)}
-                  className={`rounded-md border px-3 py-1.5 text-xs font-semibold capitalize ${createTab === tab ? "border-white bg-white text-black" : "border-[var(--border)] text-[#b9b9b9]"}`}
+                  className={`rounded-md border px-3 py-1.5 text-xs font-semibold capitalize ${createTab === tab ? "border-[var(--text-primary)] bg-[var(--text-primary)] text-[var(--text-inverse)]" : "border-[var(--border)] text-[var(--text-secondary)]"}`}
                 >
                   {tab}
                 </button>
@@ -575,52 +575,52 @@ export function Navbar() {
 
             {createTab === "task" ? (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <input className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Title" value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} />
-                <select className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" value={taskAssigneeId} onChange={(e) => setTaskAssigneeId(e.target.value)}>
+                <input className="rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" placeholder="Title" value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} />
+                <select className="rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" value={taskAssigneeId} onChange={(e) => setTaskAssigneeId(e.target.value)}>
                   <option value="">Assignee</option>
                   {developers.map((dev) => <option key={dev.id} value={dev.id}>{dev.name || dev.fullName || dev.email || "Developer"}</option>)}
                 </select>
-                <textarea className="sm:col-span-2 min-h-[88px] rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Description" value={taskDescription} onChange={(e) => setTaskDescription(e.target.value)} />
-                <select className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" value={taskPriority} onChange={(e) => setTaskPriority(e.target.value)}>
+                <textarea className="sm:col-span-2 min-h-[88px] rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" placeholder="Description" value={taskDescription} onChange={(e) => setTaskDescription(e.target.value)} />
+                <select className="rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" value={taskPriority} onChange={(e) => setTaskPriority(e.target.value)}>
                   <option value="low">Low</option>
                   <option value="medium">Medium</option>
                   <option value="high">High</option>
                   <option value="critical">Critical</option>
                 </select>
-                <select className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" value={taskSprintId} onChange={(e) => setTaskSprintId(e.target.value)}>
+                <select className="rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" value={taskSprintId} onChange={(e) => setTaskSprintId(e.target.value)}>
                   <option value="">Sprint</option>
                   {sprints.map((sprint) => <option key={sprint.id} value={sprint.id}>{sprint.name}</option>)}
                 </select>
-                <input className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Story points" type="number" min={0} value={taskPoints} onChange={(e) => setTaskPoints(e.target.value === "" ? "" : Number(e.target.value))} />
+                <input className="rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" placeholder="Story points" type="number" min={0} value={taskPoints} onChange={(e) => setTaskPoints(e.target.value === "" ? "" : Number(e.target.value))} />
               </div>
             ) : null}
 
             {createTab === "sprint" ? (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <input className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Name" value={sprintName} onChange={(e) => setSprintName(e.target.value)} />
-                <input className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Goal" value={sprintGoal} onChange={(e) => setSprintGoal(e.target.value)} />
-                <input className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" type="date" value={sprintStartDate} onChange={(e) => setSprintStartDate(e.target.value)} />
-                <input className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" type="date" value={sprintEndDate} onChange={(e) => setSprintEndDate(e.target.value)} />
+                <input className="rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" placeholder="Name" value={sprintName} onChange={(e) => setSprintName(e.target.value)} />
+                <input className="rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" placeholder="Goal" value={sprintGoal} onChange={(e) => setSprintGoal(e.target.value)} />
+                <input className="rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" type="date" value={sprintStartDate} onChange={(e) => setSprintStartDate(e.target.value)} />
+                <input className="rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" type="date" value={sprintEndDate} onChange={(e) => setSprintEndDate(e.target.value)} />
               </div>
             ) : null}
 
             {createTab === "page" ? (
               <div className="space-y-3">
-                <input className="w-full rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Page title" value={pageTitle} onChange={(e) => setPageTitle(e.target.value)} />
-                <textarea className="min-h-[160px] w-full rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 font-mono text-sm text-white" placeholder="# Markdown content" value={pageContent} onChange={(e) => setPageContent(e.target.value)} />
+                <input className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" placeholder="Page title" value={pageTitle} onChange={(e) => setPageTitle(e.target.value)} />
+                <textarea className="min-h-[160px] w-full rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 font-mono text-sm text-[var(--text-primary)]" placeholder="# Markdown content" value={pageContent} onChange={(e) => setPageContent(e.target.value)} />
               </div>
             ) : null}
 
             {createTab === "form" ? (
               <div className="space-y-3">
-                <input className="w-full rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Form name" value={formName} onChange={(e) => setFormName(e.target.value)} />
-                <textarea className="min-h-[120px] w-full rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-white" placeholder="Description" value={formDescription} onChange={(e) => setFormDescription(e.target.value)} />
+                <input className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" placeholder="Form name" value={formName} onChange={(e) => setFormName(e.target.value)} />
+                <textarea className="min-h-[120px] w-full rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)]" placeholder="Description" value={formDescription} onChange={(e) => setFormDescription(e.target.value)} />
               </div>
             ) : null}
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button onClick={() => setCreateOpen(false)} className="rounded-md border border-[var(--border)] px-3 py-2 text-xs text-[#ccc]">Cancel</button>
-              <button onClick={() => void submitCreate()} disabled={creating} className="rounded-md border border-white bg-white px-3 py-2 text-xs font-semibold text-black disabled:opacity-60">{creating ? "Creating..." : "Create"}</button>
+              <button onClick={() => setCreateOpen(false)} className="rounded-md border border-[var(--border)] px-3 py-2 text-xs text-[var(--text-secondary)]">Cancel</button>
+              <button onClick={() => void submitCreate()} disabled={creating} className="rounded-md bg-[var(--text-primary)] px-3 py-2 text-xs font-semibold text-[var(--text-inverse)] disabled:opacity-60">{creating ? "Creating..." : "Create"}</button>
             </div>
           </div>
         </div>
@@ -628,10 +628,10 @@ export function Navbar() {
 
       {plansOpen ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4">
-          <div className="w-full max-w-4xl rounded-lg border border-[var(--border)] bg-[#101010] p-4">
+          <div className="w-full max-w-4xl rounded-lg border border-[var(--border)] bg-[var(--bg-modal)] p-4">
             <div className="mb-4 flex items-center justify-between">
-              <p className="text-sm font-semibold text-white">Plans</p>
-              <button onClick={() => setPlansOpen(false)} className="rounded-md border border-[var(--border)] p-1.5 text-[#bbb]"><X className="h-4 w-4" /></button>
+              <p className="text-sm font-semibold text-[var(--text-primary)]">Plans</p>
+              <button onClick={() => setPlansOpen(false)} className="rounded-md p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"><X className="h-4 w-4" /></button>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <PlanCard title="Free" price="$0" features={["1 project", "Basic board", "Community support"]} />
@@ -670,10 +670,10 @@ export function Navbar() {
         <SimpleModal title="What's New" onClose={() => setWhatsNewOpen(false)}>
           <div className="space-y-2">
             {changelog.map((item) => (
-              <div key={item.id} className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2">
-                <p className="text-xs font-semibold text-white">{item.title}</p>
-                <p className="text-[11px] text-[#9a9a9a]">{item.date}</p>
-                <p className="mt-1 text-xs text-[#cccccc]">{item.detail}</p>
+              <div key={item.id} className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2">
+                <p className="text-xs font-semibold text-[var(--text-primary)]">{item.title}</p>
+                <p className="text-[11px] text-[var(--text-secondary)]">{item.date}</p>
+                <p className="mt-1 text-xs text-[var(--text-secondary)]">{item.detail}</p>
               </div>
             ))}
           </div>
@@ -691,7 +691,7 @@ export function Navbar() {
                   setSwitchProjectOpen(false);
                   setToast({ text: `Switched to ${project.name}`, type: "success" });
                 }}
-                className={`block w-full rounded-md border px-3 py-2 text-left text-xs ${String(project.id) === String(currentProjectId) ? "border-white bg-white text-black" : "border-[var(--border)] bg-[#151515] text-white"}`}
+                className={`block w-full rounded-md border px-3 py-2 text-left text-xs ${String(project.id) === String(currentProjectId) ? "border-[var(--text-primary)] bg-[var(--text-primary)] text-[var(--text-inverse)]" : "border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"}`}
               >
                 {project.name}
               </button>
@@ -727,7 +727,7 @@ function SearchGroup({
   if (!items.length) return null;
   return (
     <div className="mb-2">
-      <p className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-wide text-[#969696]">{title}</p>
+      <p className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{title}</p>
       <div className="space-y-1">
         {items.map((item, index) => {
           const isActive = offset + index === activeSearchIndex;
@@ -735,12 +735,12 @@ function SearchGroup({
             <button
               key={`${item.type}-${item.id}`}
               onClick={() => onClick(item)}
-              className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left ${isActive ? "bg-[#262626]" : "hover:bg-[var(--bg-card)]"}`}
+              className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left ${isActive ? "bg-[var(--bg-hover)]" : "hover:bg-[var(--bg-hover)]"}`}
             >
-              <span className="text-[#a5a5a5]">{icon}</span>
+              <span className="text-[var(--text-secondary)]">{icon}</span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs text-white">{item.title}</span>
-                <span className="text-[11px] text-[#979797]">{item.subtitle}</span>
+                <span className="block truncate text-xs text-[var(--text-primary)]">{item.title}</span>
+                <span className="text-[11px] text-[var(--text-secondary)]">{item.subtitle}</span>
               </span>
             </button>
           );
@@ -753,10 +753,10 @@ function SearchGroup({
 function SimpleModal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 px-4">
-      <div className="w-full max-w-xl rounded-lg border border-[var(--border)] bg-[#101010] p-4">
+      <div className="w-full max-w-xl rounded-lg border border-[var(--border)] bg-[var(--bg-modal)] p-4">
         <div className="mb-3 flex items-center justify-between">
-          <p className="text-sm font-semibold text-white">{title}</p>
-          <button onClick={onClose} className="rounded-md border border-[var(--border)] p-1.5 text-[#bbb]"><X className="h-4 w-4" /></button>
+          <p className="text-sm font-semibold text-[var(--text-primary)]">{title}</p>
+          <button onClick={onClose} className="rounded-md p-1.5 text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"><X className="h-4 w-4" /></button>
         </div>
         {children}
       </div>
@@ -766,10 +766,10 @@ function SimpleModal({ title, onClose, children }: { title: string; onClose: () 
 
 function PlanCard({ title, price, features, featured = false }: { title: string; price: string; features: string[]; featured?: boolean }) {
   return (
-    <div className={`rounded-md border p-3 ${featured ? "border-white bg-[#191919]" : "border-[var(--border)] bg-[#151515]"}`}>
-      <p className="text-sm font-semibold text-white">{title}</p>
-      <p className="mt-1 text-xl font-bold text-white">{price}</p>
-      <ul className="mt-2 space-y-1 text-xs text-[#c7c7c7]">
+    <div className={`rounded-md border p-3 ${featured ? "border-[var(--text-primary)] bg-[var(--bg-hover)]" : "border-[var(--border)] bg-[var(--bg-card)]"}`}>
+      <p className="text-sm font-semibold text-[var(--text-primary)]">{title}</p>
+      <p className="mt-1 text-xl font-bold text-[var(--text-primary)]">{price}</p>
+      <ul className="mt-2 space-y-1 text-xs text-[var(--text-secondary)]">
         {features.map((item) => <li key={item}>• {item}</li>)}
       </ul>
     </div>

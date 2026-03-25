@@ -11,6 +11,43 @@ function jiraKeyFromText(value) {
   return m ? m[1] : null;
 }
 
+function taskCodeFromBranch(branchName) {
+  const m = text(branchName).match(/\b([A-Z][A-Z0-9]+-\d+)\b/);
+  return m ? String(m[1]).toUpperCase() : null;
+}
+
+async function findTaskByCode(orgPool, taskCode) {
+  if (!taskCode) return null;
+  const resp = await orgPool.query(
+    `SELECT id, sprint_id, project_id, assignee_id, status
+     FROM tasks
+     WHERE jira_issue_key = $1
+     LIMIT 1`,
+    [String(taskCode)]
+  );
+  return resp.rows[0] || null;
+}
+
+async function notifyAssignee(orgPool, taskId, assigneeDeveloperId, title, body) {
+  if (!assigneeDeveloperId) return;
+  const memberResp = await orgPool.query(
+    `SELECT tm.id AS member_id
+     FROM developer_profiles dp
+     JOIN team_members tm ON tm.id = dp.member_id
+     WHERE dp.id = $1
+     LIMIT 1`,
+    [String(assigneeDeveloperId)]
+  );
+  const memberId = memberResp.rows[0]?.member_id;
+  if (!memberId) return;
+
+  await orgPool.query(
+    `INSERT INTO notifications (recipient_member_id, type, title, body, action_url, reference_id, reference_type)
+     VALUES ($1,'task_assigned',$2,$3,$4,$5,'task')`,
+    [String(memberId), String(title), String(body), `/tasks/${String(taskId)}`, String(taskId)]
+  );
+}
+
 async function findDeveloperIdByGithubUsername(orgPool, username) {
   if (!username) return null;
   const resp = await orgPool.query(
@@ -135,6 +172,7 @@ async function handlePullRequestEvent(orgPool, payload, repoName) {
   const action = text(payload?.action).toLowerCase();
   const pr = payload?.pull_request || {};
   const branch = text(pr?.head?.ref) || null;
+  const taskCodeFromRef = taskCodeFromBranch(branch);
   const title = text(pr?.title);
   const body = text(pr?.body);
 
@@ -143,6 +181,15 @@ async function handlePullRequestEvent(orgPool, payload, repoName) {
   let sprintId = linked.sprintId || null;
   let projectId = linked.projectId || null;
   let createdFromUnlinkedPr = false;
+
+  if (!taskId && taskCodeFromRef) {
+    const byCode = await findTaskByCode(orgPool, taskCodeFromRef);
+    if (byCode?.id) {
+      taskId = byCode.id;
+      sprintId = byCode.sprint_id || null;
+      projectId = byCode.project_id || null;
+    }
+  }
 
   if (!taskId && action === 'opened') {
     const created = await githubAutoTaskService.createTaskFromUnlinkedPr(orgPool, repoName, payload);
@@ -176,8 +223,26 @@ async function handlePullRequestEvent(orgPool, payload, repoName) {
 
   if (taskId && action === 'opened') {
     await taskProgressService.onPrOpened(orgPool, payload);
+
+    const prNumber = Number(pr?.number || payload?.number || 0);
+    await orgPool.query(
+      `INSERT INTO task_comments (task_id, author_id, content, comment_type, metadata)
+       VALUES ($1, NULL, $2, 'comment', $3::jsonb)`,
+      [
+        String(taskId),
+        `PR #${Number.isFinite(prNumber) ? prNumber : ''} opened: ${text(pr?.html_url) || ''}`.trim(),
+        JSON.stringify({ source: 'github', event: 'pr_opened', prUrl: pr?.html_url || null }),
+      ]
+    );
+
     if (!createdFromUnlinkedPr) {
-      await orgPool.query(`UPDATE tasks SET status = 'in_review', updated_at = NOW() WHERE id = $1`, [String(taskId)]);
+      await orgPool.query(
+        `UPDATE tasks
+         SET status = CASE WHEN status = 'in_progress' THEN 'in_review' ELSE status END,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [String(taskId)]
+      );
     }
   }
 
@@ -188,14 +253,33 @@ async function handlePullRequestEvent(orgPool, payload, repoName) {
   const merged = Boolean(pr?.merged) || (action === 'closed' && Boolean(pr?.merged_at));
   if (taskId && merged) {
     await taskProgressService.onPrMerged(orgPool, payload);
+
+    const prNumber = Number(pr?.number || payload?.number || 0);
+
+    await orgPool.query(
+      `UPDATE tasks
+       SET status = 'done', completed_at = COALESCE(completed_at, NOW()), updated_at = NOW()
+       WHERE id = $1`,
+      [String(taskId)]
+    );
+
     await orgPool.query(
       `INSERT INTO task_comments (task_id, author_id, content, comment_type, metadata)
        VALUES ($1, NULL, $2, 'status_change', $3::jsonb)`,
       [
         String(taskId),
-        'PR merged. Task marked done and progress set to 100%.',
-        JSON.stringify({ source: 'github', event: 'pr_merged', prUrl: pr?.html_url || null }),
+        `Automatically closed via PR #${Number.isFinite(prNumber) ? prNumber : ''}`.trim(),
+        JSON.stringify({ source: 'github', event: 'pr_merged', prUrl: pr?.html_url || null, prNumber }),
       ]
+    );
+
+    const assigneeResp = await orgPool.query('SELECT assignee_id FROM tasks WHERE id = $1 LIMIT 1', [String(taskId)]);
+    await notifyAssignee(
+      orgPool,
+      String(taskId),
+      assigneeResp.rows[0]?.assignee_id || null,
+      'Task automatically completed',
+      `Your task was automatically closed via PR #${Number.isFinite(prNumber) ? prNumber : ''}.`
     );
   }
 
@@ -213,6 +297,27 @@ async function handleIssuesEvent(orgPool, payload, repoName) {
   if (action === 'labeled') {
     const result = await githubAutoTaskService.handleIssueLabeled(orgPool, repoName, payload);
     return { ok: true, action, ...result };
+  }
+
+  if (action === 'closed') {
+    const issueNumber = Number(payload?.issue?.number || 0);
+    if (!Number.isFinite(issueNumber) || issueNumber <= 0) return { ok: true, action, ignored: true };
+
+    await orgPool.query(
+      `UPDATE tasks
+       SET status = 'done', completed_at = COALESCE(completed_at, NOW()), updated_at = NOW()
+       WHERE github_issue_number = $1`,
+      [issueNumber]
+    );
+
+    await orgPool.query(
+      `UPDATE backlog_items
+       SET status = 'done', updated_at = NOW()
+       WHERE github_issue_number = $1`,
+      [issueNumber]
+    );
+
+    return { ok: true, action, issueNumber, synced: true };
   }
 
   return { ok: true, ignored: true, action };

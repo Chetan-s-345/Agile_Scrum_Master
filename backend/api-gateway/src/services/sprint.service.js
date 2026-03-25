@@ -2,6 +2,7 @@ const { assignmentService } = require('./assignment.service');
 const { getQueues } = require('./queue.service');
 const { queueJiraTaskSync } = require('./jiraSync.service');
 const { logger } = require('../middleware/logger');
+const { queueEmbedSprint } = require('../../server/lib/githubIngestion');
 
 function requireOrgDb(req) {
   const pool = req.orgDb;
@@ -186,6 +187,8 @@ class SprintService {
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
     });
+
+    queueEmbedSprint({ sprint });
 
     return { sprint, teamBreakdown: breakdown };
   }
@@ -441,6 +444,7 @@ class SprintService {
       });
 
       await orgPool.query('COMMIT');
+      queueEmbedSprint({ sprint: updated });
       return updated;
     } catch (e) {
       try {
@@ -539,6 +543,8 @@ class SprintService {
         logger.warn({ err: e }, 'Failed to queue report-generation job');
       }
 
+      queueEmbedSprint({ sprint: updated });
+
       return {
         sprint: updated,
         reportJobQueued,
@@ -580,6 +586,8 @@ class SprintService {
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
     });
+
+    queueEmbedSprint({ sprint: after });
 
     return { ok: true, sprint: after };
   }

@@ -59,6 +59,13 @@ const timeLogSchema = z.object({
   description: z.string().optional(),
 });
 
+const createSubtaskSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().optional(),
+  priority: z.string().min(1).optional(),
+  storyPoints: z.number().int().min(0).max(500).optional(),
+});
+
 module.exports = {
   uuidSchema,
   listTasksQuerySchema,
@@ -69,4 +76,5 @@ module.exports = {
   addCommentSchema,
   sprintBoardParamsSchema,
   timeLogSchema,
+  createSubtaskSchema,
 };

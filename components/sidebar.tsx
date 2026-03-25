@@ -31,7 +31,6 @@ import {
   Pencil,
   Plus,
   ShieldAlert,
-  Sparkles,
   Star,
   Trash2,
   UserRound,
@@ -500,17 +499,17 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           <div className="mb-3 flex items-center justify-between">
             <Link href="/" className="flex items-center gap-2" aria-label="Go to home page">
               <div className="grid h-6 w-6 grid-cols-2 gap-0.5 rounded-sm border border-[var(--border)] p-0.5">
-                <span className="rounded-[2px] bg-white" />
-                <span className="rounded-[2px] bg-white" />
-                <span className="rounded-[2px] bg-white" />
-                <span className="rounded-[2px] bg-white" />
+                <span className="rounded-[2px] bg-[var(--text-primary)]" />
+                <span className="rounded-[2px] bg-[var(--text-primary)]" />
+                <span className="rounded-[2px] bg-[var(--text-primary)]" />
+                <span className="rounded-[2px] bg-[var(--text-primary)]" />
               </div>
-              {!collapsed ? <span className="text-base font-semibold">Sprint</span> : null}
+              {!collapsed ? <span className="text-base font-semibold text-[var(--text-primary)]">Sprint</span> : null}
             </Link>
             <button
               type="button"
               onClick={onToggle}
-              className="hidden rounded-md border border-[var(--border)] p-1 text-white hover:bg-[#2a2a2a] md:inline-flex"
+              className="hidden rounded-md p-1 text-[var(--text-primary)] hover:bg-[var(--sidebar-hover)] md:inline-flex"
               aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             >
               {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
@@ -519,7 +518,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <button
               type="button"
               onClick={closeSidebar}
-              className="inline-flex rounded-md border border-[var(--border)] p-1 text-white hover:bg-[#2a2a2a] md:hidden"
+              className="inline-flex rounded-md p-1 text-[var(--text-primary)] hover:bg-[var(--sidebar-hover)] md:hidden"
               aria-label="Close sidebar"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -553,7 +552,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                             </Link>
                           ))
                         ) : (
-                          <div className="px-2 py-1 text-xs text-[#8f8f8f]">No recent pages.</div>
+                          <div className="px-2 py-1 text-xs text-[var(--text-secondary)]">No recent pages.</div>
                         )}
                       </div>
                     ) : null}
@@ -586,7 +585,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                             </Link>
                           ))
                         ) : (
-                          <div className="px-2 py-1 text-xs text-[#8f8f8f]">No starred pages.</div>
+                          <div className="px-2 py-1 text-xs text-[var(--text-secondary)]">No starred pages.</div>
                         )}
                       </div>
                     ) : null}
@@ -608,10 +607,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </div>
 
         <div className="sidebar-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3">
-          {!collapsed ? <p className="px-2 pb-1 text-xs uppercase tracking-wide text-[#8f8f8f]">Spaces</p> : null}
+          {!collapsed ? <p className="px-2 pb-1 text-xs uppercase tracking-wide text-[var(--text-secondary)]">Spaces</p> : null}
 
           {loadingSpaces ? (
-            <div className="px-2 py-2 text-xs text-[#8f8f8f]">Loading spaces...</div>
+            <div className="px-2 py-2 text-xs text-[var(--text-secondary)]">Loading spaces...</div>
           ) : (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
               <SortableContext items={spaces.map((s) => s.id)} strategy={verticalListSortingStrategy}>
@@ -715,7 +714,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
               <p className="px-2 pb-2 pt-4 text-xs uppercase tracking-wide text-[#8f8f8f]">Recommended</p>
               <Link href="/assignment" className="flex h-9 items-center gap-2 rounded-md px-2 text-sm hover:bg-[#2a2a2a]">
-                <Sparkles className="h-4 w-4" />
+                <Zap className="h-4 w-4" />
                 <span className="truncate">Collect requests</span>
                 <span className="ml-auto rounded border border-[#3f3f3f] px-1.5 py-0.5 text-[10px] font-semibold text-[#d7c8ff]">TRY</span>
               </Link>
