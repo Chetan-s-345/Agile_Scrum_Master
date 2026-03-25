@@ -202,6 +202,10 @@ class EmailService {
     return isEmailConfigured();
   }
 
+  async sendTransactionalEmail(payload) {
+    return sendTransactionalEmail(payload);
+  }
+
   configState() {
     return emailConfigState();
   }

@@ -1,6 +1,8 @@
 const axios = require('axios');
 const { randomUUID } = require('node:crypto');
 const { emitToProject } = require('../../src/realtime/io');
+const { queueEmbedTask } = require('./githubIngestion');
+const { sendInngestEvent } = require('../../src/services/inngestEvent.service');
 
 const STATUS_MAP = {
   TODO: 'todo',
@@ -159,6 +161,7 @@ async function ensureAgentActionsTable(orgPool) {
       id TEXT PRIMARY KEY,
       project_id TEXT,
       user_id TEXT,
+      agent_type TEXT,
       action_name TEXT,
       input JSONB,
       result JSONB,
@@ -166,6 +169,20 @@ async function ensureAgentActionsTable(orgPool) {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`
   );
+  await orgPool.query('ALTER TABLE agent_actions ADD COLUMN IF NOT EXISTS agent_type TEXT');
+  await orgPool.query('ALTER TABLE agent_actions ADD COLUMN IF NOT EXISTS action TEXT');
+  await orgPool.query('ALTER TABLE agent_actions ADD COLUMN IF NOT EXISTS entity_type TEXT');
+  await orgPool.query('ALTER TABLE agent_actions ADD COLUMN IF NOT EXISTS entity_id TEXT');
+    await orgPool.query('ALTER TABLE agent_actions ADD COLUMN IF NOT EXISTS payload JSONB DEFAULT \'{}\'::jsonb');
+  await orgPool.query('ALTER TABLE agent_actions ADD COLUMN IF NOT EXISTS source TEXT');
+  await orgPool.query('ALTER TABLE agent_actions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()');
+}
+
+async function ensureAgentTaskColumns(orgPool) {
+  await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_source TEXT');
+  await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_agent_id TEXT');
+  await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_by TEXT');
+  await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ');
 }
 
 async function ensureAgentApprovalsTable(orgPool) {
@@ -242,12 +259,13 @@ async function getActorMemberId(orgPool, userId) {
 async function insertActionLog(orgPool, row) {
   await ensureAgentActionsTable(orgPool);
   await orgPool.query(
-    `INSERT INTO agent_actions (id, project_id, user_id, action_name, input, result, status)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)`,
+    `INSERT INTO agent_actions (id, project_id, user_id, agent_type, action_name, input, result, status)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)`,
     [
       String(row.id),
       row.projectId ? String(row.projectId) : null,
       row.userId ? String(row.userId) : null,
+      row.agentType ? String(row.agentType) : null,
       String(row.actionName),
       JSON.stringify(row.input || {}),
       JSON.stringify(row.result || {}),
@@ -276,13 +294,21 @@ async function createPendingAction(orgPool, context, name, input, preview) {
   await orgPool.query(
     `INSERT INTO agent_approvals (id, project_id, action_type, title, description, payload, status)
      VALUES ($1,$2,$3,$4,$5,$6::jsonb,'pending')`,
-    [String(actionId), String(context.projectId), String(name), title, description, JSON.stringify({ actionType: name, input, preview })]
+    [
+      String(actionId),
+      String(context.projectId),
+      String(name),
+      title,
+      description,
+      JSON.stringify({ actionType: name, input, preview, agentType: safe(context.agentId) || null }),
+    ]
   );
 
   await insertActionLog(orgPool, {
     id: actionId,
     projectId: context.projectId,
     userId: context.userId,
+    agentType: safe(context.agentId) || null,
     actionName: name,
     input,
     result: { approvalId: actionId, title, description },
@@ -326,16 +352,29 @@ async function getStoredGithubAccessToken(orgPool) {
 }
 
 async function createTask(orgPool, context, input) {
-  const actorMemberId = await getActorMemberId(orgPool, context.userId);
+  await ensureAgentTaskColumns(orgPool);
+  let actorMemberId = await getActorMemberId(orgPool, context.userId);
+  if (!actorMemberId) {
+    const fallback = await orgPool.query(
+      `SELECT member_id
+       FROM project_members
+       WHERE project_id = $1
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [String(context.projectId)]
+    );
+    actorMemberId = fallback.rows[0]?.member_id || null;
+  }
   const storyPoints = Number(input.storyPoints || 0);
   const labels = toArray(input.labels).map((v) => String(v));
   const resp = await orgPool.query(
     `INSERT INTO tasks (
-       sprint_id, project_id, title, description, priority,
-       story_points, tech_tags, assignee_id, created_by
+       sprint_id, project_id, title, description, status, type, priority,
+       story_points, tech_tags, assignee_id, created_by,
+       created_source, created_agent_id, assigned_by, assigned_at
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-     RETURNING id, jira_issue_key`,
+     VALUES ($1,$2,$3,$4,'todo','task',$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    RETURNING id, jira_issue_key, project_id, sprint_id, title, priority, story_points, tech_tags, assignee_id`,
     [
       String(input.sprintId),
       String(context.projectId),
@@ -346,9 +385,32 @@ async function createTask(orgPool, context, input) {
       labels,
       safe(input.assigneeId) || null,
       actorMemberId,
+      'agent',
+      safe(context.agentId) || null,
+      safe(input.assigneeId) ? 'ai_agentic' : null,
+      safe(input.assigneeId) ? new Date().toISOString() : null,
     ]
   );
   const row = resp.rows[0];
+
+  queueEmbedTask({ task: row, orgPool });
+  try {
+    await sendInngestEvent('task/created', {
+      orgId: String(context.orgId || ''),
+      projectId: String(row.project_id || context.projectId || ''),
+      sprintId: row.sprint_id ? String(row.sprint_id) : null,
+      taskId: String(row.id || ''),
+      title: String(row.title || ''),
+      priority: String(row.priority || 'medium'),
+      storyPoints: Number(row.story_points || 0),
+      techTags: Array.isArray(row.tech_tags) ? row.tech_tags : [],
+      assigneeId: row.assignee_id ? String(row.assignee_id) : null,
+      createdByAgentId: safe(context.agentId) || null,
+    });
+  } catch {
+    // Ignore event dispatch failures for action execution.
+  }
+
   return {
     taskId: row.id,
     code: row.jira_issue_key || `TASK-${String(row.id).slice(0, 8)}`,
@@ -370,6 +432,7 @@ async function updateTaskStatus(orgPool, context, input) {
 }
 
 async function assignTask(orgPool, context, input) {
+  await ensureAgentTaskColumns(orgPool);
   const taskResp = await orgPool.query(
     'SELECT id FROM tasks WHERE id = $1 AND project_id = $2 LIMIT 1',
     [String(input.taskId), String(context.projectId)]
@@ -387,9 +450,10 @@ async function assignTask(orgPool, context, input) {
   const dev = devResp.rows[0];
   if (!dev) throw Object.assign(new Error('Developer not found'), { statusCode: 404 });
 
-  await orgPool.query('UPDATE tasks SET assignee_id = $2, assigned_at = NOW(), updated_at = NOW() WHERE id = $1', [
+  await orgPool.query('UPDATE tasks SET assignee_id = $2, assigned_by = $3, assigned_at = NOW(), updated_at = NOW() WHERE id = $1', [
     String(input.taskId),
     String(input.developerId),
+    'ai_agentic',
   ]);
 
   return { taskId: String(input.taskId), developerName: dev.full_name };
@@ -674,6 +738,7 @@ async function executeActionWithPolicy(orgPool, context, name, input) {
     id: actionId,
     projectId: context.projectId,
     userId: context.userId,
+    agentType: safe(context.agentId) || null,
     actionName: name,
     input,
     result: {},

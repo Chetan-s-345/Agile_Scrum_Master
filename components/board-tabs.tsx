@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 
 const tabs = [
   { label: "Summary", href: "/board/summary" },
@@ -15,10 +15,21 @@ const tabs = [
 
 export function BoardTabs() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   function isActive(href: string) {
     if (href === "/board") return pathname === "/board";
     return pathname === href || pathname.startsWith(`${href}/`);
+  }
+
+  function withContext(href: string): string {
+    const next = new URLSearchParams();
+    const sprintId = String(searchParams?.get("sprintId") || "").trim();
+    const projectId = String(searchParams?.get("projectId") || "").trim();
+    if (sprintId) next.set("sprintId", sprintId);
+    if (projectId) next.set("projectId", projectId);
+    const query = next.toString();
+    return query ? `${href}?${query}` : href;
   }
 
   return (
@@ -26,7 +37,7 @@ export function BoardTabs() {
       {tabs.map((tab) => (
         <Link
           key={tab.href}
-          href={tab.href}
+          href={withContext(tab.href)}
           className={
             isActive(tab.href)
               ? "rounded px-3 py-1.5 border-b-2 border-white text-white font-semibold"

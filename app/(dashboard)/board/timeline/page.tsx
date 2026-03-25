@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { addDays, differenceInCalendarDays, format, startOfDay } from "date-fns";
 
 type Sprint = { id: string; name: string; startDate?: string; endDate?: string; status?: string };
@@ -77,7 +78,9 @@ function detectCycle(edges: Dependency[]): boolean {
   return false;
 }
 
-export default function TimelineTabPage() {
+function TimelineTabPageContent() {
+  const searchParams = useSearchParams();
+  const requestedSprintId = String(searchParams?.get("sprintId") || "").trim();
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [zoom, setZoom] = useState<Zoom>("month");
@@ -153,9 +156,12 @@ export default function TimelineTabPage() {
   }, [tasks]);
 
   const filteredTasks = useMemo(() => {
-    if (assigneeFilter === "all") return tasks;
-    return tasks.filter((task) => task.assignee?.id === assigneeFilter);
-  }, [assigneeFilter, tasks]);
+    const bySprint = requestedSprintId
+      ? tasks.filter((task) => String(task.sprintId) === requestedSprintId)
+      : tasks;
+    if (assigneeFilter === "all") return bySprint;
+    return bySprint.filter((task) => task.assignee?.id === assigneeFilter);
+  }, [assigneeFilter, requestedSprintId, tasks]);
 
   const allAssignees = useMemo(() => {
     const map = new Map<string, string>();
@@ -521,6 +527,14 @@ export default function TimelineTabPage() {
 
       {toast ? <div className="fixed bottom-4 right-4 z-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 shadow">{toast}</div> : null}
     </div>
+  );
+}
+
+export default function TimelineTabPage() {
+  return (
+    <Suspense fallback={<div className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2 text-sm text-[var(--text-secondary)]">Loading timeline...</div>}>
+      <TimelineTabPageContent />
+    </Suspense>
   );
 }
 

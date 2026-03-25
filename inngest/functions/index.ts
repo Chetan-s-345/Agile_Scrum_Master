@@ -6,6 +6,7 @@ export {
 	prMergedToDone,
 	taskCreatedAutoAssign,
 	taskUpdatedMonitoring,
+	customAgentRunObserved,
 	projectMonitoringPulse,
 	sprintEndCleanupCron,
 	sprintEndCleanupEvent,

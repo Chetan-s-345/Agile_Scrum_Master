@@ -1,4 +1,5 @@
 import { BoardTabs } from "@/components/board-tabs";
+import { Suspense } from "react";
 
 export default function BoardTabsLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -9,7 +10,9 @@ export default function BoardTabsLayout({ children }: { children: React.ReactNod
           <span className="h-6 w-6 rounded-sm bg-[#57a7ff]" />
           <h1 className="text-[34px] font-semibold leading-9">My Software Team</h1>
         </header>
-        <BoardTabs />
+        <Suspense fallback={<div className="mb-4 h-10 rounded border border-[var(--border)] bg-[var(--bg-card)]" />}>
+          <BoardTabs />
+        </Suspense>
         {children}
       </section>
     </main>

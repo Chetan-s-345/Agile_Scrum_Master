@@ -23,6 +23,8 @@ function mapAgentToMode(agentType) {
   if (!key || key === 'all agents') return 'chat';
   if (key === 'sprint autopilot') return 'plan';
   if (key === 'developer intelligence') return 'assign';
+  if (key.includes('assign')) return 'assign';
+  if (key.includes('task') || key.includes('sprint')) return 'plan';
   return 'chat';
 }
 
@@ -365,6 +367,8 @@ router.post('/command', async (req, res, next) => {
     const projectId = safe(req.body?.projectId);
     const command = safe(req.body?.command);
     const agentType = safe(req.body?.agentType) || 'All agents';
+    const agentId = safe(req.body?.agentId);
+    const executionMode = safe(req.body?.executionMode || req.body?.actionMode || 'auto') || 'auto';
     const actorUserId = safe(req.body?.userId) || String(req.user?.userId || '');
 
     if (!command) return jsonError(res, 400, 'Bad request', 'command is required.');
@@ -389,6 +393,8 @@ router.post('/command', async (req, res, next) => {
       body: JSON.stringify({
         projectId,
         mode,
+        agentId,
+        executionMode,
         message: command,
         history: [],
       }),

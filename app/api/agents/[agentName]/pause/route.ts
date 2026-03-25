@@ -24,6 +24,6 @@ export async function PATCH(
     upstreamPath: `/api/v1/agents/${encodeURIComponent(name)}/pause`,
     method: "PATCH",
     token,
-    jsonBody: body,
+    body,
   });
 }

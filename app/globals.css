@@ -4,7 +4,17 @@
 
 * {
   border-color: var(--border);
-  @apply transition-colors duration-200;
+}
+a,
+button,
+input,
+select,
+textarea,
+.transition-ui {
+  transition:
+    background-color 180ms ease,
+    color 120ms ease,
+    border-color 140ms ease;
 }
 
 :root {
@@ -16,18 +26,18 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg-app: #0d0d0d;
-  --bg-surface: #111111;
-  --bg-card: #1a1a1a;
-  --bg-hover: #222222;
-  --bg-input: #111111;
-  --bg-modal: #1a1a1a;
-  --bg-tooltip: #2a2a2a;
-  --bg-badge: #2a2a2a;
+  --bg-app: #000000;
+  --bg-surface: #050505;
+  --bg-card: #0a0a0a;
+  --bg-hover: #121212;
+  --bg-input: #050505;
+  --bg-modal: #0a0a0a;
+  --bg-tooltip: #161616;
+  --bg-badge: #181818;
 
-  --border: #2a2a2a;
-  --border-strong: #3a3a3a;
-  --border-focus: #555555;
+  --border: #1f1f1f;
+  --border-strong: #2b2b2b;
+  --border-focus: #3a3a3a;
 
   --text-primary: #ffffff;
   --text-secondary: #a1a1aa;
@@ -46,10 +56,10 @@
   --goal-avatar-bg: #4a4a6f;
   --goal-avatar-overflow-bg: #3e3e3e;
 
-  --sidebar-bg: #0d0d0d;
+  --sidebar-bg: #000000;
   --sidebar-active: #ffffff;
   --sidebar-active-text: #000000;
-  --sidebar-hover: #1a1a1a;
+  --sidebar-hover: #101010;
   --sidebar-text: #a1a1aa;
 
   --scrollbar-thumb: transparent;
@@ -193,6 +203,94 @@ body {
 
 .sidebar-scroll::-webkit-scrollbar {
   display: none;
+}
+
+/* Explicitly show scrollbar for horizontal board/task lanes */
+.show-scrollbar {
+  scrollbar-width: thin;
+  -ms-overflow-style: auto;
+}
+
+.show-scrollbar::-webkit-scrollbar {
+  display: block !important;
+  height: 10px;
+  width: 10px;
+}
+
+.show-scrollbar::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+
+.show-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+}
+
+@keyframes asmBlockShuffleA {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(112px, 0); }
+  50% { transform: translate(112px, 112px); }
+  75% { transform: translate(0, 112px); }
+}
+
+@keyframes asmBlockShuffleB {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(0, 112px); }
+  50% { transform: translate(-112px, 112px); }
+  75% { transform: translate(-112px, 0); }
+}
+
+@keyframes asmBlockShuffleC {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(0, -112px); }
+  50% { transform: translate(112px, -112px); }
+  75% { transform: translate(112px, 0); }
+}
+
+@keyframes asmBlockShuffleD {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(-112px, 0); }
+  50% { transform: translate(-112px, -112px); }
+  75% { transform: translate(0, -112px); }
+}
+
+.asm-block-loader {
+  position: relative;
+  width: 192px;
+  height: 192px;
+}
+
+.asm-block-loader span {
+  position: absolute;
+  width: 80px;
+  height: 80px;
+  border-radius: 12px;
+  background: var(--text-primary);
+  will-change: transform;
+}
+
+.asm-block-loader span:nth-child(1) {
+  left: 0;
+  top: 0;
+  animation: asmBlockShuffleA 1.2s ease-in-out infinite;
+}
+
+.asm-block-loader span:nth-child(2) {
+  left: 112px;
+  top: 0;
+  animation: asmBlockShuffleB 1.2s ease-in-out infinite;
+}
+
+.asm-block-loader span:nth-child(3) {
+  left: 0;
+  top: 112px;
+  animation: asmBlockShuffleC 1.2s ease-in-out infinite;
+}
+
+.asm-block-loader span:nth-child(4) {
+  left: 112px;
+  top: 112px;
+  animation: asmBlockShuffleD 1.2s ease-in-out infinite;
 }
 
 /* Global Jira-like dashboard styling for all pages under dashboard layout */

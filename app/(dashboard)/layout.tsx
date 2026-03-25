@@ -29,7 +29,7 @@ export default function DashboardLayout({
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((prev) => !prev)} />
       <div className={`min-h-screen transition-[margin] duration-200 ${collapsed ? "md:ml-[82px]" : "md:ml-[260px]"}`}>
         <Navbar />
-        <div className="jira-page-content min-h-[calc(100vh-7rem)] w-full bg-white dark:bg-[var(--bg-app)]">
+        <div className="jira-page-content min-h-[calc(100vh-7rem)] w-full bg-[var(--bg-primary)]">
           {children}
         </div>
       </div>

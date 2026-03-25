@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeInit } from "@/components/theme-init";
+import { InitialVisitLoader } from "@/components/initial-visit-loader";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -48,6 +49,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[var(--bg-app)] text-[var(--text-primary)] transition-colors`}
       >
+        <InitialVisitLoader />
         <ThemeInit />
         {children}
       </body>

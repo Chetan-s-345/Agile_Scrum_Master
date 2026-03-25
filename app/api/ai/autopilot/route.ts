@@ -15,6 +15,6 @@ export async function POST(request: Request) {
     upstreamPath: "/api/v1/ai/autonomous/autopilot",
     method: "POST",
     token,
-    jsonBody: body,
+    body: body,
   });
 }

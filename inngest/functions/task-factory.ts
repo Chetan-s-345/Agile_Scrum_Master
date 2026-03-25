@@ -1,4 +1,5 @@
 import { Pool } from "@neondatabase/serverless";
+import { randomUUID } from "node:crypto";
 import { inngest } from "../client";
 
 type EventBase = { orgId: string; projectId: string };
@@ -231,9 +232,10 @@ async function logAction(
 ): Promise<void> {
   await ensureAgentActionsTable(orgPool);
   await orgPool.query(
-    `INSERT INTO agent_actions (project_id, action_name, action, entity_type, entity_id, input, payload, result, status, source)
-     VALUES ($1,$2,$2,$3,$4,$5::jsonb,$5::jsonb,$6::jsonb,$7,$8)`,
+    `INSERT INTO agent_actions (id, project_id, action_name, action, entity_type, entity_id, input, payload, result, status, source)
+     VALUES ($1,$2,$3,$3,$4,$5,$6::jsonb,$6::jsonb,$7::jsonb,$8,$9)`,
     [
+      randomUUID(),
       input.projectId ? String(input.projectId) : null,
       String(input.action),
       input.entityType ? String(input.entityType) : null,
@@ -996,6 +998,46 @@ export const taskUpdatedMonitoring = inngest.createFunction(
       await trackRun(orgPool, "task-updated-monitoring", "failed");
       throw error;
     }
+  }
+);
+
+export const customAgentRunObserved = inngest.createFunction(
+  { id: "custom-agent-run-observed", name: "Custom Agent Run Observed" },
+  { event: "agent/custom.run" },
+  async ({ event }) => {
+    const data = (event.data || {}) as {
+      orgId?: string;
+      projectId?: string;
+      agentId?: string;
+      createdTasks?: number;
+      assignedTasks?: number;
+    };
+
+    const orgId = String(data.orgId || "").trim();
+    const projectId = String(data.projectId || "").trim();
+    if (!orgId || !projectId) return { observed: false, reason: "missing_org_or_project" };
+
+    const orgPool = await getTenantPool(orgId);
+    await logAction(orgPool, {
+      projectId,
+      action: "custom_agent_run_observed",
+      entityType: "agent",
+      entityId: String(data.agentId || "custom-agent"),
+      payload: {
+        createdTasks: Number(data.createdTasks || 0),
+        assignedTasks: Number(data.assignedTasks || 0),
+      },
+      result: { observed: true },
+    });
+    await trackRun(orgPool, "custom-agent-run-observed", "completed");
+
+    return {
+      observed: true,
+      projectId,
+      agentId: String(data.agentId || ""),
+      createdTasks: Number(data.createdTasks || 0),
+      assignedTasks: Number(data.assignedTasks || 0),
+    };
   }
 );
 

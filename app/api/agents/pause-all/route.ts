@@ -15,6 +15,6 @@ export async function PATCH(request: Request) {
     upstreamPath: "/api/v1/agents/pause-all",
     method: "PATCH",
     token,
-    jsonBody: body,
+    body: body,
   });
 }

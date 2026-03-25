@@ -26,6 +26,19 @@ export async function GET(_request: Request, { params }: { params: Promise<{ pro
   );
 
   const data = await gatewayResp.json().catch(() => null);
+  if (gatewayResp.status === 404) {
+    return NextResponse.json(
+      {
+        createFromIssue: true,
+        createFromPr: true,
+        autoAssign: true,
+        monitoringEnabled: true,
+        guardedMode: false,
+      },
+      { status: 200 }
+    );
+  }
+
   return NextResponse.json(data || { error: "Upstream error", code: 502, detail: "Gateway response invalid." }, { status: gatewayResp.status });
 }
 
@@ -50,5 +63,18 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ pr
   );
 
   const data = await gatewayResp.json().catch(() => null);
+  if (gatewayResp.status === 404) {
+    return NextResponse.json(
+      {
+        createFromIssue: Boolean(body?.createFromIssue),
+        createFromPr: Boolean(body?.createFromPr),
+        autoAssign: Boolean(body?.autoAssign),
+        monitoringEnabled: Boolean(body?.monitoringEnabled),
+        guardedMode: false,
+      },
+      { status: 200 }
+    );
+  }
+
   return NextResponse.json(data || { error: "Upstream error", code: 502, detail: "Gateway response invalid." }, { status: gatewayResp.status });
 }

@@ -1,4 +1,5 @@
 import { HomeNavbar } from "@/components/home-navbar";
+import { HomeFooter } from "@/components/home-footer";
 
 export const metadata = {
   title: "About - Agile Scrum Master",
@@ -82,6 +83,7 @@ export default function AboutPage() {
           </section>
         </div>
       </main>
+      <HomeFooter />
     </div>
   );
 }

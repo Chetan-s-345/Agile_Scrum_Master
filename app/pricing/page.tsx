@@ -1,4 +1,5 @@
 import { HomeNavbar } from "@/components/home-navbar";
+import { HomeFooter } from "@/components/home-footer";
 import Link from "next/link";
 
 export const metadata = {
@@ -103,6 +104,7 @@ export default function PricingPage() {
           </div>
         </div>
       </main>
+      <HomeFooter />
     </div>
   );
 }

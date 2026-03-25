@@ -174,6 +174,7 @@ async function chat(req, res, next) {
     const modeInput = safe(body.mode || 'chat').toLowerCase();
     const mode = modeInput === 'auto' ? 'chat' : modeInput;
     const executionMode = safe(body.executionMode || body.actionMode || modeInput || 'confirm').toLowerCase();
+    const agentId = safe(body.agentId || body.agentType);
     const historyList = Array.isArray(body.history) ? body.history : [];
 
     if (!message) return jsonError(res, 400, 'Bad request', 'message is required.');
@@ -218,6 +219,7 @@ async function chat(req, res, next) {
           projectId,
           userId: String(req.user?.userId || ''),
           executionMode,
+          agentId,
         }, String(block.name), block.input || {});
 
         if (result?.type === 'confirmation_required') {
@@ -273,8 +275,9 @@ async function confirmAction(req, res, next) {
     if (!req.orgDb) return jsonError(res, 500, 'Server error', 'Org database is not available.');
 
     await ensureAgentActionsTable(req.orgDb);
-    const rowResp = await req.orgDb.query('SELECT project_id FROM agent_actions WHERE id = $1 LIMIT 1', [actionId]);
+    const rowResp = await req.orgDb.query('SELECT project_id, agent_type FROM agent_actions WHERE id = $1 LIMIT 1', [actionId]);
     const projectId = safe(rowResp.rows[0]?.project_id);
+    const agentId = safe(rowResp.rows[0]?.agent_type);
     if (!projectId) return jsonError(res, 404, 'Not found', 'Pending action not found.');
 
     const access = await ensureProjectAccess(req.orgDb, projectId, req.actorMemberId, req.user?.role);
@@ -284,6 +287,7 @@ async function confirmAction(req, res, next) {
       projectId,
       userId: String(req.user?.userId || ''),
       executionMode: 'auto',
+      agentId,
     }, actionId);
 
     return res.status(200).json(result);
@@ -355,6 +359,7 @@ async function startSprintPlan(req, res, next) {
     const startDate = safe(req.body?.startDate || todayIso());
     const endDate = safe(req.body?.endDate);
     const assignments = Array.isArray(req.body?.assignments) ? req.body.assignments : [];
+    const plannerAgentId = safe(req.body?.agentId || 'sprint-autopilot');
     if (!projectId) return jsonError(res, 400, 'Bad request', 'projectId is required.');
     if (!endDate) return jsonError(res, 400, 'Bad request', 'endDate is required.');
     if (!req.orgDb) return jsonError(res, 500, 'Server error', 'Org database is not available.');
@@ -366,6 +371,7 @@ async function startSprintPlan(req, res, next) {
       projectId,
       userId: String(req.user?.userId || ''),
       executionMode: 'auto',
+      agentId: plannerAgentId,
     }, 'create_sprint', {
       name,
       startDate,
@@ -382,15 +388,25 @@ async function startSprintPlan(req, res, next) {
       const assigneeId = safe(assignment?.assignedTo || assignment?.assigneeId);
       if (!taskId) continue;
 
-      await executeActionWithPolicy(req.orgDb, { projectId, userId: String(req.user?.userId || ''), executionMode: 'auto' }, 'move_tasks_to_sprint', {
+      await executeActionWithPolicy(req.orgDb, {
+        projectId,
+        userId: String(req.user?.userId || ''),
+        executionMode: 'auto',
+        agentId: plannerAgentId,
+      }, 'move_tasks_to_sprint', {
         sprintId,
         taskIds: [taskId],
       });
 
       if (assigneeId) {
-        await executeActionWithPolicy(req.orgDb, { projectId, userId: String(req.user?.userId || ''), executionMode: 'auto' }, 'assign_task', {
+        await executeActionWithPolicy(req.orgDb, {
+          projectId,
+          userId: String(req.user?.userId || ''),
+          executionMode: 'auto',
+          agentId: plannerAgentId,
+        }, 'assign_task', {
           taskId,
-          assigneeId,
+          developerId: assigneeId,
         });
       }
       moved.push({ taskId, assigneeId });

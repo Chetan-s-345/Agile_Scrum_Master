@@ -4,17 +4,26 @@ import { getAuthTokenFromCookies, proxyToApiGateway } from "@/lib/api-gateway";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(request: Request) {
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ agentName: string }> }
+) {
   const token = await getAuthTokenFromCookies();
   if (!token) {
     return NextResponse.json({ error: "Unauthorized", code: 401, detail: "Missing auth token." }, { status: 401 });
   }
 
   const body = await request.json().catch(() => ({}));
+  const { agentName } = await params;
+  const id = String(agentName || "").trim();
+  if (!id) {
+    return NextResponse.json({ error: "Bad request", code: 400, detail: "agent id is required." }, { status: 400 });
+  }
+
   return proxyToApiGateway({
-    upstreamPath: "/api/v1/ai/rebalance",
+    upstreamPath: `/api/v1/agents/${encodeURIComponent(id)}/run`,
     method: "POST",
     token,
-    body: body,
+    body,
   });
 }

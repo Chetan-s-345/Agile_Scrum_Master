@@ -2,6 +2,7 @@ import { serve } from "inngest/next";
 
 import { inngest } from "@/inngest/client";
 import {
+  customAgentRunObserved,
   githubIssueToTask,
   githubPushToTask,
   projectMonitoringPulse,
@@ -25,6 +26,7 @@ export const { GET, POST, PUT } = serve({
     githubPushToTask,
     prToTask,
     prMergedToDone,
+    customAgentRunObserved,
     taskCreatedAutoAssign,
     taskUpdatedMonitoring,
     projectMonitoringPulse,

@@ -21,6 +21,32 @@ async function getActorMemberId(orgPool, userId) {
   return resp.rows[0]?.id || null;
 }
 
+async function ensureTaskSchemaCompatibility(orgPool) {
+  try {
+    await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_task_id UUID');
+    await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS is_subtask BOOLEAN DEFAULT FALSE');
+    await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_by TEXT');
+    await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ');
+    await orgPool.query("ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS comment_type TEXT DEFAULT 'comment'");
+    await orgPool.query("ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb");
+  } catch {
+    // Keep read paths alive on restricted/legacy schemas; queries below use fallbacks.
+  }
+}
+
+async function hasTasksColumn(orgPool, columnName) {
+  const resp = await orgPool.query(
+    `SELECT 1
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'tasks'
+       AND column_name = $1
+     LIMIT 1`,
+    [String(columnName)]
+  );
+  return Boolean(resp.rows[0]);
+}
+
 class TaskService {
   mapSubtaskRow(row) {
     return {
@@ -47,6 +73,10 @@ class TaskService {
 
   async listSubtasks(req, taskId) {
     const orgPool = requireOrgDb(req);
+    await ensureTaskSchemaCompatibility(orgPool);
+
+    const hasParentTaskId = await hasTasksColumn(orgPool, 'parent_task_id');
+    if (!hasParentTaskId) return [];
 
     const parentResp = await orgPool.query('SELECT id FROM tasks WHERE id = $1 LIMIT 1', [String(taskId)]);
     if (!parentResp.rows[0]) throw Object.assign(new Error('Task not found'), { statusCode: 404 });
@@ -80,6 +110,11 @@ class TaskService {
 
   async createSubtask(req, taskId, payload) {
     const orgPool = requireOrgDb(req);
+    await ensureTaskSchemaCompatibility(orgPool);
+    const hasParentTaskId = await hasTasksColumn(orgPool, 'parent_task_id');
+    if (!hasParentTaskId) {
+      throw Object.assign(new Error('Subtasks are unavailable until task schema migration completes.'), { statusCode: 409 });
+    }
     const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
     if (!actorMemberId) throw Object.assign(new Error('Team member not found'), { statusCode: 403 });
 
@@ -314,6 +349,7 @@ class TaskService {
 
   async getById(req, taskId) {
     const orgPool = requireOrgDb(req);
+    await ensureTaskSchemaCompatibility(orgPool);
 
     const resp = await orgPool.query(
       `SELECT
@@ -832,6 +868,7 @@ class TaskService {
 
   async addComment(req, taskId, payload) {
     const orgPool = requireOrgDb(req);
+    await ensureTaskSchemaCompatibility(orgPool);
 
     const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
     if (!actorMemberId) throw Object.assign(new Error('Team member not found'), { statusCode: 403 });
@@ -858,6 +895,7 @@ class TaskService {
 
   async listComments(req, taskId) {
     const orgPool = requireOrgDb(req);
+    await ensureTaskSchemaCompatibility(orgPool);
 
     const resp = await orgPool.query(
       `SELECT
@@ -928,18 +966,27 @@ class TaskService {
 
   async board(req, sprintId) {
     const orgPool = requireOrgDb(req);
+    await ensureTaskSchemaCompatibility(orgPool);
 
-    const subtaskCountsResp = await orgPool.query(
-      `SELECT
-         parent_task_id,
-         COUNT(*)::int AS total,
-         COUNT(*) FILTER (WHERE status = 'done')::int AS done
-       FROM tasks
-       WHERE sprint_id = $1
-         AND parent_task_id IS NOT NULL
-       GROUP BY parent_task_id`,
-      [String(sprintId)]
-    );
+    const [hasParentTaskId, hasIsSubtask] = await Promise.all([
+      hasTasksColumn(orgPool, 'parent_task_id'),
+      hasTasksColumn(orgPool, 'is_subtask'),
+    ]);
+
+    let subtaskCountsResp = { rows: [] };
+    if (hasParentTaskId) {
+      subtaskCountsResp = await orgPool.query(
+        `SELECT
+           parent_task_id,
+           COUNT(*)::int AS total,
+           COUNT(*) FILTER (WHERE status = 'done')::int AS done
+         FROM tasks
+         WHERE sprint_id = $1
+           AND parent_task_id IS NOT NULL
+         GROUP BY parent_task_id`,
+        [String(sprintId)]
+      );
+    }
 
     const subtaskMap = new Map();
     for (const row of subtaskCountsResp.rows) {
@@ -948,6 +995,12 @@ class TaskService {
         done: Number(row.done || 0),
       });
     }
+
+    const parentFilter = hasIsSubtask
+      ? 'AND COALESCE(t.is_subtask, FALSE) = FALSE'
+      : hasParentTaskId
+        ? 'AND t.parent_task_id IS NULL'
+        : '';
 
     const resp = await orgPool.query(
       `SELECT
@@ -965,7 +1018,7 @@ class TaskService {
        LEFT JOIN developer_profiles dp ON dp.id = t.assignee_id
        LEFT JOIN team_members tm ON tm.id = dp.member_id
        WHERE t.sprint_id = $1
-         AND COALESCE(t.is_subtask, FALSE) = FALSE
+         ${parentFilter}
        ORDER BY t.created_at ASC`,
       [String(sprintId)]
     );

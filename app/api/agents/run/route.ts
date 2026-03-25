@@ -11,10 +11,15 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json().catch(() => ({}));
+  const agentId = String(body?.agentId || "").trim();
+  if (!agentId) {
+    return NextResponse.json({ error: "Bad request", code: 400, detail: "agentId is required." }, { status: 400 });
+  }
+
   return proxyToApiGateway({
-    upstreamPath: "/api/v1/ai/rebalance",
+    upstreamPath: `/api/v1/agents/${encodeURIComponent(agentId)}/run`,
     method: "POST",
     token,
-    body: body,
+    body,
   });
 }

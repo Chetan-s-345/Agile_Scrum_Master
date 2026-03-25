@@ -23,6 +23,6 @@ export async function PATCH(
     upstreamPath: `/api/v1/agents/approvals/${encodeURIComponent(approvalId)}/approve`,
     method: "PATCH",
     token,
-    jsonBody: {},
+    body: {},
   });
 }
