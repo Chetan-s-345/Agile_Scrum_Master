@@ -447,22 +447,22 @@ export default function BacklogPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#2a2a2a] bg-[#121212] px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-[#121212] px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-xs text-white">
+          <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-xs text-white">
             {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>
 
           {developers.slice(0, 8).map((dev) => {
             const active = filters.assigneeIds.includes(dev.id);
             return (
-              <button key={dev.id} onClick={() => toggleAssigneeFilter(dev.id)} className={`rounded-full border px-2 py-1 text-[11px] ${active ? "border-white bg-white text-black" : "border-[#2a2a2a] text-[#bbb]"}`}>
+              <button key={dev.id} onClick={() => toggleAssigneeFilter(dev.id)} className={`rounded-full border px-2 py-1 text-[11px] ${active ? "border-white bg-white text-black" : "border-[var(--border)] text-[#bbb]"}`}>
                 {(dev.name || dev.fullName || "D").slice(0, 2).toUpperCase()}
               </button>
             );
           })}
 
-          <select value={filters.priority} onChange={(e) => setFilters((prev) => ({ ...prev, priority: e.target.value }))} className="rounded-md border border-[#2a2a2a] bg-[#151515] px-2 py-2 text-xs text-white">
+          <select value={filters.priority} onChange={(e) => setFilters((prev) => ({ ...prev, priority: e.target.value }))} className="rounded-md border border-[var(--border)] bg-[#151515] px-2 py-2 text-xs text-white">
             <option value="all">Priority</option>
             <option value="critical">Critical</option>
             <option value="high">High</option>
@@ -470,23 +470,23 @@ export default function BacklogPage() {
             <option value="low">Low</option>
           </select>
 
-          <select value={filters.label} onChange={(e) => setFilters((prev) => ({ ...prev, label: e.target.value }))} className="rounded-md border border-[#2a2a2a] bg-[#151515] px-2 py-2 text-xs text-white">
+          <select value={filters.label} onChange={(e) => setFilters((prev) => ({ ...prev, label: e.target.value }))} className="rounded-md border border-[var(--border)] bg-[#151515] px-2 py-2 text-xs text-white">
             <option value="all">Label</option>
             {uniqueLabels.map((label) => <option key={label} value={label}>{label}</option>)}
           </select>
 
-          <select value={filters.type} onChange={(e) => setFilters((prev) => ({ ...prev, type: e.target.value }))} className="rounded-md border border-[#2a2a2a] bg-[#151515] px-2 py-2 text-xs text-white">
+          <select value={filters.type} onChange={(e) => setFilters((prev) => ({ ...prev, type: e.target.value }))} className="rounded-md border border-[var(--border)] bg-[#151515] px-2 py-2 text-xs text-white">
             <option value="all">Type</option>
             {uniqueTypes.map((type) => <option key={type} value={type}>{type}</option>)}
           </select>
 
-          <select value={filters.epic} onChange={(e) => setFilters((prev) => ({ ...prev, epic: e.target.value }))} className="rounded-md border border-[#2a2a2a] bg-[#151515] px-2 py-2 text-xs text-white">
+          <select value={filters.epic} onChange={(e) => setFilters((prev) => ({ ...prev, epic: e.target.value }))} className="rounded-md border border-[var(--border)] bg-[#151515] px-2 py-2 text-xs text-white">
             <option value="all">Epic</option>
             {uniqueEpics.map((epic) => <option key={epic} value={epic}>{epic}</option>)}
           </select>
 
-          <button onClick={clearFilters} className="rounded-md border border-[#2a2a2a] px-3 py-2 text-xs text-[#bbb]">Clear filters</button>
-          <button onClick={() => void refreshData()} className="rounded-md border border-[#2a2a2a] px-3 py-2 text-xs text-[#bbb]"><RefreshCw className="h-3.5 w-3.5" /></button>
+          <button onClick={clearFilters} className="rounded-md border border-[var(--border)] px-3 py-2 text-xs text-[#bbb]">Clear filters</button>
+          <button onClick={() => void refreshData()} className="rounded-md border border-[var(--border)] px-3 py-2 text-xs text-[#bbb]"><RefreshCw className="h-3.5 w-3.5" /></button>
         </div>
 
         <button className="inline-flex items-center gap-1 rounded-md border border-white bg-white px-3 py-2 text-xs font-semibold text-black">
@@ -497,7 +497,7 @@ export default function BacklogPage() {
       {activeChips.length ? (
         <div className="flex flex-wrap gap-2">
           {activeChips.map((chip) => (
-            <button key={chip.key} onClick={() => removeChip(chip.key)} className="rounded-full border border-[#2a2a2a] bg-[#171717] px-2 py-1 text-[11px] text-[#d3d3d3]">
+            <button key={chip.key} onClick={() => removeChip(chip.key)} className="rounded-full border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1 text-[11px] text-[#d3d3d3]">
               {chip.label} ×
             </button>
           ))}
@@ -515,15 +515,15 @@ export default function BacklogPage() {
           const isCollapsed = collapsed[containerId] ?? false;
 
           return (
-            <div key={sprint.id} className="rounded-md border border-[#2a2a2a] bg-[#111111]">
+            <div key={sprint.id} className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)]">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#222] px-3 py-2">
                 <button onClick={() => setCollapsed((prev) => ({ ...prev, [containerId]: !isCollapsed }))} className="text-left">
                   <p className="text-sm font-semibold text-white">{sprint.name}</p>
                   <p className="text-[11px] text-[#8f8f8f]">{sprintLabel(sprint)} • {taskCount} tasks • {points} points</p>
                 </button>
                 <div className="flex gap-2">
-                  <button onClick={() => fetch(`/api/sprints/${encodeURIComponent(sprint.id)}/start`, { method: "PATCH" })} className="rounded-md border border-[#2a2a2a] px-2 py-1 text-[11px] text-[#cfcfcf]">Start Sprint</button>
-                  <button onClick={() => fetch(`/api/sprints/${encodeURIComponent(sprint.id)}/complete`, { method: "PATCH" })} className="rounded-md border border-[#2a2a2a] px-2 py-1 text-[11px] text-[#cfcfcf]">Complete Sprint</button>
+                  <button onClick={() => fetch(`/api/sprints/${encodeURIComponent(sprint.id)}/start`, { method: "PATCH" })} className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] text-[#cfcfcf]">Start Sprint</button>
+                  <button onClick={() => fetch(`/api/sprints/${encodeURIComponent(sprint.id)}/complete`, { method: "PATCH" })} className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] text-[#cfcfcf]">Complete Sprint</button>
                 </div>
               </div>
 
@@ -560,7 +560,7 @@ export default function BacklogPage() {
           );
         })}
 
-        <div className="rounded-md border border-[#2a2a2a] bg-[#111111]">
+        <div className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)]">
           <div className="border-b border-[#222] px-3 py-2">
             <p className="text-sm font-semibold text-white">Backlog</p>
             <p className="text-[11px] text-[#8f8f8f]">Unassigned tasks</p>
@@ -593,7 +593,7 @@ export default function BacklogPage() {
             </SortableContext>
 
             {hasMoreBacklog ? (
-              <button onClick={() => setVisibleBacklogCount((prev) => prev + 25)} className="mt-2 rounded-md border border-[#2a2a2a] px-3 py-1.5 text-xs text-[#c9c9c9]">
+              <button onClick={() => setVisibleBacklogCount((prev) => prev + 25)} className="mt-2 rounded-md border border-[var(--border)] px-3 py-1.5 text-xs text-[#c9c9c9]">
                 Load more
               </button>
             ) : null}
@@ -602,18 +602,18 @@ export default function BacklogPage() {
       </DndContext>
 
       {selectedIds.length ? (
-        <div className="fixed bottom-4 left-1/2 z-20 w-full max-w-3xl -translate-x-1/2 rounded-md border border-[#2a2a2a] bg-[#121212] px-3 py-2 shadow-2xl">
+        <div className="fixed bottom-4 left-1/2 z-20 w-full max-w-3xl -translate-x-1/2 rounded-md border border-[var(--border)] bg-[#121212] px-3 py-2 shadow-2xl">
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-white">{selectedIds.length} tasks selected</span>
-            <select onChange={(e) => e.target.value && void applyBulkAssign(e.target.value)} className="rounded border border-[#2a2a2a] bg-[#181818] px-2 py-1 text-[#ddd]">
+            <select onChange={(e) => e.target.value && void applyBulkAssign(e.target.value)} className="rounded border border-[var(--border)] bg-[#181818] px-2 py-1 text-[#ddd]">
               <option value="">Assign to</option>
               {developers.map((dev) => <option key={dev.id} value={dev.id}>{dev.name || dev.fullName || dev.id.slice(0, 6)}</option>)}
             </select>
-            <select onChange={(e) => e.target.value && void applyBulkMove(e.target.value)} className="rounded border border-[#2a2a2a] bg-[#181818] px-2 py-1 text-[#ddd]">
+            <select onChange={(e) => e.target.value && void applyBulkMove(e.target.value)} className="rounded border border-[var(--border)] bg-[#181818] px-2 py-1 text-[#ddd]">
               <option value="">Move to Sprint</option>
               {sprints.map((sprint) => <option key={sprint.id} value={sprint.id}>{sprint.name}</option>)}
             </select>
-            <select onChange={(e) => e.target.value && void applyBulkPriority(e.target.value)} className="rounded border border-[#2a2a2a] bg-[#181818] px-2 py-1 text-[#ddd]">
+            <select onChange={(e) => e.target.value && void applyBulkPriority(e.target.value)} className="rounded border border-[var(--border)] bg-[#181818] px-2 py-1 text-[#ddd]">
               <option value="">Set Priority</option>
               <option value="critical">Critical</option>
               <option value="high">High</option>
@@ -626,7 +626,7 @@ export default function BacklogPage() {
       ) : null}
 
       {contextMenu ? (
-        <div style={{ left: contextMenu.x, top: contextMenu.y }} className="fixed z-30 w-44 rounded-md border border-[#2a2a2a] bg-[#111111] p-1.5 shadow-2xl">
+        <div style={{ left: contextMenu.x, top: contextMenu.y }} className="fixed z-30 w-44 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-1.5 shadow-2xl">
           <button className="block w-full rounded px-2 py-1.5 text-left text-xs text-[#ddd] hover:bg-[#1f1f1f]">Open task</button>
           <button className="block w-full rounded px-2 py-1.5 text-left text-xs text-[#ddd] hover:bg-[#1f1f1f]">Edit inline</button>
           <button className="block w-full rounded px-2 py-1.5 text-left text-xs text-[#ddd] hover:bg-[#1f1f1f]">Move to Sprint ▶</button>
@@ -637,7 +637,7 @@ export default function BacklogPage() {
       ) : null}
 
       {loading ? <p className="text-xs text-[#8f8f8f]">Loading...</p> : null}
-      {toast ? <div className="fixed bottom-4 right-4 z-20 rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-xs text-white">{toast}</div> : null}
+      {toast ? <div className="fixed bottom-4 right-4 z-20 rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-xs text-white">{toast}</div> : null}
     </div>
   );
 }
@@ -681,7 +681,7 @@ function TaskRow({
         event.preventDefault();
         onContextMenu(event.clientX, event.clientY);
       }}
-      className="mb-1 grid grid-cols-[20px_20px_18px_90px_minmax(180px,1fr)_80px_64px_100px_110px_24px] items-center gap-2 rounded border border-[#2a2a2a] bg-[#151515] px-2 py-2 text-xs"
+      className="mb-1 grid grid-cols-[20px_20px_18px_90px_minmax(180px,1fr)_80px_64px_100px_110px_24px] items-center gap-2 rounded border border-[var(--border)] bg-[#151515] px-2 py-2 text-xs"
     >
       <button {...attributes} {...listeners} className="text-[#8f8f8f]"><GripVertical className="h-3.5 w-3.5" /></button>
       <input type="checkbox" checked={selected} onChange={onToggleSelected} className="h-3.5 w-3.5 accent-white" />
@@ -695,13 +695,13 @@ function TaskRow({
           onChange={(e) => onEdit("title", e.target.value)}
           onBlur={onSaveInlineEdit}
           onKeyDown={(e) => e.key === "Enter" && onSaveInlineEdit()}
-          className="rounded border border-[#3a3a3a] bg-[#101010] px-2 py-1 text-xs text-white"
+          className="rounded border border-[var(--border-strong)] bg-[#101010] px-2 py-1 text-xs text-white"
         />
       ) : (
         <button onClick={() => onEdit("title", task.title)} className="truncate text-left text-white hover:underline">{task.title}</button>
       )}
 
-      <span className="truncate rounded border border-[#2a2a2a] px-1.5 py-0.5 text-[11px] text-[#ddd]">{task.priority || "medium"}</span>
+      <span className="truncate rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[#ddd]">{task.priority || "medium"}</span>
 
       {editing?.id === task.id && editing.field === "storyPoints" ? (
         <input
@@ -712,18 +712,18 @@ function TaskRow({
           onChange={(e) => onEdit("storyPoints", e.target.value)}
           onBlur={onSaveInlineEdit}
           onKeyDown={(e) => e.key === "Enter" && onSaveInlineEdit()}
-          className="w-14 rounded border border-[#3a3a3a] bg-[#101010] px-1 py-1 text-right text-xs text-white"
+          className="w-14 rounded border border-[var(--border-strong)] bg-[#101010] px-1 py-1 text-right text-xs text-white"
         />
       ) : (
         <button onClick={() => onEdit("storyPoints", String(task.storyPoints || 0))} className="text-right text-[#e5e5e5]">{Number(task.storyPoints || 0)}</button>
       )}
 
       <div className="relative">
-        <button onClick={onAssigneePicker} className="inline-flex items-center rounded-full border border-[#2a2a2a] bg-[#1a1a1a] px-2 py-1 text-[11px] text-[#d0d0d0]">
+        <button onClick={onAssigneePicker} className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-2 py-1 text-[11px] text-[#d0d0d0]">
           {(task.assignee?.name || "UN").slice(0, 2).toUpperCase()}
         </button>
         {assigneePickerTaskId === task.id ? (
-          <div className="absolute left-0 top-7 z-10 min-w-40 rounded-md border border-[#2a2a2a] bg-[#121212] p-1">
+          <div className="absolute left-0 top-7 z-10 min-w-40 rounded-md border border-[var(--border)] bg-[#121212] p-1">
             {developers.map((dev) => (
               <button key={dev.id} onClick={() => onSelectAssignee(dev.id)} className="block w-full rounded px-2 py-1 text-left text-[11px] text-[#ddd] hover:bg-[#1f1f1f]">
                 {dev.name || dev.fullName || dev.id.slice(0, 6)}

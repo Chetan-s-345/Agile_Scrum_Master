@@ -22,7 +22,7 @@ export function BoardTabs() {
   }
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-1 border-b border-[#2a2a2a] pb-3 text-sm">
+    <div className="mb-4 flex flex-wrap items-center gap-1 border-b border-[var(--border)] pb-3 text-sm">
       {tabs.map((tab) => (
         <Link
           key={tab.href}

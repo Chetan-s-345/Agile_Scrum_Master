@@ -10,7 +10,7 @@ type Developer = { id: string; fullName?: string; name?: string; avatarUrl?: str
 
 function stat(label: string, value: number) {
   return (
-    <div className="rounded-md border border-[#2a2a2a] bg-[#141414] p-3">
+    <div className="rounded-md border border-[var(--border)] bg-[#141414] p-3">
       <p className="text-xs text-[#9f9f9f]">{label}</p>
       <p className="mt-1 text-2xl font-semibold text-white">{value}</p>
     </div>
@@ -83,7 +83,7 @@ export default function SummaryTabPage() {
         {stat("Blocked", totals.blocked)}
       </div>
 
-      <div className="rounded-md border border-[#2a2a2a] bg-[#141414] p-4">
+      <div className="rounded-md border border-[var(--border)] bg-[#141414] p-4">
         <h2 className="text-lg font-semibold">Active Sprint</h2>
         {activeSprint ? (
           <p className="mt-2 text-sm text-[#b0b0b0]">
@@ -95,22 +95,22 @@ export default function SummaryTabPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="rounded-md border border-[#2a2a2a] bg-[#141414] p-4">
+        <div className="rounded-md border border-[var(--border)] bg-[#141414] p-4">
           <h2 className="text-lg font-semibold">Recent Activity</h2>
           <div className="mt-3 space-y-2">
             {activity.length ? activity.map((task) => (
-              <Link key={task.id} href={`/tasks/${encodeURIComponent(task.id)}`} className="block rounded border border-[#2a2a2a] px-3 py-2 text-sm hover:bg-[#1a1a1a]">
+              <Link key={task.id} href={`/tasks/${encodeURIComponent(task.id)}`} className="block rounded border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--bg-card)]">
                 {task.title}
               </Link>
             )) : <p className="text-sm text-[#8f8f8f]">No recent updates.</p>}
           </div>
         </div>
 
-        <div className="rounded-md border border-[#2a2a2a] bg-[#141414] p-4">
+        <div className="rounded-md border border-[var(--border)] bg-[#141414] p-4">
           <h2 className="text-lg font-semibold">Team</h2>
           <div className="mt-3 space-y-2">
             {developers.length ? developers.slice(0, 10).map((dev) => (
-              <Link key={dev.id} href={`/developers/${encodeURIComponent(dev.id)}`} className="flex items-center justify-between rounded border border-[#2a2a2a] px-3 py-2 text-sm hover:bg-[#1a1a1a]">
+              <Link key={dev.id} href={`/developers/${encodeURIComponent(dev.id)}`} className="flex items-center justify-between rounded border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--bg-card)]">
                 <span>{dev.fullName || dev.name || "Developer"}</span>
                 <span className="text-[#8f8f8f]">View</span>
               </Link>

@@ -3,19 +3,106 @@
 @custom-variant dark (&:is(.dark *));
 
 * {
+  border-color: var(--border);
   @apply transition-colors duration-200;
 }
 
 :root {
   color-scheme: light;
-  --background: #ffffff;
-  --foreground: #0f172a;
+  --background: #f5f5f5;
+  --foreground: #09090b;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-app: #0d0d0d;
+  --bg-surface: #111111;
+  --bg-card: #1a1a1a;
+  --bg-hover: #222222;
+  --bg-input: #111111;
+  --bg-modal: #1a1a1a;
+  --bg-tooltip: #2a2a2a;
+  --bg-badge: #2a2a2a;
+
+  --border: #2a2a2a;
+  --border-strong: #3a3a3a;
+  --border-focus: #555555;
+
+  --text-primary: #ffffff;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-disabled: #52525b;
+  --text-inverse: #000000;
+
+  --accent-purple: #7c3aed;
+  --accent-blue: #3b82f6;
+  --accent-green: #22c55e;
+  --accent-red: #ef4444;
+  --accent-yellow: #f59e0b;
+  --accent-orange: #f97316;
+
+  --sidebar-bg: #0d0d0d;
+  --sidebar-active: #ffffff;
+  --sidebar-active-text: #000000;
+  --sidebar-hover: #1a1a1a;
+  --sidebar-text: #a1a1aa;
+
+  --scrollbar-thumb: transparent;
+  --scrollbar-track: transparent;
+
+  --bg-primary: var(--bg-app);
+  --bg-secondary: var(--bg-surface);
+  --border-color: var(--border);
+  --input-bg: var(--bg-input);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-app: #f5f5f5;
+  --bg-surface: #ffffff;
+  --bg-card: #ffffff;
+  --bg-hover: #f4f4f5;
+  --bg-input: #f9fafb;
+  --bg-modal: #ffffff;
+  --bg-tooltip: #18181b;
+  --bg-badge: #e4e4e7;
+
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --border-focus: #a1a1aa;
+
+  --text-primary: #09090b;
+  --text-secondary: #52525b;
+  --text-muted: #71717a;
+  --text-disabled: #a1a1aa;
+  --text-inverse: #ffffff;
+
+  --accent-purple: #7c3aed;
+  --accent-blue: #3b82f6;
+  --accent-green: #22c55e;
+  --accent-red: #ef4444;
+  --accent-yellow: #f59e0b;
+  --accent-orange: #f97316;
+
+  --sidebar-bg: #ffffff;
+  --sidebar-active: #09090b;
+  --sidebar-active-text: #ffffff;
+  --sidebar-hover: #f4f4f5;
+  --sidebar-text: #52525b;
+
+  --scrollbar-thumb: transparent;
+  --scrollbar-track: transparent;
+
+  --bg-primary: var(--bg-app);
+  --bg-secondary: var(--bg-surface);
+  --border-color: var(--border);
+  --input-bg: var(--bg-input);
 }
 
 html.dark {
   color-scheme: dark;
-  --background: #000000;
-  --foreground: #ffffff;
 }
 
 @theme inline {
@@ -26,9 +113,25 @@ html.dark {
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg-app);
+  color: var(--text-primary);
   font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  transition:
+    background-color 250ms ease,
+    color 150ms ease,
+    border-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+[class*="animate-"],
+[class*="transition-transform"],
+.no-theme-transition {
+  transition: none !important;
 }
 
 /* Smooth transitions */
@@ -59,11 +162,30 @@ body {
   scrollbar-width: none; /* Firefox */
 }
 
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+}
+
+/* Hide sidebar scrollbar while preserving scrolling behavior */
+.sidebar-scroll {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 /* Global Jira-like dashboard styling for all pages under dashboard layout */
 .jira-page-content {
   font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  color: #ffffff;
-  background: #0d0d0d;
+  color: var(--text-primary);
+  background: var(--bg-primary);
 }
 
 .jira-page-content .bg-white,
@@ -75,7 +197,7 @@ body {
 .jira-page-content .dark\:bg-black,
 .jira-page-content .dark\:bg-zinc-900,
 .jira-page-content .dark\:bg-zinc-800 {
-  background-color: #111111 !important;
+  background-color: var(--bg-card) !important;
 }
 
 .jira-page-content .border-slate-200,
@@ -85,12 +207,12 @@ body {
 .jira-page-content .dark\:border-zinc-800,
 .jira-page-content .dark\:border-zinc-700,
 .jira-page-content .dark\:border-slate-200 {
-  border-color: #2a2a2a !important;
+  border-color: var(--border-color) !important;
 }
 
 .jira-page-content .text-slate-900,
 .jira-page-content .dark\:text-white {
-  color: #ffffff !important;
+  color: var(--text-primary) !important;
 }
 
 .jira-page-content .text-slate-800,
@@ -100,7 +222,7 @@ body {
 .jira-page-content .dark\:text-slate-400,
 .jira-page-content .dark\:text-slate-300,
 .jira-page-content .dark\:text-slate-200 {
-  color: #b0b0b0 !important;
+  color: var(--text-secondary) !important;
 }
 
 .jira-page-content .shadow,
@@ -115,12 +237,12 @@ body {
 .jira-page-content input,
 .jira-page-content select,
 .jira-page-content textarea {
-  border-color: #2a2a2a !important;
-  background-color: #111111 !important;
-  color: #ffffff !important;
+  border-color: var(--border-color) !important;
+  background-color: var(--input-bg) !important;
+  color: var(--text-primary) !important;
 }
 
 .jira-page-content button:hover,
 .jira-page-content a:hover {
-  background-color: #1a1a1a;
+  background-color: var(--bg-secondary);
 }

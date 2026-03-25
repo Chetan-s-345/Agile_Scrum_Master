@@ -87,7 +87,7 @@ function TaskCard({ task }: { task: BoardTask }) {
   const hasDueDate = dueText !== "No due date";
 
   return (
-    <article className="rounded-md border border-[#2a2a2a] bg-[#1a1a1a] p-3 transition hover:-translate-y-0.5">
+    <article className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3 transition hover:-translate-y-0.5">
       <div className="mb-3 flex items-start justify-between gap-2">
         <Link href={`/tasks/${encodeURIComponent(task.id)}`} className="text-[20px] leading-7 text-[#f5f5f5] hover:underline">
           {task.title}
@@ -108,7 +108,7 @@ function TaskCard({ task }: { task: BoardTask }) {
         <div className="inline-flex items-center gap-1.5 text-sm text-[#c8c8c8]">
           <Bookmark className="h-4 w-4" />
           <span>{task.taskKey || `SCRUM-${String(task.id).slice(0, 6).toUpperCase()}`}</span>
-          <span className="ml-2 rounded border border-[#2a2a2a] px-1.5 py-0.5 text-xs text-[#9d9d9d]">
+          <span className="ml-2 rounded border border-[var(--border)] px-1.5 py-0.5 text-xs text-[#9d9d9d]">
             {Number(task.storyPoints || 0)}pt
           </span>
         </div>
@@ -122,10 +122,10 @@ function TaskCard({ task }: { task: BoardTask }) {
 
 function BoardColumn({ column, tasks }: { column: BoardColumnData; tasks: BoardTask[] }) {
   return (
-    <section className="flex min-h-[420px] min-w-[280px] flex-1 flex-col rounded-lg border border-[#2a2a2a] bg-[#111111] p-3">
-      <header className="mb-3 flex items-center gap-2 border-b border-[#2a2a2a] pb-3 text-[22px]">
+    <section className="flex min-h-[420px] min-w-[280px] flex-1 flex-col rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-3">
+      <header className="mb-3 flex items-center gap-2 border-b border-[var(--border)] pb-3 text-[22px]">
         <span className="tracking-wide text-[#e9e9e9]">{column.title}</span>
-        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-[#2a2a2a] px-1 text-xs text-[#a5a5a5]">
+        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-[var(--border)] px-1 text-xs text-[#a5a5a5]">
           {tasks.length}
         </span>
         {column.done ? <CheckSquare className="h-4 w-4 text-[#96d266]" /> : null}
@@ -135,10 +135,10 @@ function BoardColumn({ column, tasks }: { column: BoardColumnData; tasks: BoardT
         {tasks.map((task) => (
           <TaskCard key={task.id} task={task} />
         ))}
-        {!tasks.length ? <div className="rounded-md border border-dashed border-[#2a2a2a] p-3 text-sm text-[#8f8f8f]">No tasks</div> : null}
+        {!tasks.length ? <div className="rounded-md border border-dashed border-[var(--border)] p-3 text-sm text-[#8f8f8f]">No tasks</div> : null}
       </div>
 
-      <div className="mt-auto inline-flex h-10 items-center rounded-md border border-dashed border-[#2a2a2a] px-3 text-sm text-[#8f8f8f]">
+      <div className="mt-auto inline-flex h-10 items-center rounded-md border border-dashed border-[var(--border)] px-3 text-sm text-[#8f8f8f]">
         View only
       </div>
     </section>
@@ -265,20 +265,20 @@ export default function DashboardPage() {
                 placeholder="Search board"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                className="h-9 w-[180px] rounded-md border border-[#2a2a2a] bg-[#171717] pl-8 pr-2 text-sm text-white outline-none placeholder:text-[#8f8f8f] focus:border-white"
+                className="h-9 w-[180px] rounded-md border border-[var(--border)] bg-[var(--bg-surface)] pl-8 pr-2 text-sm text-white outline-none placeholder:text-[#8f8f8f] focus:border-white"
               />
             </div>
             <div className="inline-flex items-center gap-1">
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#2a2a2a] bg-[#1a1a1a] text-xs font-semibold">
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-card)] text-xs font-semibold">
                 DS
               </span>
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#2a2a2a] bg-[#1a1a1a] text-xs font-semibold">
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-card)] text-xs font-semibold">
                 TM
               </span>
             </div>
             <button
               type="button"
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-[#2a2a2a] bg-[#171717] px-3 text-sm hover:bg-[#2a2a2a]"
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm hover:bg-[#2a2a2a]"
             >
               <Grid3X3 className="h-4 w-4" />
               {sprintLabel}
@@ -296,33 +296,33 @@ export default function DashboardPage() {
               type="button"
               disabled={sendingNotification}
               onClick={() => void sendNotificationEmail()}
-              className="rounded-md border border-[#2a2a2a] p-2 hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-md border border-[var(--border)] p-2 hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Bell className="h-4 w-4" />
             </button>
             <button
               type="button"
-              className="inline-flex h-9 items-center gap-1 rounded-md border border-[#2a2a2a] bg-[#171717] px-3 text-sm hover:bg-[#2a2a2a]"
+              className="inline-flex h-9 items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm hover:bg-[#2a2a2a]"
             >
               Group
               <ChevronDown className="h-4 w-4" />
             </button>
-            <button type="button" className="rounded-md border border-[#2a2a2a] p-2 hover:bg-[#2a2a2a]">
+            <button type="button" className="rounded-md border border-[var(--border)] p-2 hover:bg-[#2a2a2a]">
               <ChartColumn className="h-4 w-4" />
             </button>
-            <button type="button" className="rounded-md border border-[#2a2a2a] p-2 hover:bg-[#2a2a2a]">
+            <button type="button" className="rounded-md border border-[var(--border)] p-2 hover:bg-[#2a2a2a]">
               <Settings2 className="h-4 w-4" />
             </button>
-            <button type="button" className="rounded-md border border-[#2a2a2a] p-2 hover:bg-[#2a2a2a]">
+            <button type="button" className="rounded-md border border-[var(--border)] p-2 hover:bg-[#2a2a2a]">
               <Ellipsis className="h-4 w-4" />
             </button>
           </div>
         </div>
 
         {error ? <div className="mb-3 rounded-md border border-[#5a1f1f] bg-[#2a1616] px-3 py-2 text-sm text-[#f3b6b6]">{error}</div> : null}
-        {loading ? <div className="mb-3 rounded-md border border-[#2a2a2a] bg-[#151515] px-3 py-2 text-sm text-[#b0b0b0]">Loading board...</div> : null}
+        {loading ? <div className="mb-3 rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-[#b0b0b0]">Loading board...</div> : null}
 
-        <div className="flex gap-3 overflow-x-auto pb-2">
+        <div className="scrollbar-hide flex gap-3 overflow-x-auto pb-2">
           {boardColumns.map((column) => (
             <BoardColumn
               key={column.title}

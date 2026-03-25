@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Moon, Sun } from "lucide-react";
+import { useThemeStore } from "@/lib/theme-store";
 
 type OrgResponse = {
   org?: {
@@ -29,6 +31,8 @@ function asText(value: unknown): string {
 }
 
 export default function PreferencesPage() {
+  const theme = useThemeStore((state) => state.theme);
+  const toggleTheme = useThemeStore((state) => state.toggleTheme);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -120,6 +124,17 @@ export default function PreferencesPage() {
         <div>
           <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Preferences</h1>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Organization and notification settings backed by your API.</p>
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2 text-sm font-semibold text-[var(--text-primary)] hover:opacity-80"
+              aria-label="Toggle global theme"
+            >
+              {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+              {theme === "dark" ? "Switch to Light" : "Switch to Dark"}
+            </button>
+          </div>
         </div>
 
         {loading ? <div className="text-sm text-slate-600 dark:text-slate-300">Loading preferences...</div> : null}

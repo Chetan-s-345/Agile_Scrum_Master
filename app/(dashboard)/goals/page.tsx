@@ -312,7 +312,7 @@ export default function GoalsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0d0d0d] px-4 py-6 text-[#e7e7e7]">
+    <div className="min-h-screen bg-[var(--bg-app)] px-4 py-6 text-[#e7e7e7]">
       <div className="mx-auto max-w-[1400px]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -327,7 +327,7 @@ export default function GoalsPage() {
             <select
               value={sortBy}
               onChange={(event) => setSortBy(event.target.value as "due" | "priority" | "progress")}
-              className="rounded-lg border border-[#3a3a3a] bg-[#1f1f1f] px-3 py-2 text-sm"
+              className="rounded-lg border border-[var(--border-strong)] bg-[#1f1f1f] px-3 py-2 text-sm"
             >
               <option value="due">Sort: Due date</option>
               <option value="priority">Sort: Priority</option>
@@ -411,20 +411,20 @@ export default function GoalsPage() {
 
       {newGoalOpen ? (
         <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 px-4 py-6 sm:items-center">
-          <div className="w-full max-w-2xl max-h-[92vh] overflow-hidden rounded-xl border border-[#343434] bg-[#1a1a1a] p-5">
+          <div className="w-full max-w-2xl max-h-[92vh] overflow-hidden rounded-xl border border-[#343434] bg-[var(--bg-card)] p-5">
             <div className="mb-4 text-lg font-semibold">New Goal</div>
             <div className="grid max-h-[calc(92vh-130px)] grid-cols-1 gap-3 overflow-y-auto overflow-x-hidden pr-1 md:grid-cols-2">
               <label className="md:col-span-2">
                 <div className="mb-1 text-xs text-[#a9a9a9]">Title *</div>
-                <input value={newGoal.title} onChange={(e) => setNewGoal((p) => ({ ...p, title: e.target.value }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm" />
+                <input value={newGoal.title} onChange={(e) => setNewGoal((p) => ({ ...p, title: e.target.value }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[#232323] px-3 py-2 text-sm" />
               </label>
               <label className="md:col-span-2">
                 <div className="mb-1 text-xs text-[#a9a9a9]">Description</div>
-                <textarea value={newGoal.description} onChange={(e) => setNewGoal((p) => ({ ...p, description: e.target.value }))} rows={3} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm" />
+                <textarea value={newGoal.description} onChange={(e) => setNewGoal((p) => ({ ...p, description: e.target.value }))} rows={3} className="w-full rounded-md border border-[var(--border-strong)] bg-[#232323] px-3 py-2 text-sm" />
               </label>
               <label>
                 <div className="mb-1 text-xs text-[#a9a9a9]">Priority</div>
-                <select value={newGoal.priority} onChange={(e) => setNewGoal((p) => ({ ...p, priority: e.target.value as Priority }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm">
+                <select value={newGoal.priority} onChange={(e) => setNewGoal((p) => ({ ...p, priority: e.target.value as Priority }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[#232323] px-3 py-2 text-sm">
                   <option value="high">High</option>
                   <option value="medium">Medium</option>
                   <option value="low">Low</option>
@@ -432,7 +432,7 @@ export default function GoalsPage() {
               </label>
               <label>
                 <div className="mb-1 text-xs text-[#a9a9a9]">Quarter</div>
-                <select value={newGoal.quarter} onChange={(e) => setNewGoal((p) => ({ ...p, quarter: e.target.value }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm">
+                <select value={newGoal.quarter} onChange={(e) => setNewGoal((p) => ({ ...p, quarter: e.target.value }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[#232323] px-3 py-2 text-sm">
                   <option value="Q1">Q1</option>
                   <option value="Q2">Q2</option>
                   <option value="Q3">Q3</option>
@@ -441,7 +441,7 @@ export default function GoalsPage() {
               </label>
               <label>
                 <div className="mb-1 text-xs text-[#a9a9a9]">Category</div>
-                <select value={newGoal.category} onChange={(e) => setNewGoal((p) => ({ ...p, category: e.target.value }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm">
+                <select value={newGoal.category} onChange={(e) => setNewGoal((p) => ({ ...p, category: e.target.value }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[#232323] px-3 py-2 text-sm">
                   <option value="Infra">Infra</option>
                   <option value="Feature">Feature</option>
                   <option value="Growth">Growth</option>
@@ -450,11 +450,11 @@ export default function GoalsPage() {
               </label>
               <label>
                 <div className="mb-1 text-xs text-[#a9a9a9]">Due date</div>
-                <input type="date" value={newGoal.dueDate} onChange={(e) => setNewGoal((p) => ({ ...p, dueDate: e.target.value }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm" />
+                <input type="date" value={newGoal.dueDate} onChange={(e) => setNewGoal((p) => ({ ...p, dueDate: e.target.value }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[#232323] px-3 py-2 text-sm" />
               </label>
               <label>
                 <div className="mb-1 text-xs text-[#a9a9a9]">Project</div>
-                <select value={newGoal.projectId} onChange={(e) => setNewGoal((p) => ({ ...p, projectId: e.target.value }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm">
+                <select value={newGoal.projectId} onChange={(e) => setNewGoal((p) => ({ ...p, projectId: e.target.value }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[#232323] px-3 py-2 text-sm">
                   <option value="">Select project</option>
                   {projects.map((project) => (
                     <option key={project.id} value={project.id}>
@@ -466,7 +466,7 @@ export default function GoalsPage() {
 
               <label className="md:col-span-2">
                 <div className="mb-1 text-xs text-[#a9a9a9]">Assign team members</div>
-                <div className="max-h-28 overflow-auto rounded-md border border-[#3a3a3a] bg-[#232323] p-2">
+                <div className="max-h-28 overflow-auto rounded-md border border-[var(--border-strong)] bg-[#232323] p-2">
                   {members.map((member) => {
                     const checked = newGoal.assigneeIds.includes(member.id);
                     return (
@@ -492,7 +492,7 @@ export default function GoalsPage() {
 
               <label className="md:col-span-2">
                 <div className="mb-1 text-xs text-[#a9a9a9]">Link sprints</div>
-                <div className="max-h-28 overflow-auto rounded-md border border-[#3a3a3a] bg-[#232323] p-2">
+                <div className="max-h-28 overflow-auto rounded-md border border-[var(--border-strong)] bg-[#232323] p-2">
                   {sprints
                     .filter((s) => !newGoal.projectId || String(s.projectId || "") === String(newGoal.projectId))
                     .map((sprint) => {
@@ -521,7 +521,7 @@ export default function GoalsPage() {
               {githubConnected ? (
                 <label className="md:col-span-2">
                   <div className="mb-1 text-xs text-[#a9a9a9]">Link GitHub repos</div>
-                  <div className="max-h-28 overflow-auto rounded-md border border-[#3a3a3a] bg-[#232323] p-2">
+                  <div className="max-h-28 overflow-auto rounded-md border border-[var(--border-strong)] bg-[#232323] p-2">
                     {repos.map((repo) => {
                       const fullName = String(repo.fullName || "");
                       const checked = newGoal.selectedRepoFullNames.includes(fullName);
@@ -579,7 +579,7 @@ export default function GoalsPage() {
                 }}
                 onBlur={(e) => void updateDrawerGoal({ description: e.target.value })}
                 rows={4}
-                className="w-full rounded-md border border-[#3a3a3a] bg-[#222] px-3 py-2 text-sm"
+                className="w-full rounded-md border border-[var(--border-strong)] bg-[#222] px-3 py-2 text-sm"
               />
             </section>
 
@@ -671,7 +671,7 @@ function TabButton({ label, active, onClick }: { label: string; active: boolean;
 
 function StatCard({ label, value, detail, accent }: { label: string; value: number; detail: string; accent?: string }) {
   return (
-    <div className="rounded-lg border border-[#353535] bg-[#1a1a1a] px-4 py-3">
+    <div className="rounded-lg border border-[#353535] bg-[var(--bg-card)] px-4 py-3">
       <div className="text-xs text-[#a7a7a7]">{label}</div>
       <div className={`mt-1 text-3xl font-semibold ${accent || ""}`}>{value}</div>
       <div className="text-xs text-[#909090]">{detail}</div>
@@ -702,7 +702,7 @@ function GoalColumn({
 }) {
   return (
     <div
-      className="rounded-xl border border-[#333] bg-[#171717] p-3"
+      className="rounded-xl border border-[#333] bg-[var(--bg-surface)] p-3"
       onDragOver={(event) => event.preventDefault()}
       onDrop={() => {
         if (dragGoalId) void onDropGoal(dragGoalId, status);
@@ -721,7 +721,7 @@ function GoalColumn({
             draggable
             onDragStart={() => onDragStart(goal.id)}
             onClick={() => onCardClick(goal.id)}
-            className="w-full rounded-xl border border-[#3a3a3a] bg-[#232323] p-3 text-left hover:bg-[#292929]"
+            className="w-full rounded-xl border border-[var(--border-strong)] bg-[#232323] p-3 text-left hover:bg-[#292929]"
           >
             <div className="flex items-start justify-between gap-2">
               <div className="line-clamp-2 text-lg font-medium leading-tight text-[#ededed]">{goal.title}</div>

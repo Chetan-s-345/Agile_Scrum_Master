@@ -3,15 +3,16 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Grid2x2PlusIcon, Menu, X, Sun, Moon } from "lucide-react";
-import { useTheme } from "./theme-provider";
 import { useState, useEffect } from "react";
 import { getMe, signOut, type MeResponse } from "@/lib/org-member-auth";
+import { useThemeStore } from "@/lib/theme-store";
 
 export function HomeNavbar() {
   const [open, setOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const { theme, toggleTheme } = useTheme();
+  const theme = useThemeStore((state) => state.theme);
+  const toggleTheme = useThemeStore((state) => state.toggleTheme);
   const [me, setMe] = useState<MeResponse | null>(null);
   const [meLoaded, setMeLoaded] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
