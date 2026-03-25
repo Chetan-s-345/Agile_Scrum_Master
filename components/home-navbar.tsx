@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Grid2x2PlusIcon, Menu, X, Sun, Moon } from "lucide-react";
+import { Menu, X, Sun, Moon } from "lucide-react";
 import { useState, useEffect } from "react";
 import { getMe, signOut, type MeResponse } from "@/lib/org-member-auth";
 import { useThemeStore } from "@/lib/theme-store";
@@ -54,14 +55,20 @@ export function HomeNavbar() {
     { label: "Features", href: "/features" },
     { label: "Pricing", href: "/pricing" },
     { label: "Docs", href: "/solution" },
-    { label: "About", href: "/about" },
   ];
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-slate-200 dark:border-zinc-800 bg-white/80 dark:bg-black/80 backdrop-blur">
       <nav className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-6">
         <Link href="/" className="flex items-center gap-2" aria-label="home">
-          <Grid2x2PlusIcon className="size-6 text-blue-600" />
+          <Image
+            src="/sprint-grid-logo.svg"
+            alt="Sprint logo"
+            width={24}
+            height={24}
+            className="h-6 w-6"
+            priority
+          />
           <span className="font-mono text-lg font-bold text-slate-900 dark:text-white">Sprint</span>
         </Link>
 
@@ -92,8 +99,8 @@ export function HomeNavbar() {
             {me?.user ? (
               <>
                 <Link
-                  href="/dashboard"
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold transition"
+                  href="/board"
+                  className="rounded-lg border border-[#2b3449] bg-[#151a25] px-4 py-2 text-sm font-bold text-[#dce4f3] transition hover:bg-[#1c2433]"
                 >
                   Dashboard
                 </Link>
@@ -189,8 +196,8 @@ export function HomeNavbar() {
             {me?.user ? (
               <>
                 <Link
-                  href="/dashboard"
-                  className="block text-center py-2 bg-blue-600 text-white rounded-lg font-bold"
+                  href="/board"
+                  className="block rounded-lg border border-[#2b3449] bg-[#151a25] py-2 text-center font-bold text-[#dce4f3]"
                   onClick={() => setOpen(false)}
                 >
                   Dashboard

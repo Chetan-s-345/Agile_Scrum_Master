@@ -33,7 +33,10 @@ export function BlockLoadingOverlay({
     : "absolute inset-0 z-40 rounded-lg";
 
   return (
-    <div className={`${overlayClass} flex items-center justify-center bg-black/70 backdrop-blur-sm`}>
+    <div
+      className={`${overlayClass} flex items-center justify-center backdrop-blur-sm`}
+      style={{ backgroundColor: "color-mix(in srgb, var(--bg-app) 82%, transparent)" }}
+    >
       <div className="flex flex-col items-center gap-3">
         <div className="asm-block-loader" aria-hidden="true">
           <span />

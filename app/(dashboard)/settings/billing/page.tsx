@@ -7,8 +7,8 @@ const FALLBACK_PAID_PLANS: Plan[] = [
     id: "starter-fallback",
     name: "Starter",
     slug: "starter",
-    price_monthly: 49,
-    price_yearly: 490,
+    price_monthly: 399,
+    price_yearly: 4069,
     max_members: 15,
     max_projects: 10,
     ai_requests_per_day: 500,
@@ -17,8 +17,8 @@ const FALLBACK_PAID_PLANS: Plan[] = [
     id: "pro-fallback",
     name: "Pro",
     slug: "pro",
-    price_monthly: 199,
-    price_yearly: 1990,
+    price_monthly: 799,
+    price_yearly: 8149,
     max_members: 50,
     max_projects: 40,
     ai_requests_per_day: 2500,
@@ -27,8 +27,8 @@ const FALLBACK_PAID_PLANS: Plan[] = [
     id: "enterprise-fallback",
     name: "Enterprise",
     slug: "enterprise",
-    price_monthly: 999,
-    price_yearly: 9990,
+    price_monthly: 1999,
+    price_yearly: 20389,
     max_members: 500,
     max_projects: 500,
     ai_requests_per_day: 20000,
@@ -199,8 +199,8 @@ export default function BillingSettingsPage() {
       ? listedBasePrice
       : selectedPlanModel?.slug === "enterprise"
         ? billingCycle === "yearly"
-          ? 9990
-          : 999
+          ? 20389
+          : 1999
         : 0;
 
   const finalPriceLocal = (() => {
@@ -400,9 +400,9 @@ export default function BillingSettingsPage() {
           const listed = Number(billingCycle === "yearly" ? match.price_yearly : match.price_monthly);
           if (Number.isFinite(listed) && listed > 0) return listed;
         }
-        if (slug === "enterprise") return billingCycle === "yearly" ? 9990 : 999;
-        if (slug === "pro") return billingCycle === "yearly" ? 1990 : 199;
-        if (slug === "starter") return billingCycle === "yearly" ? 490 : 49;
+        if (slug === "enterprise") return billingCycle === "yearly" ? 20389 : 1999;
+        if (slug === "pro") return billingCycle === "yearly" ? 8149 : 799;
+        if (slug === "starter") return billingCycle === "yearly" ? 4069 : 399;
         return 0;
       };
 

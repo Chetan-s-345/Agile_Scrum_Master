@@ -2,6 +2,18 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { Brain, Database, Github, MessagesSquare, Rocket, Workflow, Zap } from "lucide-react";
+
+const integrations = [
+    { name: "GitHub", icon: Github },
+    { name: "Jira", icon: Workflow },
+    { name: "Slack", icon: MessagesSquare },
+    { name: "Inngest", icon: Zap },
+    { name: "Brevo", icon: Rocket },
+    { name: "PostgreSQL", icon: Database },
+    { name: "Vercel", icon: null },
+    { name: "OpenAI", icon: Brain },
+];
 
 export const HeroSection = () => {
     return (
@@ -17,7 +29,7 @@ export const HeroSection = () => {
                     <div className="h-[80rem] -translate-y-87.5 absolute left-0 top-0 w-56 -rotate-45 bg-[radial-gradient(50%_50%_at_50%_50%,hsla(0,0%,85%,.04)_0,hsla(0,0%,45%,.02)_80%,transparent_100%)]" />
                 </div>
 
-                <section className="overflow-hidden bg-white dark:bg-transparent">
+                <section className="overflow-hidden bg-[var(--bg-app)]">
                     <div className="relative mx-auto max-w-5xl px-6 py-28 lg:py-24">
                         <div className="relative z-10 mx-auto max-w-2xl text-center">
                             <h1 className="text-balance text-4xl font-semibold md:text-5xl lg:text-6xl">
@@ -39,113 +51,82 @@ export const HeroSection = () => {
                     <div className="mx-auto -mt-16 max-w-7xl [mask-image:linear-gradient(to_bottom,black_50%,transparent_100%)]">
                         <div className="[perspective:1200px] [mask-image:linear-gradient(to_right,black_50%,transparent_100%)] -mr-16 pl-16 lg:-mr-56 lg:pl-56">
                             <div className="[transform:rotateX(20deg);]">
-                                <div className="lg:h-[44rem] relative skew-x-[.36rad]">
+                                <div className="lg:h-[44rem] relative skew-x-[.36rad] overflow-hidden rounded-[--radius]" style={{ clipPath: "inset(10px 0 2px 0 round var(--radius))" }}>
+                                    <div className="pointer-events-none absolute inset-x-0 top-0 z-[3] h-1 bg-[var(--bg-app)]" />
                                     <Image
-                                        className="rounded-[--radius] z-[2] relative border dark:hidden"
-                                        src="https://tailark.com/_next/image?url=%2Fcard.png&w=3840&q=75"
-                                        alt="Tailark hero section"
+                                        className="z-[2] relative block dark:hidden w-full h-full object-cover object-top"
+                                        src="/image light.png"
+                                        alt="Agile Scrum dashboard preview"
                                         width={2880}
                                         height={2074}
                                         priority
+                                        style={{ pointerEvents: "none" }}
                                     />
                                     <Image
-                                        className="rounded-[--radius] z-[2] relative hidden border dark:block"
-                                        src="https://tailark.com/_next/image?url=%2Fdark-card.webp&w=3840&q=75"
-                                        alt="Tailark hero section"
+                                        className="z-[2] relative hidden dark:block w-full h-full object-cover object-top"
+                                        src="/image.png"
+                                        alt="Agile Scrum dashboard preview"
                                         width={2880}
                                         height={2074}
+                                        style={{ pointerEvents: "none" }}
                                     />
                                 </div>
                             </div>
                         </div>
                     </div>
                 </section>
-                <section className="bg-background relative z-10 py-16">
+                <section className="relative z-10 py-16 bg-transparent">
                     <div className="m-auto max-w-5xl px-6">
-                        <h2 className="text-center text-lg font-medium">
-                            Your favorite companies are our partners.
+                        <h2 className="text-center text-lg font-semibold text-[var(--text-primary)]">
+                            Works with your delivery stack.
                         </h2>
-                        <div className="mx-auto mt-20 flex max-w-4xl flex-wrap items-center justify-center gap-x-12 gap-y-8 sm:gap-x-16 sm:gap-y-12">
-                            <Image
-                                className="h-5 w-auto dark:invert"
-                                src="https://html.tailus.io/blocks/customers/nvidia.svg"
-                                alt="Nvidia Logo"
-                                height={20}
-                                width={120}
-                            />
-                            <Image
-                                className="h-4 w-auto dark:invert"
-                                src="https://html.tailus.io/blocks/customers/column.svg"
-                                alt="Column Logo"
-                                height={16}
-                                width={120}
-                            />
-                            <Image
-                                className="h-4 w-auto dark:invert"
-                                src="https://html.tailus.io/blocks/customers/github.svg"
-                                alt="GitHub Logo"
-                                height={16}
-                                width={120}
-                            />
-                            <Image
-                                className="h-5 w-auto dark:invert"
-                                src="https://html.tailus.io/blocks/customers/nike.svg"
-                                alt="Nike Logo"
-                                height={20}
-                                width={120}
-                            />
-                            <Image
-                                className="h-4 w-auto dark:invert"
-                                src="https://html.tailus.io/blocks/customers/laravel.svg"
-                                alt="Laravel Logo"
-                                height={16}
-                                width={120}
-                            />
-                            <Image
-                                className="h-7 w-auto dark:invert"
-                                src="https://html.tailus.io/blocks/customers/lilly.svg"
-                                alt="Lilly Logo"
-                                height={28}
-                                width={140}
-                            />
-                            <Image
-                                className="h-5 w-auto dark:invert"
-                                src="https://html.tailus.io/blocks/customers/lemonsqueezy.svg"
-                                alt="Lemon Squeezy Logo"
-                                height={20}
-                                width={140}
-                            />
-                            <Image
-                                className="h-6 w-auto dark:invert"
-                                src="https://html.tailus.io/blocks/customers/openai.svg"
-                                alt="OpenAI Logo"
-                                height={24}
-                                width={120}
-                            />
-                            <Image
-                                className="h-4 w-auto dark:invert"
-                                src="https://html.tailus.io/blocks/customers/tailwindcss.svg"
-                                alt="Tailwind CSS Logo"
-                                height={16}
-                                width={140}
-                            />
-                            <Image
-                                className="h-5 w-auto dark:invert"
-                                src="https://html.tailus.io/blocks/customers/vercel.svg"
-                                alt="Vercel Logo"
-                                height={20}
-                                width={120}
-                            />
-                            <Image
-                                className="h-5 w-auto dark:invert"
-                                src="https://html.tailus.io/blocks/customers/zapier.svg"
-                                alt="Zapier Logo"
-                                height={20}
-                                width={120}
-                            />
+                        <p className="mx-auto mt-2 max-w-2xl text-center text-sm text-[var(--text-secondary)]">
+                            Connected integrations for planning, delivery, notifications, and automation.
+                        </p>
+
+                        <div className="mt-8 overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_10%,black_90%,transparent)]">
+                            <div className="hero-logo-marquee flex w-max items-center gap-8 whitespace-nowrap">
+                                {[...integrations, ...integrations].map((entry, idx) => {
+                                    const Icon = entry.icon;
+                                    return (
+                                        <span key={`${entry.name}-${idx}`} className="inline-flex items-center gap-2 text-base font-medium text-[var(--text-primary)]">
+                                            {entry.name === "Vercel" ? (
+                                                <span className="inline-flex items-center rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2 py-1">
+                                                    <Image
+                                                        src="/vercel.svg"
+                                                        alt="Vercel"
+                                                        width={74}
+                                                        height={16}
+                                                        className="h-3.5 w-auto dark:invert"
+                                                    />
+                                                </span>
+                                            ) : Icon ? (
+                                                <Icon className="h-4 w-4 text-[var(--accent-blue)]" />
+                                            ) : null}
+                                            {entry.name !== "Vercel" ? entry.name : null}
+                                            <span className="ml-4 text-[var(--text-muted)]">/</span>
+                                        </span>
+                                    );
+                                })}
+                            </div>
                         </div>
                     </div>
                 </section>
+
+                <style jsx>{`
+                    .hero-logo-marquee {
+                        animation: heroLogoSlide 24s linear infinite;
+                    }
+
+                    @keyframes heroLogoSlide {
+                        from {
+                            transform: translateX(0);
+                        }
+                        to {
+                            transform: translateX(-50%);
+                        }
+                    }
+                `}</style>
             </main>
         </div>
     );

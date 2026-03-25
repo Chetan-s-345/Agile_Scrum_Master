@@ -9,97 +9,129 @@ export const metadata = {
 
 export default function PricingPage() {
   return (
-    <div className="min-h-screen bg-white dark:bg-black">
+    <div className="min-h-screen bg-[var(--bg-app)] text-[var(--text-primary)]">
       <HomeNavbar />
       <main className="mx-auto max-w-5xl px-6 py-20">
         <div className="space-y-12">
           <section className="space-y-4 text-center">
-            <h1 className="text-5xl font-bold text-slate-900 dark:text-white">Simple Pricing</h1>
-            <p className="text-xl text-gray-600 dark:text-gray-400">
-              No hidden fees. Scale your agile workflow effortlessly.
+            <h1 className="text-5xl font-bold text-[var(--text-primary)]">Simple INR Pricing</h1>
+            <p className="text-xl text-[var(--text-secondary)]">
+              Transparent Indian Rupee pricing with clear monthly and annual billing options.
             </p>
           </section>
 
-          <div className="grid md:grid-cols-3 gap-8 mt-12">
+          <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-5">
+            <h2 className="text-lg font-semibold text-[var(--text-primary)]">Billing Options</h2>
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4">
+                <div className="text-sm font-semibold text-[var(--text-primary)]">Monthly Billing</div>
+                <p className="mt-1 text-sm text-[var(--text-secondary)]">Pay month-to-month with full flexibility.</p>
+              </div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4">
+                <div className="text-sm font-semibold text-[var(--text-primary)]">Annual Billing</div>
+                <p className="mt-1 text-sm text-[var(--text-secondary)]">Pay yearly and save about 15%.</p>
+              </div>
+            </div>
+          </section>
+
+          <div className="mt-12 grid gap-8 md:grid-cols-3">
             {/* Free Tier */}
-            <div className="p-8 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-[#0a0a0a] flex flex-col">
-              <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Starter</h3>
-              <p className="text-gray-500 mt-2">Perfect for small teams getting started.</p>
-              <div className="text-4xl font-bold mt-6 mb-8">$0<span className="text-lg text-gray-500 font-normal">/mo</span></div>
+            <div className="flex flex-col rounded-xl border border-[var(--border)] bg-[linear-gradient(145deg,#0b0b0d,#121725)] p-8">
+              <h3 className="text-2xl font-bold text-[var(--text-primary)]">Starter</h3>
+              <p className="mt-2 text-[var(--text-secondary)]">Perfect for small teams getting started.</p>
+              <div className="mb-8 mt-6 text-4xl font-bold text-[var(--text-primary)]">₹0<span className="text-lg font-normal text-[var(--text-secondary)]">/month</span></div>
               <ul className="space-y-4 mb-8 flex-1">
-                <li className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
+                <li className="flex items-center gap-3 text-[var(--text-secondary)]">
                   <span>✓</span> Up to 5 team members
                 </li>
-                <li className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
+                <li className="flex items-center gap-3 text-[var(--text-secondary)]">
                   <span>✓</span> Basic Kanban Boards
                 </li>
-                <li className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
+                <li className="flex items-center gap-3 text-[var(--text-secondary)]">
                   <span>✓</span> 1 Active Sprint
                 </li>
               </ul>
               <Link
                 href="/auth/sign-up"
-                className="w-full py-3 px-4 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-900 dark:text-white rounded-lg font-semibold transition text-center"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-3 text-center font-semibold text-[var(--text-primary)] transition hover:bg-[var(--bg-hover)]"
               >
                 Start for Free
               </Link>
             </div>
 
             {/* Pro Tier */}
-            <div className="p-8 rounded-xl border-2 border-blue-600 bg-blue-50/50 dark:bg-blue-900/10 flex flex-col relative transform scale-105 shadow-xl">
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-blue-600 text-white px-3 py-1 rounded-full text-sm font-semibold">
+            <div className="relative flex scale-105 flex-col rounded-xl border-2 border-[#2d63c9] bg-[linear-gradient(145deg,#0f172b,#111c33)] p-8 shadow-xl">
+              <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#2d63c9] px-3 py-1 text-sm font-semibold text-white">
                 Most Popular
               </div>
-              <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Pro</h3>
-              <p className="text-gray-500 mt-2">For growing teams requiring advanced tools.</p>
-              <div className="text-4xl font-bold mt-6 mb-8">$12<span className="text-lg text-gray-500 font-normal">/user/mo</span></div>
+              <h3 className="text-2xl font-bold text-[var(--text-primary)]">Pro</h3>
+              <p className="mt-2 text-[var(--text-secondary)]">For growing teams requiring advanced tools.</p>
+              <div className="mb-1 mt-6 text-4xl font-bold text-[var(--text-primary)]">₹799<span className="text-lg font-normal text-[var(--text-secondary)]">/user/month</span></div>
+              <div className="mb-8 text-sm text-[#8cb3ff]">₹679/user/month when billed annually</div>
               <ul className="space-y-4 mb-8 flex-1">
-                <li className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
-                  <span className="text-blue-600">✓</span> Unlimited team members
+                <li className="flex items-center gap-3 text-[var(--text-secondary)]">
+                  <span className="text-[#8cb3ff]">✓</span> Unlimited team members
                 </li>
-                <li className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
-                  <span className="text-blue-600">✓</span> Advanced Sprint Planning
+                <li className="flex items-center gap-3 text-[var(--text-secondary)]">
+                  <span className="text-[#8cb3ff]">✓</span> Advanced Sprint Planning
                 </li>
-                <li className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
-                  <span className="text-blue-600">✓</span> Velocity & Burndown Charts
+                <li className="flex items-center gap-3 text-[var(--text-secondary)]">
+                  <span className="text-[#8cb3ff]">✓</span> Velocity & Burndown Charts
                 </li>
-                <li className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
-                  <span className="text-blue-600">✓</span> Priority Support
+                <li className="flex items-center gap-3 text-[var(--text-secondary)]">
+                  <span className="text-[#8cb3ff]">✓</span> Priority Support
                 </li>
               </ul>
-              <Link
-                href="/settings/billing?plan=pro"
-                className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold transition shadow-lg shadow-blue-500/30 text-center"
-              >
-                Upgrade to Pro
-              </Link>
+              <div className="grid gap-2">
+                <Link
+                  href="/settings/billing?plan=pro&currency=INR&billing=monthly"
+                  className="w-full rounded-lg bg-[#2d63c9] px-4 py-3 text-center font-bold text-white transition hover:bg-[#2454ad]"
+                >
+                  Choose Monthly
+                </Link>
+                <Link
+                  href="/settings/billing?plan=pro&currency=INR&billing=annual"
+                  className="w-full rounded-lg border border-[#2d63c9] bg-[#0f1a33] px-4 py-3 text-center font-semibold text-[#c7d9ff] transition hover:bg-[#132345]"
+                >
+                  Choose Annual (Save 15%)
+                </Link>
+              </div>
             </div>
 
             {/* Enterprise Tier */}
-            <div className="p-8 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-[#0a0a0a] flex flex-col">
-              <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Enterprise</h3>
-              <p className="text-gray-500 mt-2">Custom solutions for large organizations.</p>
-              <div className="text-4xl font-bold mt-6 mb-8">Custom</div>
+            <div className="flex flex-col rounded-xl border border-[var(--border)] bg-[linear-gradient(145deg,#0b0b0d,#171717)] p-8">
+              <h3 className="text-2xl font-bold text-[var(--text-primary)]">Enterprise</h3>
+              <p className="mt-2 text-[var(--text-secondary)]">Custom solutions for large organizations.</p>
+              <div className="mb-1 mt-6 text-4xl font-bold text-[var(--text-primary)]">₹1,999<span className="text-lg font-normal text-[var(--text-secondary)]">/user/month</span></div>
+              <div className="mb-8 text-sm text-[var(--text-secondary)]">Annual contract pricing available for large teams</div>
               <ul className="space-y-4 mb-8 flex-1">
-                <li className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
+                <li className="flex items-center gap-3 text-[var(--text-secondary)]">
                   <span>✓</span> SSO & SAML
                 </li>
-                <li className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
+                <li className="flex items-center gap-3 text-[var(--text-secondary)]">
                   <span>✓</span> Dedicated Success Manager
                 </li>
-                <li className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
+                <li className="flex items-center gap-3 text-[var(--text-secondary)]">
                   <span>✓</span> Custom Workflows
                 </li>
-                <li className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
+                <li className="flex items-center gap-3 text-[var(--text-secondary)]">
                   <span>✓</span> Advanced Security
                 </li>
               </ul>
-              <Link
-                href="/settings/billing?plan=enterprise"
-                className="w-full py-3 px-4 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-900 dark:text-white rounded-lg font-semibold transition text-center"
-              >
-                Upgrade to Enterprise
-              </Link>
+              <div className="grid gap-2">
+                <Link
+                  href="/settings/billing?plan=enterprise&currency=INR&billing=monthly"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-3 text-center font-semibold text-[var(--text-primary)] transition hover:bg-[var(--bg-hover)]"
+                >
+                  Enterprise Monthly
+                </Link>
+                <Link
+                  href="/settings/billing?plan=enterprise&currency=INR&billing=annual"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-3 text-center font-semibold text-[var(--text-primary)] transition hover:bg-[var(--bg-hover)]"
+                >
+                  Enterprise Annual
+                </Link>
+              </div>
             </div>
           </div>
         </div>

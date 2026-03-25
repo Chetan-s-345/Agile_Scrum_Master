@@ -17,6 +17,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Sprint Manager - AI-Powered Agile Platform",
   description: "Intelligent project management with AI-driven sprint planning and developer assignment",
+  icons: {
+    icon: "/sprint-grid-logo.svg",
+    shortcut: "/sprint-grid-logo.svg",
+    apple: "/sprint-grid-logo.svg",
+  },
 };
 
 const themeInitScript = `
