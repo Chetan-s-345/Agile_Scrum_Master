@@ -1,0 +1,145 @@
+Agentic Scrum Master - Features and Page Mapping
+Generated: 2026-03-25
+
+1) Product Overview
+Agentic Scrum Master is a multi-tenant agile delivery platform focused on sprint planning, execution, and reporting. It combines AI-assisted operations, project governance, team collaboration, and engineering integrations in one workspace.
+
+Core goals:
+- Plan work with clear goals, backlog structure, and sprint scope.
+- Execute and monitor work across board, tasks, assignments, and standups.
+- Keep delivery healthy with reporting, risk detection, and automation.
+- Connect engineering systems (GitHub, webhooks, integrations).
+- Support admins, scrum masters, developers, and org owners.
+
+2) Platform Capabilities
+2.1 Identity and Access
+- Sign up, sign in, reset password, verify email, invite acceptance.
+- Organization-aware access controls.
+- Member-scoped auth and permission checks.
+
+2.2 Work Management
+- Goals and outcome tracking.
+- Backlog and sprint planning.
+- Task lifecycle management with dependencies.
+- Assignment and workload distribution.
+
+2.3 Team Operations
+- Standups and status updates.
+- Team spaces and collaboration views.
+- Developer-focused productivity views.
+
+2.4 AI and Automation
+- AI routes for summaries, planning support, and workflow suggestions.
+- Inngest background jobs and event-triggered functions.
+- Rules and automations for recurring workflow actions.
+
+2.5 Engineering Integrations
+- GitHub connection and sync surfaces.
+- Webhook endpoints for external event ingestion.
+- Integration pages for external systems management.
+
+2.6 Monitoring and Reporting
+- Delivery health and progress views.
+- Goals, sprint, and project reports.
+- Operational dashboards and admin analytics.
+
+3) Public/Marketing Routes
+- / (home): product positioning, hero sections, feature discovery.
+- /about: company/product summary.
+- /features: feature detail landing.
+- /pricing: plan and pricing communication.
+- /solution: solution-oriented messaging.
+- /login and /register: alternate entry points to auth flow.
+
+4) Auth Routes
+- /auth/sign-in: user login.
+- /auth/sign-up: user registration.
+- /auth/forgot-password: password reset request.
+- /auth/reset-password: password reset completion.
+- /auth/verify-email: account verification.
+- /auth/accept-invite: organization invitation acceptance.
+
+5) Dashboard and Application Routes
+5.1 Core Workspace
+- /dashboard: workspace overview, health, and quick actions.
+- /board: sprint/task board execution view.
+- /backlog: backlog grooming and prioritization.
+- /tasks: task management and filtering.
+- /task-dependencies: dependency graph/list and constraints.
+
+5.2 Sprint and Planning
+- /sprint: sprint-centric operational view.
+- /sprints: sprint list and status tracking.
+- /sprint-plan and /sprint_plan: sprint planning surfaces.
+- /standup: daily standup and team updates.
+
+5.3 Goals and Delivery Outcomes
+- /goals: goal creation, tracking, progress, and linking to sprints/repos.
+- /reports: performance and delivery reporting.
+- /monitoring: runtime and process health indicators.
+
+5.4 Project and Team Structure
+- /projects: project catalog and project-level management.
+- /teams: team grouping and coordination.
+- /developers and /developer-tools: developer-focused pages and utilities.
+- /assignment and /assign: work assignment flows.
+
+5.5 Admin and Settings
+- /admin: administrative controls and governance.
+- /settings: workspace and user settings.
+- /profile: user profile and preferences.
+- /onboarding: new-user/workspace onboarding guidance.
+
+5.6 Integrations and External Connectivity
+- /github: GitHub integration and repository operations.
+- /integrations: connectors management.
+- /webhooks: webhook configuration and event handling.
+- /notifications: event and notification center.
+
+5.7 Organization and Collaboration
+- /org and /spaces: organization and collaboration spaces.
+- /invitations: invite and membership management.
+- /search: global search across entities.
+- /pages and /forms: internal docs/forms-style collaboration features.
+
+5.8 Advanced/Support Modules
+- /skill-gap: capability tracking and team skills insights.
+- /changelog: release/change communication.
+- /github routes in dashboard namespace: linked repo/status tooling.
+
+6) API Route Families (app/api)
+- /api/auth: authentication and session operations.
+- /api/org, /api/teams, /api/developers: org/team/member entities.
+- /api/projects, /api/goals, /api/sprints, /api/tasks: core work objects.
+- /api/assignment, /api/task-dependencies: execution constraints.
+- /api/reports, /api/monitoring: analytics and health.
+- /api/github, /api/integrations, /api/webhooks: external system links.
+- /api/notifications, /api/search, /api/spaces, /api/pages, /api/forms: collaboration APIs.
+- /api/admin: privileged operations.
+- /api/ai: AI-assisted workflows and generation routes.
+- /api/inngest: event/job processing endpoints.
+
+7) Operational/Platform Components
+- Theme system: global light/dark mode using centralized store + CSS variables.
+- Sidebar and navbar shell: route navigation, quick create, user menu, project switch.
+- Reusable themed UI primitives for consistency.
+- Background functions in inngest/functions for async automation.
+
+8) Agentic Scrum Master Feature Set (Functional)
+- AI sprint brief generation and planning support.
+- Goal-to-sprint-to-task traceability.
+- Team/member assignment and accountability tracking.
+- GitHub linkage for delivery visibility.
+- Activity logs and status progression.
+- Reporting for throughput, completion, and risk awareness.
+- Cross-page global search and role-sensitive access.
+
+9) Suggested Ownership by Persona
+- Org Admin: org setup, governance, integrations, billing/settings.
+- Scrum Master: sprint planning, board flow, standups, reporting.
+- Engineering Lead: goals, dependencies, project progress, monitoring.
+- Developer: assigned work, board updates, standup contributions.
+
+10) Notes
+- Route names with both hyphen and underscore variants exist in current structure (example: sprint-plan and sprint_plan).
+- Feature depth may vary by tenant config, data availability, and integration setup.

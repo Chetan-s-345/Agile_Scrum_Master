@@ -1,428 +1,632 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Bot, Check, RefreshCw } from "lucide-react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { BlockLoadingOverlay } from "@/components/block-loading-overlay";
 
-type ProjectListItem = {
+type Project = { id: string; name: string };
+
+type Agent = {
   id: string;
   name: string;
+  role?: string;
+  status?: string;
+  dataSources?: string[];
+  isCustom?: boolean;
 };
 
-type SprintListItem = {
-  id: string;
-  projectId: string;
+type AgentConfig = {
+  trigger_settings?: Record<string, unknown>;
+  autonomy_level?: number;
+  constraints?: Record<string, unknown>;
+  context_memo?: string;
+};
+
+type CreateAgentForm = {
   name: string;
+  role: "task-generator" | "assignment" | "monitoring" | "custom";
+  promptTemplate: string;
+  dataSources: string[];
+  triggerEvents: string[];
+  triggerConditions: string[];
+  actions: string[];
+  autonomyLevel: 1 | 2 | 3;
+  projectIds: string[];
 };
 
-type DeveloperListItem = {
-  id: string;
-  fullName?: string;
-  name?: string;
+const DATA_SOURCE_OPTIONS = ["GitHub", "Database", "Documentation (RAG)"];
+const TRIGGER_EVENT_OPTIONS = ["github.push", "task.created", "task.updated"];
+const ACTION_OPTIONS = ["create tasks", "assign developers", "send alerts", "reassign tasks"];
+
+function safe(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (v == null) return "";
+  return String(v);
+}
+
+function asArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((x) => safe(x)).filter(Boolean);
+}
+
+const EMPTY_CREATE_FORM: CreateAgentForm = {
+  name: "",
+  role: "custom",
+  promptTemplate: "",
+  dataSources: [],
+  triggerEvents: [],
+  triggerConditions: [],
+  actions: [],
+  autonomyLevel: 2,
+  projectIds: [],
 };
 
-type AgenticBuildResult = {
-  sprintId: string;
-  projectId: string;
-  sprintName: string;
-  createdTasks: Array<Record<string, unknown>>;
-  assignmentResults: Array<Record<string, unknown>>;
-  agentic?: {
-    sprintGoal?: string | null;
-    summary?: unknown;
-    risks?: unknown[];
-  };
-};
+export default function ScrumMasterPage() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState("");
+  const [autoMode, setAutoMode] = useState(true);
 
-function asString(x: unknown): string {
-  if (typeof x === "string") return x;
-  if (x == null) return "";
-  return String(x);
-}
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [loadingAgents, setLoadingAgents] = useState(false);
 
-function asNumber(x: unknown): number | null {
-  const n = typeof x === "number" ? x : Number(x);
-  return Number.isFinite(n) ? n : null;
-}
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createForm, setCreateForm] = useState<CreateAgentForm>(EMPTY_CREATE_FORM);
+  const [createError, setCreateError] = useState("");
+  const [createSuccess, setCreateSuccess] = useState("");
 
-function asRecord(x: unknown): Record<string, unknown> | null {
-  if (!x || typeof x !== "object") return null;
-  return x as Record<string, unknown>;
-}
+  const [editOpen, setEditOpen] = useState(false);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editAgentId, setEditAgentId] = useState("");
+  const [editConfigText, setEditConfigText] = useState("{}");
 
-function getProp(obj: unknown, key: string): unknown {
-  const rec = asRecord(obj);
-  return rec ? rec[key] : undefined;
-}
+  const [logsByAgent, setLogsByAgent] = useState<Record<string, string[]>>({});
 
-function summarizeJson(x: unknown): string {
-  if (x == null) return "";
-  if (typeof x === "string") return x;
-  try {
-    return JSON.stringify(x);
-  } catch {
-    return String(x);
-  }
-}
+  const customAgents = useMemo(() => agents.filter((a) => Boolean(a.isCustom)), [agents]);
 
-export default function AgenticScrumMasterPage() {
-  const [projects, setProjects] = useState<ProjectListItem[]>([]);
-  const [planningSprints, setPlanningSprints] = useState<SprintListItem[]>([]);
-  const [developers, setDevelopers] = useState<DeveloperListItem[]>([]);
+  const loadProjects = useCallback(async () => {
+    const resp = await fetch("/api/projects", { cache: "no-store" });
+    const json = await resp.json().catch(() => ({}));
+    const items = Array.isArray(json?.items) ? json.items : [];
+    const rows = items
+      .map((x: { id?: string; name?: string }) => ({ id: safe(x.id), name: safe(x.name) }))
+      .filter((x: Project) => x.id);
+    setProjects(rows);
+    if (!projectId && rows.length) setProjectId(rows[0].id);
+  }, [projectId]);
 
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  const [selectedSprintId, setSelectedSprintId] = useState<string>("");
-  const [projectDetails, setProjectDetails] = useState<string>("");
-  const [maxTickets, setMaxTickets] = useState<number>(12);
+  const loadPolicy = useCallback(async () => {
+    if (!projectId) return;
+    const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/automation-policy`, { cache: "no-store" });
+    const json = await resp.json().catch(() => ({}));
+    if (!resp.ok) return;
+    const next =
+      Boolean(json?.createFromIssue) &&
+      Boolean(json?.createFromPr) &&
+      Boolean(json?.autoAssign) &&
+      Boolean(json?.monitoringEnabled);
+    setAutoMode(next);
+  }, [projectId]);
 
-  const [loading, setLoading] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<AgenticBuildResult | null>(null);
-
-  const developerNameById = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const d of developers) {
-      m.set(String(d.id), String(d.fullName || d.name || "Developer"));
-    }
-    return m;
-  }, [developers]);
-
-  async function loadProjects() {
-    setError(null);
-    setLoading(true);
+  const loadAgents = useCallback(async () => {
+    if (!projectId) return;
+    setLoadingAgents(true);
     try {
-      const resp = await fetch("/api/projects", { cache: "no-store" });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(asString(getProp(data, "error") || "Failed to load projects"));
-
-      const rawItems = getProp(data, "items");
-      const items = Array.isArray(rawItems) ? (rawItems as ProjectListItem[]) : [];
-      setProjects(items);
-      if (!selectedProjectId && items.length) setSelectedProjectId(String(items[0].id));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load projects");
+      const resp = await fetch(`/api/agents?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+      const json = await resp.json().catch(() => ({}));
+      const rows = Array.isArray(json?.agents) ? json.agents : [];
+      const normalized = rows
+        .map((row: Record<string, unknown>) => ({
+          id: safe(row.id),
+          name: safe(row.name),
+          role: safe(row.role || "custom"),
+          status: safe(row.status || "idle"),
+          dataSources: asArray(row.dataSources),
+          isCustom: Boolean(row.isCustom),
+        }))
+        .filter((x: Agent) => x.id);
+      setAgents(normalized);
     } finally {
-      setLoading(false);
+      setLoadingAgents(false);
     }
-  }
+  }, [projectId]);
 
-  async function loadPlanningSprints(projectId: string) {
-    setError(null);
-    setLoading(true);
+  const toggleAutoMode = useCallback(async () => {
+    if (!projectId) return;
+    const next = !autoMode;
+    await fetch(`/api/projects/${encodeURIComponent(projectId)}/automation-policy`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        createFromIssue: next,
+        createFromPr: next,
+        autoAssign: next,
+        monitoringEnabled: next,
+      }),
+    });
+    setAutoMode(next);
+  }, [autoMode, projectId]);
+
+  const setAgentEnabled = useCallback(
+    async (agentId: string, enabled: boolean) => {
+      if (!projectId) return;
+      await fetch(`/api/agents/${encodeURIComponent(agentId)}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, status: enabled ? "active" : "paused" }),
+      });
+      await loadAgents();
+    },
+    [loadAgents, projectId]
+  );
+
+  const removeAgent = useCallback(
+    async (agentId: string) => {
+      if (!projectId) return;
+      if (!confirm("Remove this agent from the current project?")) return;
+      await fetch(`/api/agents/${encodeURIComponent(agentId)}?projectId=${encodeURIComponent(projectId)}`, {
+        method: "DELETE",
+      });
+      await loadAgents();
+    },
+    [loadAgents, projectId]
+  );
+
+  const openEdit = useCallback(
+    async (agentId: string) => {
+      if (!projectId) return;
+      setEditAgentId(agentId);
+      setEditOpen(true);
+      const resp = await fetch(
+        `/api/agents/${encodeURIComponent(agentId)}/config?projectId=${encodeURIComponent(projectId)}`,
+        { cache: "no-store" }
+      );
+      const json = await resp.json().catch(() => ({}));
+      const config = (json?.config || {}) as AgentConfig;
+      setEditConfigText(JSON.stringify(config, null, 2));
+    },
+    [projectId]
+  );
+
+  const saveEdit = useCallback(async () => {
+    if (!projectId || !editAgentId) return;
+    let parsed: AgentConfig;
     try {
-      const qs = new URLSearchParams({ projectId, status: "planning" });
-      const resp = await fetch(`/api/sprints?${qs.toString()}`, { cache: "no-store" });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(asString(getProp(data, "error") || "Failed to load sprints"));
-
-      const rawItems = getProp(data, "items");
-      const items = Array.isArray(rawItems) ? (rawItems as SprintListItem[]) : [];
-      setPlanningSprints(items);
-      if (!selectedSprintId || !items.some((s) => String(s.id) === String(selectedSprintId))) {
-        setSelectedSprintId(items.length ? String(items[0].id) : "");
-      }
-    } catch (e) {
-      setPlanningSprints([]);
-      setSelectedSprintId("");
-      setError(e instanceof Error ? e.message : "Failed to load sprints");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadDevelopers() {
-    try {
-      const resp = await fetch("/api/developers", { cache: "no-store" });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) return;
-      const rawItems = getProp(data, "items");
-      const items = Array.isArray(rawItems) ? (rawItems as DeveloperListItem[]) : [];
-      setDevelopers(items);
+      parsed = JSON.parse(editConfigText) as AgentConfig;
     } catch {
-      // ignore (page still usable)
-    }
-  }
-
-  async function runAgentic() {
-    if (!selectedProjectId || !selectedSprintId) return;
-    const details = projectDetails.trim();
-    if (!details) {
-      setError("Please enter project details.");
       return;
     }
 
-    setError(null);
-    setRunning(true);
-    setResult(null);
+    setEditBusy(true);
     try {
-      const resp = await fetch(`/api/sprints/${encodeURIComponent(selectedSprintId)}/agentic-build`, {
+      await fetch(`/api/agents/${encodeURIComponent(editAgentId)}/config`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          triggerSettings: parsed.trigger_settings || {},
+          autonomyLevel: Number(parsed.autonomy_level || 2),
+          constraints: parsed.constraints || {},
+          contextMemo: safe(parsed.context_memo || ""),
+        }),
+      });
+      setEditOpen(false);
+      await loadAgents();
+    } finally {
+      setEditBusy(false);
+    }
+  }, [editAgentId, editConfigText, loadAgents, projectId]);
+
+  const openLogs = useCallback(
+    async (agentId: string) => {
+      if (!projectId) return;
+      const resp = await fetch(
+        `/api/agents/${encodeURIComponent(agentId)}/decisions?projectId=${encodeURIComponent(projectId)}&page=1`,
+        { cache: "no-store" }
+      );
+      const json = await resp.json().catch(() => ({}));
+      const rows = Array.isArray(json?.items) ? json.items : [];
+      setLogsByAgent((prev) => ({
+        ...prev,
+        [agentId]: rows
+          .slice(0, 10)
+          .map((x: Record<string, unknown>) => safe(x.action_description || x.status || "update")),
+      }));
+    },
+    [projectId]
+  );
+
+  const createAgent = useCallback(async () => {
+    if (!createForm.name.trim() || !createForm.projectIds.length) return;
+    setCreateError("");
+    setCreateSuccess("");
+    setCreateBusy(true);
+    try {
+      const resp = await fetch("/api/agents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: selectedProjectId, projectDetails: details, maxTickets }),
-        cache: "no-store",
+        body: JSON.stringify({
+          ...createForm,
+          contextMemo: createForm.promptTemplate,
+        }),
       });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(asString(getProp(data, "error") || "Agentic build failed"));
-      setResult(data as AgenticBuildResult);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Agentic build failed");
+
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setCreateError(safe(json?.detail || json?.error) || "Failed to create agent.");
+        return;
+      }
+
+      setCreateOpen(false);
+      setCreateForm({ ...EMPTY_CREATE_FORM, projectIds: projectId ? [projectId] : [] });
+      await loadAgents();
+      setCreateSuccess("Agent created successfully.");
     } finally {
-      setRunning(false);
+      setCreateBusy(false);
     }
-  }
+  }, [createForm, loadAgents, projectId]);
 
   useEffect(() => {
     void loadProjects();
-    void loadDevelopers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadProjects]);
 
   useEffect(() => {
-    setResult(null);
-    if (selectedProjectId) void loadPlanningSprints(selectedProjectId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProjectId]);
+    if (!projectId) return;
+    void loadPolicy();
+    void loadAgents();
+  }, [loadAgents, loadPolicy, projectId]);
 
-  const selectedProject = useMemo(
-    () => projects.find((p) => String(p.id) === String(selectedProjectId)) || null,
-    [projects, selectedProjectId]
-  );
-
-  const selectedSprint = useMemo(
-    () => planningSprints.find((s) => String(s.id) === String(selectedSprintId)) || null,
-    [planningSprints, selectedSprintId]
-  );
-
-  const createdCount = result?.createdTasks?.length ?? 0;
-  const assignmentCount = result?.assignmentResults?.length ?? 0;
+  useEffect(() => {
+    if (!createForm.projectIds.length && projectId) {
+      setCreateForm((prev) => ({ ...prev, projectIds: [projectId] }));
+    }
+  }, [createForm.projectIds.length, projectId]);
 
   return (
-    <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
-      <div className="w-full">
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2 flex items-center gap-3">
-            <Bot className="w-8 h-8" />
-            Agentic Scrum Master
-          </h1>
-          <p className="text-slate-600 dark:text-slate-300">
-            Provide project details and let AI generate sprint tasks, summarize scope, and assign developers.
-          </p>
-        </div>
+    <div className="jira-page-content min-h-screen p-5 md:p-7">
+      <BlockLoadingOverlay active={loadingAgents} label="Loading agents..." fullScreen={true} delayMs={120} />
+      <div className="mx-auto max-w-[1280px] space-y-4">
+        <div className="text-lg font-semibold">Agentic Scum Manager</div>
 
-        <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Inputs */}
-          <div className="lg:col-span-2 bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Project</label>
-                <select
-                  className="w-full bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded-lg border border-slate-200 dark:border-zinc-800"
-                  value={selectedProjectId}
-                  onChange={(e) => setSelectedProjectId(e.target.value)}
-                  disabled={loading || running}
-                >
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                {!projects.length && (
-                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">No projects found.</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Planning Sprint</label>
-                <select
-                  className="w-full bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded-lg border border-slate-200 dark:border-zinc-800"
-                  value={selectedSprintId}
-                  onChange={(e) => setSelectedSprintId(e.target.value)}
-                  disabled={loading || running || !planningSprints.length}
-                >
-                  {planningSprints.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-                {!planningSprints.length && selectedProjectId && (
-                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">No planning sprints for this project.</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Max tickets</label>
-                <input
-                  type="number"
-                  min={3}
-                  max={30}
-                  className="w-full bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded-lg border border-slate-200 dark:border-zinc-800"
-                  value={Number.isFinite(maxTickets) ? maxTickets : 12}
-                  onChange={(e) => {
-                    const n = asNumber(e.target.value) ?? 12;
-                    setMaxTickets(Math.max(3, Math.min(30, Math.round(n))));
-                  }}
-                  disabled={loading || running}
-                />
-              </div>
-            </div>
-
-            <div className="mt-4">
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Project details</label>
-              <textarea
-                className="w-full min-h-40 bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded-lg border border-slate-200 dark:border-zinc-800"
-                value={projectDetails}
-                onChange={(e) => setProjectDetails(e.target.value)}
-                placeholder="Example: Build Jira integration with OAuth, sync sprints/tasks, add dashboard and alerts..."
-                disabled={loading || running}
-              />
-            </div>
-
-            <div className="mt-4 flex gap-2">
-              <button
-                onClick={() => void loadProjects()}
-                className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-4 py-2 rounded-lg border border-slate-200 dark:border-zinc-800 flex items-center justify-center gap-2 hover:bg-slate-50 dark:hover:bg-zinc-900 transition"
-                disabled={loading || running}
+        <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="grid gap-2 md:grid-cols-3">
+              <select
+                value={projectId}
+                onChange={(e) => setProjectId(e.target.value)}
+                className="h-10 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm"
               >
-                <RefreshCw className="w-4 h-4" />
-                Refresh
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => void toggleAutoMode()}
+                className="h-10 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm"
+              >
+                Auto Mode: {autoMode ? "ON" : "OFF"}
               </button>
+
               <button
-                onClick={() => void runAgentic()}
-                className="bg-slate-900 dark:bg-white text-white dark:text-black font-semibold px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 disabled:opacity-60"
-                disabled={!selectedProjectId || !selectedSprintId || running}
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="h-10 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm"
               >
-                <Check className="w-4 h-4" />
-                {running ? "Running…" : "Run Agentic Scrum Master"}
+                Create Agent
               </button>
             </div>
+            {loadingAgents ? <div className="text-xs text-[var(--text-secondary)]">Loading agents...</div> : null}
           </div>
+        </section>
 
-          {/* Summary */}
-          <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
-            <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Selected</p>
-            <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-              {selectedProject?.name || "—"} / {selectedSprint?.name || "—"}
-            </p>
+        <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4">
+          <div className="mb-3 text-sm font-semibold">Project Agents</div>
+          {createSuccess ? <div className="mb-2 text-xs text-[var(--accent-green)]">{createSuccess}</div> : null}
 
-            <div className="mt-5">
-              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Latest run</p>
-              <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                {result ? `Created ${createdCount} tasks, applied ${assignmentCount} assignments.` : "No agentic run yet."}
-              </p>
-              {result?.agentic?.sprintGoal ? (
-                <p className="mt-3 text-sm text-slate-700 dark:text-slate-200">
-                  <b>Goal:</b> {result.agentic.sprintGoal}
-                </p>
-              ) : null}
+          {customAgents.length ? (
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {customAgents.map((agent) => {
+                const active = safe(agent.status).toLowerCase().includes("active") || safe(agent.status).toLowerCase().includes("running");
+                return (
+                  <div key={agent.id} className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-semibold">{agent.name}</div>
+                      <div className="text-xs text-[var(--text-secondary)]">{agent.status || "idle"}</div>
+                    </div>
+                    <div className="mt-1 text-xs text-[var(--text-secondary)]">role: {agent.role || "custom"}</div>
+                    <div className="mt-1 text-xs text-[var(--text-secondary)]">
+                      sources: {(agent.dataSources || []).join(", ") || "none"}
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void setAgentEnabled(agent.id, !active)}
+                        className="rounded border border-[var(--border)] bg-[var(--bg-card)] px-2 py-1 text-xs"
+                      >
+                        {active ? "Disable" : "Enable"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void openEdit(agent.id)}
+                        className="rounded border border-[var(--border)] bg-[var(--bg-card)] px-2 py-1 text-xs"
+                      >
+                        Edit Configuration
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void openLogs(agent.id)}
+                        className="rounded border border-[var(--border)] bg-[var(--bg-card)] px-2 py-1 text-xs"
+                      >
+                        View Logs
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void removeAgent(agent.id)}
+                        className="rounded border border-red-500/40 bg-red-500/10 px-2 py-1 text-xs text-red-300"
+                      >
+                        Delete Agent
+                      </button>
+                      <Link
+                        href={`/scrum-master/agent/${encodeURIComponent(agent.id)}${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`}
+                        className="rounded border border-[var(--border)] bg-[var(--bg-card)] px-2 py-1 text-xs"
+                      >
+                        Open Agent Page
+                      </Link>
+                    </div>
+
+                    {logsByAgent[agent.id]?.length ? (
+                      <div className="mt-2 rounded border border-[var(--border)] bg-[var(--bg-card)] p-2 text-[11px] text-[var(--text-secondary)]">
+                        {logsByAgent[agent.id].map((line, idx) => (
+                          <div key={`${agent.id}:${idx}`}>{line}</div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
-
-            {result?.agentic?.risks?.length ? (
-              <div className="mt-5">
-                <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Risks</p>
-                <div className="text-xs text-slate-700 dark:text-slate-200 whitespace-pre-wrap rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 p-3">
-                  {summarizeJson(result.agentic.risks)}
-                </div>
-              </div>
-            ) : null}
-
-            {result?.agentic?.summary ? (
-              <div className="mt-5">
-                <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Summary</p>
-                <div className="text-xs text-slate-700 dark:text-slate-200 whitespace-pre-wrap rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 p-3">
-                  {summarizeJson(result.agentic.summary)}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {error ? (
-          <div className="mb-6 bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-4">
-            <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
-          </div>
-        ) : null}
-
-        {/* Output */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4">Created tasks</h2>
-            {!result?.createdTasks?.length ? (
-              <p className="text-sm text-slate-600 dark:text-slate-400">Run the agent to create sprint tasks.</p>
-            ) : (
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {result.createdTasks.map((t, idx) => {
-                  const title = asString(getProp(t, "title")) || `Task ${idx + 1}`;
-                  const points = asString(getProp(t, "story_points") ?? getProp(t, "storyPoints") ?? "");
-                  const priority = asString(getProp(t, "priority"));
-                  const id = asString(getProp(t, "id"));
-                  return (
-                    <div
-                      key={id || String(idx)}
-                      className="p-4 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-lg"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="font-semibold text-slate-900 dark:text-white">{title}</p>
-                        {priority ? (
-                          <span className="text-xs px-2 py-1 rounded border border-slate-200 dark:border-zinc-800 text-slate-700 dark:text-slate-200">
-                            {priority}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                        {id ? `ID: ${id.slice(0, 8)}` : null}
-                        {points ? ` • ${points} pts` : null}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-4">Assignments applied</h2>
-            {!result?.assignmentResults?.length ? (
-              <p className="text-sm text-slate-600 dark:text-slate-400">Assignments will appear after tasks are created.</p>
-            ) : (
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {result.assignmentResults.map((a, idx) => {
-                  const ticketId = asString(getProp(a, "ticketId"));
-                  const taskId = asString(getProp(a, "taskId"));
-                  const developerId = asString(getProp(a, "developerId"));
-                  const ok = Boolean(getProp(a, "ok"));
-                  const reason =
-                    asString(getProp(a, "reason")) ||
-                    asString(getProp(a, "data.auto.reason")) ||
-                    asString(getProp(a, "data.auto.suggestion")) ||
-                    asString(getProp(a, "data.auto.error")) ||
-                    asString(getProp(a, "data.explicit.error"));
-                  const developerName = developerNameById.get(developerId) || (developerId ? `Developer ${developerId.slice(0, 6)}` : "Developer");
-                  return (
-                    <div
-                      key={`${taskId || idx}`}
-                      className="p-4 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-lg"
-                    >
-                      <p className="text-sm text-slate-900 dark:text-white">
-                        <b>{developerName}</b> {ok ? "assigned" : "failed"}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                        {taskId ? `Task: ${taskId.slice(0, 8)}` : null}
-                        {ticketId ? ` • Ticket: ${ticketId.slice(0, 8)}` : null}
-                        {developerId ? ` • Dev: ${developerId.slice(0, 8)}` : null}
-                      </p>
-                      {!ok && reason ? (
-                        <p className="mt-1 text-xs text-red-700 dark:text-red-300">Reason: {reason}</p>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
+          ) : (
+            <div className="rounded-md border border-dashed border-[var(--border)] bg-[var(--bg-surface)] p-4 text-sm text-[var(--text-secondary)]">
+              No project agents created yet.
+            </div>
+          )}
+        </section>
       </div>
+
+      {createOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-2xl rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Create Agent</h3>
+              <button
+                type="button"
+                onClick={() => setCreateOpen(false)}
+                className="rounded border border-[var(--border)] px-2 py-1 text-xs"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-2">
+              <input
+                value={createForm.name}
+                onChange={(e) => setCreateForm((p) => ({ ...p, name: e.target.value }))}
+                placeholder="Agent Name"
+                className="h-10 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm"
+              />
+              <select
+                value={createForm.role}
+                onChange={(e) =>
+                  setCreateForm((p) => ({ ...p, role: e.target.value as CreateAgentForm["role"] }))
+                }
+                className="h-10 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm"
+              >
+                <option value="task-generator">task generator</option>
+                <option value="assignment">assignment</option>
+                <option value="monitoring">monitoring</option>
+                <option value="custom">custom</option>
+              </select>
+              <input
+                placeholder="Conditions (example: inactivity > 24h)"
+                className="h-10 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm"
+                onChange={(e) =>
+                  setCreateForm((p) => ({
+                    ...p,
+                    triggerConditions: e.target.value.split(",").map((x) => x.trim()).filter(Boolean),
+                  }))
+                }
+              />
+              <select
+                value={createForm.autonomyLevel}
+                onChange={(e) =>
+                  setCreateForm((p) => ({ ...p, autonomyLevel: Number(e.target.value) as 1 | 2 | 3 }))
+                }
+                className="h-10 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm"
+              >
+                <option value={1}>Suggestion only</option>
+                <option value={2}>Auto-execute</option>
+                <option value={3}>Require approval</option>
+              </select>
+            </div>
+
+            <textarea
+              value={createForm.promptTemplate}
+              onChange={(e) => setCreateForm((p) => ({ ...p, promptTemplate: e.target.value }))}
+              placeholder="AI Agent Prompt Template"
+              className="mt-3 h-24 w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-3 text-sm"
+            />
+
+            <div className="mt-3 rounded border border-[var(--border)] bg-[var(--bg-surface)] p-2 text-xs">
+              <div className="mb-1 text-[var(--text-secondary)]">Data Sources</div>
+              <div className="grid gap-1 md:grid-cols-3">
+                {DATA_SOURCE_OPTIONS.map((option) => {
+                  const checked = createForm.dataSources.includes(option);
+                  return (
+                    <label key={option} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) =>
+                          setCreateForm((prev) => ({
+                            ...prev,
+                            dataSources: e.target.checked
+                              ? [...new Set([...prev.dataSources, option])]
+                              : prev.dataSources.filter((x) => x !== option),
+                          }))
+                        }
+                      />
+                      {option}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mt-3 rounded border border-[var(--border)] bg-[var(--bg-surface)] p-2 text-xs">
+              <div className="mb-1 text-[var(--text-secondary)]">Trigger Events</div>
+              <div className="grid gap-1 md:grid-cols-3">
+                {TRIGGER_EVENT_OPTIONS.map((option) => {
+                  const checked = createForm.triggerEvents.includes(option);
+                  return (
+                    <label key={option} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) =>
+                          setCreateForm((prev) => ({
+                            ...prev,
+                            triggerEvents: e.target.checked
+                              ? [...new Set([...prev.triggerEvents, option])]
+                              : prev.triggerEvents.filter((x) => x !== option),
+                          }))
+                        }
+                      />
+                      {option}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mt-3 rounded border border-[var(--border)] bg-[var(--bg-surface)] p-2 text-xs">
+              <div className="mb-1 text-[var(--text-secondary)]">Actions</div>
+              <div className="grid gap-1 md:grid-cols-2">
+                {ACTION_OPTIONS.map((option) => {
+                  const checked = createForm.actions.includes(option);
+                  return (
+                    <label key={option} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) =>
+                          setCreateForm((prev) => ({
+                            ...prev,
+                            actions: e.target.checked
+                              ? [...new Set([...prev.actions, option])]
+                              : prev.actions.filter((x) => x !== option),
+                          }))
+                        }
+                      />
+                      {option}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mt-3 rounded border border-[var(--border)] bg-[var(--bg-surface)] p-2 text-xs">
+              <div className="mb-1 text-[var(--text-secondary)]">Assign to projects</div>
+              <div className="grid gap-1 md:grid-cols-2">
+                {projects.map((p) => {
+                  const checked = createForm.projectIds.includes(p.id);
+                  return (
+                    <label key={p.id} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          setCreateForm((prev) => ({
+                            ...prev,
+                            projectIds: e.target.checked
+                              ? [...new Set([...prev.projectIds, p.id])]
+                              : prev.projectIds.filter((id) => id !== p.id),
+                          }));
+                        }}
+                      />
+                      {p.name}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCreateOpen(false)}
+                className="rounded border border-[var(--border)] px-3 py-1.5 text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={createBusy}
+                onClick={() => void createAgent()}
+                className="rounded border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs disabled:opacity-60"
+              >
+                {createBusy ? "Creating..." : "Create Agent"}
+              </button>
+            </div>
+            {createError ? <div className="mt-2 text-xs text-[var(--accent-red)]">{createError}</div> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {editOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-xl rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Edit Configuration</h3>
+              <button
+                type="button"
+                onClick={() => setEditOpen(false)}
+                className="rounded border border-[var(--border)] px-2 py-1 text-xs"
+              >
+                Close
+              </button>
+            </div>
+
+            <textarea
+              value={editConfigText}
+              onChange={(e) => setEditConfigText(e.target.value)}
+              className="h-40 w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-2 text-xs"
+            />
+
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditOpen(false)}
+                className="rounded border border-[var(--border)] px-3 py-1.5 text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={editBusy}
+                onClick={() => void saveEdit()}
+                className="rounded border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-1.5 text-xs disabled:opacity-60"
+              >
+                {editBusy ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

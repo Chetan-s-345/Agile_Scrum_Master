@@ -769,6 +769,8 @@ CREATE TABLE tasks (
     completed_at        TIMESTAMP,
     -- Dependencies
     blocked_by          UUID[],                              -- array of task IDs blocking this
+    parent_task_id      UUID REFERENCES tasks(id),
+    is_subtask          BOOLEAN DEFAULT FALSE,
     -- Tracking
     estimated_hours     DECIMAL(6,2),
     logged_hours        DECIMAL(6,2) DEFAULT 0,

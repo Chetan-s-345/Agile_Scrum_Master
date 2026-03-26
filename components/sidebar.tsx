@@ -6,6 +6,7 @@ import { CSS } from "@dnd-kit/utilities";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useUIStore } from "@/lib/ui-store";
 import {
   Activity,
   AppWindow,
@@ -29,9 +30,7 @@ import {
   PanelsTopLeft,
   Pencil,
   Plus,
-  Settings,
   ShieldAlert,
-  Sparkles,
   Star,
   Trash2,
   UserRound,
@@ -74,33 +73,28 @@ type Space = {
 type SpacesResp = { spaces?: Space[]; archived?: Space[] };
 
 const mainLinks: LinkItem[] = [
-  { label: "For you", href: "/board", icon: UserRound },
+  { label: "Overview", href: "/board", icon: UserRound },
   { label: "Recent", href: "/sprints", icon: ChevronRight },
   { label: "Starred", href: "/reports", icon: Star },
-  { label: "Apps", href: "/tasks", icon: AppWindow },
+  { label: "Tasks", href: "/tasks", icon: AppWindow },
   { label: "Plans", href: "/sprint-plan", icon: Workflow },
 ];
 
 const appPages: LinkItem[] = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Goals", href: "/goals", icon: Grid3X3 },
   { label: "Sprint Plan", href: "/sprint-plan", icon: Zap },
   { label: "Agentic Scrum Master", href: "/scrum-master", icon: Bot },
   { label: "Sprints", href: "/sprints", icon: Flag },
   { label: "Tasks", href: "/tasks", icon: ListTodo },
-  { label: "Dev Tools", href: "/developers", icon: Users },
-  { label: "Teams", href: "/teams", icon: Users },
   { label: "GitHub", href: "/github", icon: GitBranch },
   { label: "Assignment", href: "/assignment", icon: Compass },
   { label: "Monitoring", href: "/monitoring", icon: Activity },
   { label: "Reports", href: "/reports", icon: BookOpen },
   { label: "Admin Webhooks", href: "/webhooks", icon: ShieldAlert },
-  { label: "Settings", href: "/settings", icon: Settings },
 ];
 
 const bottomLinks: LinkItem[] = [
   { label: "Filters", href: "/tasks", icon: Filter },
-  { label: "Dashboards", href: "/dashboard", icon: LayoutDashboard },
+  { label: "Dashboards", href: "/tasks", icon: LayoutDashboard },
   { label: "Goals", href: "/goals", icon: Flag },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "More", href: "/settings", icon: Ellipsis },
@@ -154,9 +148,11 @@ function Item({
   return (
     <Link
       href={item.href}
-      className={`flex h-9 items-center gap-2 rounded-md border border-transparent px-2 text-sm transition hover:bg-[#2a2a2a] ${
-        active ? "bg-white text-black" : "text-white"
-      } ${className || ""}`}
+      className={`flex h-9 items-center gap-2 rounded-md px-2 text-sm transition hover:bg-[var(--sidebar-hover)] ${className || ""}`}
+      style={{
+        background: active ? "var(--sidebar-active)" : "transparent",
+        color: active ? "var(--sidebar-active-text)" : "var(--sidebar-text)",
+      }}
       title={compact ? item.label : undefined}
     >
       <Icon className="h-4 w-4 shrink-0" />
@@ -254,7 +250,7 @@ function SortableSpaceRow({
             onKeyDown={(e) => {
               if (e.key === "Enter") onRenameSave();
             }}
-            className="h-7 flex-1 rounded border border-[#3a3a3a] bg-[#111] px-2 text-xs text-white outline-none"
+            className="h-7 flex-1 rounded border border-[var(--border-strong)] bg-[#111] px-2 text-xs text-white outline-none"
             autoFocus
           />
         ) : (
@@ -275,7 +271,7 @@ function SortableSpaceRow({
       </div>
 
       {addOpen ? (
-        <div className="ml-10 mt-1 rounded-md border border-[#2a2a2a] bg-[#121212] p-1 text-xs">
+        <div className="ml-10 mt-1 rounded-md border border-[var(--border)] bg-[#121212] p-1 text-xs">
           <button type="button" onClick={() => onActionLink(`/sprint-plan?spaceId=${encodeURIComponent(space.id)}&new=sprint`)} className="flex w-full items-center gap-2 rounded px-2 py-1.5 hover:bg-[#1f1f1f]">New sprint</button>
           <button type="button" onClick={() => onActionLink(`/tasks?spaceId=${encodeURIComponent(space.id)}&new=task`)} className="flex w-full items-center gap-2 rounded px-2 py-1.5 hover:bg-[#1f1f1f]">New task</button>
           <button type="button" onClick={() => onActionLink(`/goals?spaceId=${encodeURIComponent(space.id)}&new=goal`)} className="flex w-full items-center gap-2 rounded px-2 py-1.5 hover:bg-[#1f1f1f]">New goal</button>
@@ -286,7 +282,7 @@ function SortableSpaceRow({
       ) : null}
 
       {menuOpen ? (
-        <div className="ml-10 mt-1 rounded-md border border-[#2a2a2a] bg-[#121212] p-1 text-xs">
+        <div className="ml-10 mt-1 rounded-md border border-[var(--border)] bg-[#121212] p-1 text-xs">
           <button type="button" onClick={onStartRename} className="flex w-full items-center gap-2 rounded px-2 py-1.5 hover:bg-[#1f1f1f]"><Pencil className="h-3.5 w-3.5" />Rename space</button>
           <button type="button" onClick={onDuplicate} className="flex w-full items-center gap-2 rounded px-2 py-1.5 hover:bg-[#1f1f1f]"><Copy className="h-3.5 w-3.5" />Duplicate space</button>
           <button type="button" onClick={onSetDefault} className="flex w-full items-center gap-2 rounded px-2 py-1.5 hover:bg-[#1f1f1f]">Set as default</button>
@@ -297,7 +293,7 @@ function SortableSpaceRow({
             <div className="rounded px-2 py-1.5 text-xs">
               <div className="mb-1 text-[#bfbfbf]">Delete this space?</div>
               <div className="flex gap-2">
-                <button type="button" onClick={onDeleteConfirm} className="rounded border border-[#3a3a3a] px-2 py-1 hover:bg-[#1f1f1f]">Confirm</button>
+                <button type="button" onClick={onDeleteConfirm} className="rounded border border-[var(--border-strong)] px-2 py-1 hover:bg-[#1f1f1f]">Confirm</button>
               </div>
             </div>
           ) : (
@@ -326,6 +322,8 @@ function SortableSpaceRow({
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
   const sidebarWidth = collapsed ? "w-[82px]" : "w-[260px]";
+  const sidebarOpen = useUIStore((state) => state.sidebarOpen);
+  const closeSidebar = useUIStore((state) => state.closeSidebar);
 
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [archivedSpaces, setArchivedSpaces] = useState<Space[]>([]);
@@ -347,7 +345,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
+    const id = window.setTimeout(() => {
       try {
         const raw = window.localStorage.getItem("asm.sidebar.space.collapsed.v1");
         if (raw) setCollapsedById(JSON.parse(raw));
@@ -359,15 +357,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       setStarredItems(safeParseItems(window.localStorage.getItem(STARRED_STORAGE_KEY)));
     }, 0);
 
-    return () => {
-      window.clearTimeout(timer);
-    };
+    return () => window.clearTimeout(id);
   }, []);
 
   useEffect(() => {
     if (!pathname || !pathname.startsWith("/")) return;
 
-    const timer = window.setTimeout(() => {
+    const id = window.setTimeout(() => {
       const nextEntry: SavedNavItem = { label: inferLabel(pathname), href: pathname };
       setRecentItems((prev) => {
         const next = [nextEntry, ...prev.filter((it) => it.href !== pathname)].slice(0, 8);
@@ -380,9 +376,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       });
     }, 0);
 
-    return () => {
-      window.clearTimeout(timer);
-    };
+    return () => window.clearTimeout(id);
   }, [pathname]);
 
   const persistCollapsed = useCallback((next: Record<string, boolean>) => {
@@ -408,13 +402,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
+    const id = window.setTimeout(() => {
       void loadSpaces();
     }, 0);
 
-    return () => {
-      window.clearTimeout(timer);
-    };
+    return () => window.clearTimeout(id);
   }, [loadSpaces]);
 
   async function renameSpace(id: string, name: string) {
@@ -498,26 +490,38 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   }
 
   return (
-    <aside className={`fixed left-0 top-0 z-50 h-screen shrink-0 overflow-hidden border-r border-[#2a2a2a] bg-[#0d0d0d] ${sidebarWidth}`}>
+    <aside
+      className={`fixed left-0 top-0 z-50 h-screen shrink-0 overflow-hidden border-r transition-transform duration-300 ease-in-out md:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} ${sidebarWidth}`}
+      style={{ background: "var(--sidebar-bg)", borderColor: "var(--border)" }}
+    >
       <div className="flex h-full flex-col">
-        <div className="flex-shrink-0 border-b border-[#2a2a2a] p-3">
+        <div className="flex-shrink-0 border-b border-[var(--border)] p-3">
           <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="grid h-6 w-6 grid-cols-2 gap-0.5 rounded-sm border border-[#2a2a2a] p-0.5">
-                <span className="rounded-[2px] bg-white" />
-                <span className="rounded-[2px] bg-white" />
-                <span className="rounded-[2px] bg-white" />
-                <span className="rounded-[2px] bg-white" />
+            <Link href="/" className="flex items-center gap-2" aria-label="Go to home page">
+              <div className="grid h-6 w-6 grid-cols-2 gap-0.5 rounded-sm border border-[var(--border)] p-0.5">
+                <span className="rounded-[2px] bg-[var(--text-primary)]" />
+                <span className="rounded-[2px] bg-[var(--text-primary)]" />
+                <span className="rounded-[2px] bg-[var(--text-primary)]" />
+                <span className="rounded-[2px] bg-[var(--text-primary)]" />
               </div>
-              {!collapsed ? <span className="text-base font-semibold">Sprint</span> : null}
-            </div>
+              {!collapsed ? <span className="text-base font-semibold text-[var(--text-primary)]">Sprint</span> : null}
+            </Link>
             <button
               type="button"
               onClick={onToggle}
-              className="rounded-md border border-[#2a2a2a] p-1 text-white hover:bg-[#2a2a2a]"
+              className="hidden rounded-md p-1 text-[var(--text-primary)] hover:bg-[var(--sidebar-hover)] md:inline-flex"
               aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             >
               {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={closeSidebar}
+              className="inline-flex rounded-md p-1 text-[var(--text-primary)] hover:bg-[var(--sidebar-hover)] md:hidden"
+              aria-label="Close sidebar"
+            >
+              <ChevronLeft className="h-4 w-4" />
             </button>
           </div>
 
@@ -529,9 +533,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     <button
                       type="button"
                       onClick={() => setRecentOpen((v) => !v)}
-                      className={`flex h-9 w-full items-center gap-2 rounded-md border border-transparent px-2 text-sm transition hover:bg-[#2a2a2a] ${
-                        pathname === item.href ? "bg-white text-black" : "text-white"
-                      }`}
+                      className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm transition hover:bg-[var(--sidebar-hover)]"
+                      style={{
+                        background: pathname === item.href ? "var(--sidebar-active)" : "transparent",
+                        color: pathname === item.href ? "var(--sidebar-active-text)" : "var(--sidebar-text)",
+                      }}
                     >
                       <item.icon className="h-4 w-4 shrink-0" />
                       {!collapsed ? <span className="truncate">{item.label}</span> : null}
@@ -541,12 +547,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                       <div className="ml-6 mt-1 space-y-1">
                         {recentItems.length ? (
                           recentItems.map((it) => (
-                            <Link key={`recent-${it.href}`} href={it.href} className="block truncate rounded px-2 py-1 text-xs text-[#bdbdbd] hover:bg-[#1f1f1f]">
+                            <Link key={`recent-${it.href}`} href={it.href} className="block truncate rounded px-2 py-1 text-xs text-[var(--sidebar-text)] hover:bg-[var(--sidebar-hover)]">
                               {it.label}
                             </Link>
                           ))
                         ) : (
-                          <div className="px-2 py-1 text-xs text-[#8f8f8f]">No recent pages.</div>
+                          <div className="px-2 py-1 text-xs text-[var(--text-secondary)]">No recent pages.</div>
                         )}
                       </div>
                     ) : null}
@@ -560,9 +566,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     <button
                       type="button"
                       onClick={() => setStarredOpen((v) => !v)}
-                      className={`flex h-9 w-full items-center gap-2 rounded-md border border-transparent px-2 text-sm transition hover:bg-[#2a2a2a] ${
-                        pathname === item.href ? "bg-white text-black" : "text-white"
-                      }`}
+                      className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-sm transition hover:bg-[var(--sidebar-hover)]"
+                      style={{
+                        background: pathname === item.href ? "var(--sidebar-active)" : "transparent",
+                        color: pathname === item.href ? "var(--sidebar-active-text)" : "var(--sidebar-text)",
+                      }}
                     >
                       <item.icon className="h-4 w-4 shrink-0" />
                       {!collapsed ? <span className="truncate">{item.label}</span> : null}
@@ -572,12 +580,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                       <div className="ml-6 mt-1 space-y-1">
                         {starredItems.length ? (
                           starredItems.map((it) => (
-                            <Link key={`star-${it.href}`} href={it.href} className="block truncate rounded px-2 py-1 text-xs text-[#bdbdbd] hover:bg-[#1f1f1f]">
+                            <Link key={`star-${it.href}`} href={it.href} className="block truncate rounded px-2 py-1 text-xs text-[var(--sidebar-text)] hover:bg-[var(--sidebar-hover)]">
                               {it.label}
                             </Link>
                           ))
                         ) : (
-                          <div className="px-2 py-1 text-xs text-[#8f8f8f]">No starred pages.</div>
+                          <div className="px-2 py-1 text-xs text-[var(--text-secondary)]">No starred pages.</div>
                         )}
                       </div>
                     ) : null}
@@ -589,7 +597,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 <Item
                   key={item.label}
                   item={item}
-                  active={item.label === "For you" && pathname === "/board"}
+                  active={item.label === "Overview" && pathname === "/board"}
                   compact={collapsed}
                 />
               );
@@ -598,11 +606,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           </div>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3">
-          {!collapsed ? <p className="px-2 pb-1 text-xs uppercase tracking-wide text-[#8f8f8f]">Spaces</p> : null}
+        <div className="sidebar-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-3">
+          {!collapsed ? <p className="px-2 pb-1 text-xs uppercase tracking-wide text-[var(--text-secondary)]">Spaces</p> : null}
 
           {loadingSpaces ? (
-            <div className="px-2 py-2 text-xs text-[#8f8f8f]">Loading spaces...</div>
+            <div className="px-2 py-2 text-xs text-[var(--text-secondary)]">Loading spaces...</div>
           ) : (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
               <SortableContext items={spaces.map((s) => s.id)} strategy={verticalListSortingStrategy}>
@@ -706,7 +714,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
               <p className="px-2 pb-2 pt-4 text-xs uppercase tracking-wide text-[#8f8f8f]">Recommended</p>
               <Link href="/assignment" className="flex h-9 items-center gap-2 rounded-md px-2 text-sm hover:bg-[#2a2a2a]">
-                <Sparkles className="h-4 w-4" />
+                <Zap className="h-4 w-4" />
                 <span className="truncate">Collect requests</span>
                 <span className="ml-auto rounded border border-[#3f3f3f] px-1.5 py-0.5 text-[10px] font-semibold text-[#d7c8ff]">TRY</span>
               </Link>
@@ -748,7 +756,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           )}
         </div>
 
-        <div className="flex-shrink-0 border-t border-[#2a2a2a] p-3">
+        <div className="flex-shrink-0 border-t border-[var(--border)] p-3">
           <div className="space-y-0.5">
             {bottomLinks.map((item) => (
               <Item key={item.label} item={item} compact={collapsed} />

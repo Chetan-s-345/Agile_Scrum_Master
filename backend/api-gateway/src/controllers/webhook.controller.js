@@ -5,6 +5,7 @@ const { db } = require('../config/database');
 const { logger } = require('../middleware/logger');
 const { getQueues, pingRedis } = require('../services/queue.service');
 const { handleJiraWebhookEvent } = require('../services/jiraWebhookHandlerService');
+const { sendInngestEvent } = require('../services/inngestEvent.service');
 
 function timingSafeEqual(a, b) {
   const aBuf = Buffer.from(String(a || ''), 'utf8');
@@ -15,6 +16,98 @@ function timingSafeEqual(a, b) {
 
 function computeGithubSignature256(secret, rawBody) {
   return `sha256=${crypto.createHmac('sha256', String(secret)).update(rawBody).digest('hex')}`;
+}
+
+function safeText(value) {
+  return String(value || '').trim();
+}
+
+function toLabelNames(labels) {
+  if (!Array.isArray(labels)) return [];
+  return labels.map((l) => safeText(l?.name || l)).filter(Boolean);
+}
+
+async function resolveProjectIdByRepo(orgPool, repoFullName) {
+  const repo = safeText(repoFullName).toLowerCase();
+  if (!repo) return null;
+  const resp = await orgPool.query(
+    `SELECT id
+     FROM projects
+     WHERE LOWER(github_repo) = $1
+     LIMIT 1`,
+    [repo]
+  );
+  return resp.rows[0]?.id ? String(resp.rows[0].id) : null;
+}
+
+async function dispatchTaskFactoryEvents(orgPool, orgId, eventType, payload) {
+  const action = safeText(payload?.action).toLowerCase();
+  const repoFullName = safeText(payload?.repository?.full_name || payload?.repository?.name);
+  const projectId = await resolveProjectIdByRepo(orgPool, repoFullName);
+  if (!projectId) return { queued: false, reason: 'project_not_mapped' };
+
+  if (eventType === 'issues' && action === 'opened') {
+    await sendInngestEvent('github/issue.opened', {
+      orgId,
+      projectId,
+      issueNumber: Number(payload?.issue?.number || 0),
+      title: safeText(payload?.issue?.title),
+      body: safeText(payload?.issue?.body),
+      labels: toLabelNames(payload?.issue?.labels),
+      repoFullName,
+    });
+    return { queued: true, name: 'github/issue.opened' };
+  }
+
+  if (eventType === 'pull_request' && action === 'opened') {
+    await sendInngestEvent('github/pr.opened', {
+      orgId,
+      projectId,
+      prNumber: Number(payload?.pull_request?.number || payload?.number || 0),
+      title: safeText(payload?.pull_request?.title),
+      body: safeText(payload?.pull_request?.body),
+      branchName: safeText(payload?.pull_request?.head?.ref),
+      repoFullName,
+    });
+    return { queued: true, name: 'github/pr.opened' };
+  }
+
+  const merged = Boolean(payload?.pull_request?.merged) || Boolean(payload?.pull_request?.merged_at);
+  if (eventType === 'pull_request' && action === 'closed' && merged) {
+    await sendInngestEvent('github/pr.merged', {
+      orgId,
+      projectId,
+      prNumber: Number(payload?.pull_request?.number || payload?.number || 0),
+      branchName: safeText(payload?.pull_request?.head?.ref),
+      mergedBy: safeText(payload?.pull_request?.merged_by?.login || payload?.sender?.login),
+      repoFullName,
+    });
+    return { queued: true, name: 'github/pr.merged' };
+  }
+
+  if (eventType === 'push') {
+    await sendInngestEvent('github/push', {
+      orgId,
+      projectId,
+      repoFullName,
+      ref: safeText(payload?.ref),
+      before: safeText(payload?.before),
+      after: safeText(payload?.after),
+      pusher: safeText(payload?.pusher?.name || payload?.sender?.login),
+      commits: Array.isArray(payload?.commits)
+        ? payload.commits.map((c) => ({
+            id: safeText(c?.id),
+            message: safeText(c?.message),
+            url: safeText(c?.url),
+            timestamp: safeText(c?.timestamp),
+            author: safeText(c?.author?.name || c?.author?.username),
+          }))
+        : [],
+    });
+    return { queued: true, name: 'github/push' };
+  }
+
+  return { queued: false, reason: 'event_not_supported' };
 }
 
 async function githubWebhook(req, res) {
@@ -77,6 +170,13 @@ async function githubWebhook(req, res) {
     }
   } catch (err) {
     logger.warn({ err, orgId, insertedId }, 'webhook.github.queue_failed');
+  }
+
+  // Task Factory Inngest dispatch (additive, best-effort).
+  try {
+    await dispatchTaskFactoryEvents(orgPool, orgId, eventType, payload || {});
+  } catch (err) {
+    logger.warn({ err, orgId, eventType }, 'webhook.github.inngest_dispatch_failed');
   }
 
   return res.status(200).json({ ok: true, delivery: delivery || null });

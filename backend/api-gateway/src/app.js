@@ -1,4 +1,5 @@
 const path = require('node:path');
+const http = require('node:http');
 
 // Always load backend/api-gateway/.env regardless of launch cwd.
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
@@ -9,6 +10,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const { Server } = require('socket.io');
 
 const { env } = require('./config/env');
 const { logger, morganStream } = require('./middleware/logger');
@@ -41,8 +43,38 @@ const githubActivityRoutes = require('./routes/githubActivity.routes');
 const teamRoutes = require('./routes/team.routes');
 const metricsRoutes = require('./routes/metrics');
 const adminWebhookRoutes = require('./routes/adminWebhook.routes');
+const agentRoutes = require('./routes/agents.routes');
+const agentCommandRoutes = require('./routes/agent.routes');
+const sprintAutopilotRoutes = require('./routes/sprintAutopilot.routes');
+const { startAllAgents } = require('../server/agents');
+const { setIo, projectRoom } = require('./realtime/io');
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: env.FRONTEND_URL,
+    credentials: true,
+  },
+});
+
+setIo(io);
+
+io.on('connection', (socket) => {
+  socket.on('project:join', (projectPayload) => {
+    const raw = typeof projectPayload === 'object' && projectPayload !== null ? projectPayload.projectId : projectPayload;
+    const id = String(raw || '').trim();
+    if (!id) return;
+    socket.join(projectRoom(id));
+  });
+
+  socket.on('project:leave', (projectPayload) => {
+    const raw = typeof projectPayload === 'object' && projectPayload !== null ? projectPayload.projectId : projectPayload;
+    const id = String(raw || '').trim();
+    if (!id) return;
+    socket.leave(projectRoom(id));
+  });
+});
 
 app.set('trust proxy', 1);
 app.use(helmet());
@@ -86,6 +118,9 @@ app.use('/api/v1/github', githubActivityRoutes);
 app.use('/api/v1/teams', teamRoutes);
 app.use('/api/v1/metrics', metricsRoutes);
 app.use('/api/v1/admin/webhooks', adminWebhookRoutes);
+app.use('/api/v1/agents', agentRoutes);
+app.use('/api/v1/agent', agentCommandRoutes);
+app.use('/api/v1/sprint-autopilot', sprintAutopilotRoutes);
 
 // Ensure unmatched routes return JSON (prevents upstream non-JSON errors in the Next.js proxy).
 app.use((req, res) => {
@@ -98,7 +133,7 @@ app.use((req, res) => {
 
 app.use(errorHandler);
 
-app.listen(env.PORT, () => {
+server.listen(env.PORT, () => {
   logger.info({ port: env.PORT }, 'API gateway listening');
 });
 
@@ -156,10 +191,17 @@ app.listen(env.PORT, () => {
     } catch (err) {
       logger.error({ err }, 'Failed to start webhook retry worker');
     }
+
+    try {
+      startAllAgents();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start autonomous monitoring agents');
+    }
   }
 })().catch((err) => {
   logger.error({ err }, 'Failed to initialize background services');
 });
 
-module.exports = { app };
+module.exports = { app, server, io };
+
 

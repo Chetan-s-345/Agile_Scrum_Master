@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { ThemeProvider } from "@/components/theme-provider";
+import { ThemeInit } from "@/components/theme-init";
+import { InitialVisitLoader } from "@/components/initial-visit-loader";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -16,7 +17,29 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Sprint Manager - AI-Powered Agile Platform",
   description: "Intelligent project management with AI-driven sprint planning and developer assignment",
+  icons: {
+    icon: "/sprint-grid-logo.svg",
+    shortcut: "/sprint-grid-logo.svg",
+    apple: "/sprint-grid-logo.svg",
+  },
 };
+
+const themeInitScript = `
+(() => {
+  try {
+    const stored = localStorage.getItem('sprint-theme');
+    const parsed = stored ? JSON.parse(stored) : null;
+    const theme = parsed?.state?.theme === 'light' ? 'light' : 'dark';
+    const root = document.documentElement;
+    root.setAttribute('data-theme', theme);
+    root.classList.toggle('dark', theme === 'dark');
+  } catch {
+    const root = document.documentElement;
+    root.setAttribute('data-theme', 'dark');
+    root.classList.add('dark');
+  }
+})();
+`;
 
 export default function RootLayout({
   children,
@@ -24,13 +47,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning data-theme="dark" className="dark">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-white dark:bg-black text-slate-900 dark:text-white transition-colors`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[var(--bg-app)] text-[var(--text-primary)] transition-colors`}
       >
-        <ThemeProvider>
-          {children}
-        </ThemeProvider>
+        <InitialVisitLoader />
+        <ThemeInit />
+        {children}
       </body>
     </html>
   );

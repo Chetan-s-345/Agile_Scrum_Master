@@ -82,12 +82,12 @@ function SkeletonCards() {
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="rounded-xl border border-[#343434] bg-[#202020] p-4 animate-pulse">
-          <div className="h-5 w-3/4 rounded bg-[#2d2d2d]" />
-          <div className="mt-3 h-4 w-full rounded bg-[#2d2d2d]" />
-          <div className="mt-2 h-4 w-2/3 rounded bg-[#2d2d2d]" />
-          <div className="mt-4 h-2 w-full rounded bg-[#2d2d2d]" />
-          <div className="mt-4 h-6 w-1/3 rounded bg-[#2d2d2d]" />
+        <div key={i} className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4 animate-pulse">
+          <div className="h-5 w-3/4 rounded bg-[var(--bg-hover)]" />
+          <div className="mt-3 h-4 w-full rounded bg-[var(--bg-hover)]" />
+          <div className="mt-2 h-4 w-2/3 rounded bg-[var(--bg-hover)]" />
+          <div className="mt-4 h-2 w-full rounded bg-[var(--bg-hover)]" />
+          <div className="mt-4 h-6 w-1/3 rounded bg-[var(--bg-hover)]" />
         </div>
       ))}
     </div>
@@ -312,7 +312,7 @@ export default function GoalsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0d0d0d] px-4 py-6 text-[#e7e7e7]">
+    <div className="min-h-screen bg-[var(--bg-app)] px-4 py-6 text-[var(--text-primary)]">
       <div className="mx-auto max-w-[1400px]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -327,7 +327,7 @@ export default function GoalsPage() {
             <select
               value={sortBy}
               onChange={(event) => setSortBy(event.target.value as "due" | "priority" | "progress")}
-              className="rounded-lg border border-[#3a3a3a] bg-[#1f1f1f] px-3 py-2 text-sm"
+              className="rounded-lg border border-[var(--border-strong)] bg-[var(--bg-hover)] px-3 py-2 text-sm"
             >
               <option value="due">Sort: Due date</option>
               <option value="priority">Sort: Priority</option>
@@ -339,7 +339,7 @@ export default function GoalsPage() {
                 resetNewGoal("planned");
                 setNewGoalOpen(true);
               }}
-              className="rounded-lg border border-[#5a5a5a] bg-[#252525] px-4 py-2 text-sm font-semibold hover:bg-[#2d2d2d]"
+              className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] px-4 py-2 text-sm font-semibold hover:bg-[var(--bg-hover)]"
             >
               + New goal
             </button>
@@ -411,28 +411,28 @@ export default function GoalsPage() {
 
       {newGoalOpen ? (
         <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/70 px-4 py-6 sm:items-center">
-          <div className="w-full max-w-2xl max-h-[92vh] overflow-hidden rounded-xl border border-[#343434] bg-[#1a1a1a] p-5">
+          <div className="w-full max-w-2xl max-h-[92vh] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-5">
             <div className="mb-4 text-lg font-semibold">New Goal</div>
             <div className="grid max-h-[calc(92vh-130px)] grid-cols-1 gap-3 overflow-y-auto overflow-x-hidden pr-1 md:grid-cols-2">
               <label className="md:col-span-2">
-                <div className="mb-1 text-xs text-[#a9a9a9]">Title *</div>
-                <input value={newGoal.title} onChange={(e) => setNewGoal((p) => ({ ...p, title: e.target.value }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm" />
+                <div className="mb-1 text-xs text-[var(--text-secondary)]">Title *</div>
+                <input value={newGoal.title} onChange={(e) => setNewGoal((p) => ({ ...p, title: e.target.value }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] px-3 py-2 text-sm" />
               </label>
               <label className="md:col-span-2">
-                <div className="mb-1 text-xs text-[#a9a9a9]">Description</div>
-                <textarea value={newGoal.description} onChange={(e) => setNewGoal((p) => ({ ...p, description: e.target.value }))} rows={3} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm" />
+                <div className="mb-1 text-xs text-[var(--text-secondary)]">Description</div>
+                <textarea value={newGoal.description} onChange={(e) => setNewGoal((p) => ({ ...p, description: e.target.value }))} rows={3} className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] px-3 py-2 text-sm" />
               </label>
               <label>
-                <div className="mb-1 text-xs text-[#a9a9a9]">Priority</div>
-                <select value={newGoal.priority} onChange={(e) => setNewGoal((p) => ({ ...p, priority: e.target.value as Priority }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm">
+                <div className="mb-1 text-xs text-[var(--text-secondary)]">Priority</div>
+                <select value={newGoal.priority} onChange={(e) => setNewGoal((p) => ({ ...p, priority: e.target.value as Priority }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] px-3 py-2 text-sm">
                   <option value="high">High</option>
                   <option value="medium">Medium</option>
                   <option value="low">Low</option>
                 </select>
               </label>
               <label>
-                <div className="mb-1 text-xs text-[#a9a9a9]">Quarter</div>
-                <select value={newGoal.quarter} onChange={(e) => setNewGoal((p) => ({ ...p, quarter: e.target.value }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm">
+                <div className="mb-1 text-xs text-[var(--text-secondary)]">Quarter</div>
+                <select value={newGoal.quarter} onChange={(e) => setNewGoal((p) => ({ ...p, quarter: e.target.value }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] px-3 py-2 text-sm">
                   <option value="Q1">Q1</option>
                   <option value="Q2">Q2</option>
                   <option value="Q3">Q3</option>
@@ -440,8 +440,8 @@ export default function GoalsPage() {
                 </select>
               </label>
               <label>
-                <div className="mb-1 text-xs text-[#a9a9a9]">Category</div>
-                <select value={newGoal.category} onChange={(e) => setNewGoal((p) => ({ ...p, category: e.target.value }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm">
+                <div className="mb-1 text-xs text-[var(--text-secondary)]">Category</div>
+                <select value={newGoal.category} onChange={(e) => setNewGoal((p) => ({ ...p, category: e.target.value }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] px-3 py-2 text-sm">
                   <option value="Infra">Infra</option>
                   <option value="Feature">Feature</option>
                   <option value="Growth">Growth</option>
@@ -449,12 +449,12 @@ export default function GoalsPage() {
                 </select>
               </label>
               <label>
-                <div className="mb-1 text-xs text-[#a9a9a9]">Due date</div>
-                <input type="date" value={newGoal.dueDate} onChange={(e) => setNewGoal((p) => ({ ...p, dueDate: e.target.value }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm" />
+                <div className="mb-1 text-xs text-[var(--text-secondary)]">Due date</div>
+                <input type="date" value={newGoal.dueDate} onChange={(e) => setNewGoal((p) => ({ ...p, dueDate: e.target.value }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] px-3 py-2 text-sm" />
               </label>
               <label>
-                <div className="mb-1 text-xs text-[#a9a9a9]">Project</div>
-                <select value={newGoal.projectId} onChange={(e) => setNewGoal((p) => ({ ...p, projectId: e.target.value }))} className="w-full rounded-md border border-[#3a3a3a] bg-[#232323] px-3 py-2 text-sm">
+                <div className="mb-1 text-xs text-[var(--text-secondary)]">Project</div>
+                <select value={newGoal.projectId} onChange={(e) => setNewGoal((p) => ({ ...p, projectId: e.target.value }))} className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] px-3 py-2 text-sm">
                   <option value="">Select project</option>
                   {projects.map((project) => (
                     <option key={project.id} value={project.id}>
@@ -465,8 +465,8 @@ export default function GoalsPage() {
               </label>
 
               <label className="md:col-span-2">
-                <div className="mb-1 text-xs text-[#a9a9a9]">Assign team members</div>
-                <div className="max-h-28 overflow-auto rounded-md border border-[#3a3a3a] bg-[#232323] p-2">
+                <div className="mb-1 text-xs text-[var(--text-secondary)]">Assign team members</div>
+                <div className="max-h-28 overflow-auto rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] p-2">
                   {members.map((member) => {
                     const checked = newGoal.assigneeIds.includes(member.id);
                     return (
@@ -491,8 +491,8 @@ export default function GoalsPage() {
               </label>
 
               <label className="md:col-span-2">
-                <div className="mb-1 text-xs text-[#a9a9a9]">Link sprints</div>
-                <div className="max-h-28 overflow-auto rounded-md border border-[#3a3a3a] bg-[#232323] p-2">
+                <div className="mb-1 text-xs text-[var(--text-secondary)]">Link sprints</div>
+                <div className="max-h-28 overflow-auto rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] p-2">
                   {sprints
                     .filter((s) => !newGoal.projectId || String(s.projectId || "") === String(newGoal.projectId))
                     .map((sprint) => {
@@ -520,8 +520,8 @@ export default function GoalsPage() {
 
               {githubConnected ? (
                 <label className="md:col-span-2">
-                  <div className="mb-1 text-xs text-[#a9a9a9]">Link GitHub repos</div>
-                  <div className="max-h-28 overflow-auto rounded-md border border-[#3a3a3a] bg-[#232323] p-2">
+                  <div className="mb-1 text-xs text-[var(--text-secondary)]">Link GitHub repos</div>
+                  <div className="max-h-28 overflow-auto rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] p-2">
                     {repos.map((repo) => {
                       const fullName = String(repo.fullName || "");
                       const checked = newGoal.selectedRepoFullNames.includes(fullName);
@@ -549,10 +549,10 @@ export default function GoalsPage() {
             </div>
 
             <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
-              <button className="rounded-md border border-[#3b3b3b] px-3 py-2 text-sm" onClick={() => setNewGoalOpen(false)}>
+              <button className="rounded-md border border-[var(--border)] px-3 py-2 text-sm" onClick={() => setNewGoalOpen(false)}>
                 Cancel
               </button>
-              <button className="rounded-md border border-[#4f4f4f] bg-[#2a2a2a] px-3 py-2 text-sm font-semibold" onClick={() => void createGoal()} disabled={saving}>
+              <button className="rounded-md border border-[var(--text-primary)] bg-[var(--text-primary)] px-3 py-2 text-sm font-semibold text-[var(--text-inverse)]" onClick={() => void createGoal()} disabled={saving}>
                 {saving ? "Creating..." : "Create goal"}
               </button>
             </div>
@@ -561,17 +561,17 @@ export default function GoalsPage() {
       ) : null}
 
       {drawerGoal ? (
-        <div className="fixed inset-y-0 right-0 z-40 w-full max-w-md border-l border-[#333] bg-[#151515] p-4 shadow-2xl">
+        <div className="fixed inset-y-0 right-0 z-40 w-full max-w-md border-l border-[var(--border)] bg-[var(--bg-modal)] p-4 shadow-2xl">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">{drawerGoal.title}</h2>
-            <button className="rounded border border-[#3c3c3c] px-2 py-1 text-xs" onClick={() => setDrawerGoalId(null)}>
+            <button className="rounded border border-[var(--border)] px-2 py-1 text-xs" onClick={() => setDrawerGoalId(null)}>
               Close
             </button>
           </div>
 
           <div className="mt-4 space-y-4 overflow-auto pb-8">
             <section>
-              <div className="mb-1 text-xs text-[#9e9e9e]">Description</div>
+              <div className="mb-1 text-xs text-[var(--text-secondary)]">Description</div>
               <textarea
                 value={drawerGoal.description || ""}
                 onChange={(e) => {
@@ -579,14 +579,14 @@ export default function GoalsPage() {
                 }}
                 onBlur={(e) => void updateDrawerGoal({ description: e.target.value })}
                 rows={4}
-                className="w-full rounded-md border border-[#3a3a3a] bg-[#222] px-3 py-2 text-sm"
+                className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--bg-input)] px-3 py-2 text-sm"
               />
             </section>
 
             <section>
-              <div className="mb-1 text-xs text-[#9e9e9e]">Progress</div>
+              <div className="mb-1 text-xs text-[var(--text-secondary)]">Progress</div>
               {(drawerGoal.sprints || []).length ? (
-                <div className="text-xs text-[#bfbfbf]">
+                <div className="text-xs text-[var(--text-secondary)]">
                   Auto-calculated from linked sprint tasks: {drawerGoal.taskProgress?.completed || 0}/{drawerGoal.taskProgress?.total || 0}
                 </div>
               ) : (
@@ -606,19 +606,19 @@ export default function GoalsPage() {
             </section>
 
             <section>
-              <div className="mb-1 text-xs text-[#9e9e9e]">Key results</div>
+              <div className="mb-1 text-xs text-[var(--text-secondary)]">Key results</div>
               <div className="space-y-2">
                 {(drawerGoal.keyResults || []).map((kr, idx) => (
-                  <div key={`${kr}-${idx}`} className="flex items-center justify-between rounded border border-[#333] bg-[#1e1e1e] px-2 py-1 text-sm">
+                  <div key={`${kr}-${idx}`} className="flex items-center justify-between rounded border border-[var(--border)] bg-[var(--bg-card)] px-2 py-1 text-sm">
                     <span>{kr}</span>
-                    <button className="text-xs text-[#d3a6a6]" onClick={() => void removeKr(idx)}>
+                    <button className="text-xs text-red-400" onClick={() => void removeKr(idx)}>
                       Remove
                     </button>
                   </div>
                 ))}
                 <div className="flex gap-2">
-                  <input value={krInput} onChange={(e) => setKrInput(e.target.value)} className="w-full rounded border border-[#333] bg-[#202020] px-2 py-1 text-sm" placeholder="Add key result" />
-                  <button onClick={() => void addKr()} className="rounded border border-[#3d3d3d] px-2 py-1 text-xs">
+                  <input value={krInput} onChange={(e) => setKrInput(e.target.value)} className="w-full rounded border border-[var(--border)] bg-[var(--bg-card)] px-2 py-1 text-sm" placeholder="Add key result" />
+                  <button onClick={() => void addKr()} className="rounded border border-[var(--border)] px-2 py-1 text-xs">
                     Add
                   </button>
                 </div>
@@ -626,26 +626,26 @@ export default function GoalsPage() {
             </section>
 
             <section>
-              <div className="mb-1 text-xs text-[#9e9e9e]">Linked sprints</div>
+              <div className="mb-1 text-xs text-[var(--text-secondary)]">Linked sprints</div>
               <div className="space-y-1 text-sm">
-                {(drawerGoal.sprints || []).length ? (drawerGoal.sprints || []).map((s) => <div key={s.id}>{s.name || s.id}</div>) : <div className="text-[#999]">No linked sprints</div>}
+                {(drawerGoal.sprints || []).length ? (drawerGoal.sprints || []).map((s) => <div key={s.id}>{s.name || s.id}</div>) : <div className="text-[var(--text-secondary)]">No linked sprints</div>}
               </div>
             </section>
 
             <section>
-              <div className="mb-1 text-xs text-[#9e9e9e]">Linked repos</div>
+              <div className="mb-1 text-xs text-[var(--text-secondary)]">Linked repos</div>
               <div className="space-y-1 text-sm">
-                {(drawerGoal.repos || []).length ? (drawerGoal.repos || []).map((r, i) => <div key={`${r.id || r.fullName}-${i}`}>{r.fullName || r.name}</div>) : <div className="text-[#999]">No linked repos</div>}
+                {(drawerGoal.repos || []).length ? (drawerGoal.repos || []).map((r, i) => <div key={`${r.id || r.fullName}-${i}`}>{r.fullName || r.name}</div>) : <div className="text-[var(--text-secondary)]">No linked repos</div>}
               </div>
             </section>
 
             <section>
-              <div className="mb-1 text-xs text-[#9e9e9e]">Activity log</div>
+              <div className="mb-1 text-xs text-[var(--text-secondary)]">Activity log</div>
               <div className="space-y-2">
                 {(drawerGoal.activityLog || []).slice(0, 8).map((a, i) => (
-                  <div key={`${a.at || i}`} className="rounded border border-[#333] bg-[#1f1f1f] px-2 py-1 text-xs text-[#cfcfcf]">
+                  <div key={`${a.at || i}`} className="rounded border border-[var(--border)] bg-[var(--bg-hover)] px-2 py-1 text-xs text-[var(--text-secondary)]">
                     <div>{a.detail || a.action || "Update"}</div>
-                    <div className="text-[#9f9f9f]">{a.at ? new Date(a.at).toLocaleString() : ""}</div>
+                    <div className="text-[var(--text-secondary)]">{a.at ? new Date(a.at).toLocaleString() : ""}</div>
                   </div>
                 ))}
               </div>
@@ -662,7 +662,7 @@ function TabButton({ label, active, onClick }: { label: string; active: boolean;
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-lg border px-3 py-1.5 text-sm ${active ? "border-[#6a6a6a] bg-[#2b2b2b]" : "border-[#3e3e3e] bg-[#1b1b1b] text-[#c5c5c5]"}`}
+      className={`rounded-lg border px-3 py-1.5 text-sm ${active ? "border-[var(--text-primary)] bg-[var(--bg-hover)]" : "border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)]"}`}
     >
       {label}
     </button>
@@ -671,10 +671,10 @@ function TabButton({ label, active, onClick }: { label: string; active: boolean;
 
 function StatCard({ label, value, detail, accent }: { label: string; value: number; detail: string; accent?: string }) {
   return (
-    <div className="rounded-lg border border-[#353535] bg-[#1a1a1a] px-4 py-3">
-      <div className="text-xs text-[#a7a7a7]">{label}</div>
+    <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3">
+      <div className="text-xs text-[var(--text-secondary)]">{label}</div>
       <div className={`mt-1 text-3xl font-semibold ${accent || ""}`}>{value}</div>
-      <div className="text-xs text-[#909090]">{detail}</div>
+      <div className="text-xs text-[var(--text-secondary)]">{detail}</div>
     </div>
   );
 }
@@ -702,7 +702,7 @@ function GoalColumn({
 }) {
   return (
     <div
-      className="rounded-xl border border-[#333] bg-[#171717] p-3"
+      className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-3"
       onDragOver={(event) => event.preventDefault()}
       onDrop={() => {
         if (dragGoalId) void onDropGoal(dragGoalId, status);
@@ -710,8 +710,8 @@ function GoalColumn({
       }}
     >
       <div className="mb-3 flex items-center justify-between">
-        <div className="text-xs font-semibold tracking-wide text-[#b9b9b9]">{title}</div>
-        <div className="text-xs text-[#919191]">{count}</div>
+        <div className="text-xs font-semibold tracking-wide text-[var(--text-secondary)]">{title}</div>
+        <div className="text-xs text-[var(--text-secondary)]">{count}</div>
       </div>
 
       <div className="space-y-3">
@@ -721,27 +721,27 @@ function GoalColumn({
             draggable
             onDragStart={() => onDragStart(goal.id)}
             onClick={() => onCardClick(goal.id)}
-            className="w-full rounded-xl border border-[#3a3a3a] bg-[#232323] p-3 text-left hover:bg-[#292929]"
+            className="w-full rounded-xl border border-[var(--border-strong)] bg-[var(--bg-input)] p-3 text-left hover:bg-[var(--bg-hover)]"
           >
             <div className="flex items-start justify-between gap-2">
-              <div className="line-clamp-2 text-lg font-medium leading-tight text-[#ededed]">{goal.title}</div>
+              <div className="line-clamp-2 text-lg font-medium leading-tight text-[var(--text-primary)]">{goal.title}</div>
               <span className={`mt-1 inline-block h-2.5 w-2.5 rounded-full ${priorityDot(goal.priority)}`} />
             </div>
-            <div className="mt-2 line-clamp-2 text-sm text-[#adadad]">{goal.description || "No description"}</div>
+            <div className="mt-2 line-clamp-2 text-sm text-[var(--text-secondary)]">{goal.description || "No description"}</div>
 
             <div className="mt-3">
-              <div className="mb-1 flex items-center justify-between text-xs text-[#a0a0a0]">
+              <div className="mb-1 flex items-center justify-between text-xs text-[var(--text-secondary)]">
                 <span>Progress</span>
                 <span>{toPercent(goal.progress)}%</span>
               </div>
-              <div className="h-1.5 w-full rounded bg-[#323232]">
-                <div className="h-1.5 rounded bg-[#4f94ff]" style={{ width: `${toPercent(goal.progress)}%` }} />
+              <div className="h-1.5 w-full rounded bg-[var(--bg-hover)]">
+                <div className="h-1.5 rounded bg-[var(--goal-progress-fill)]" style={{ width: `${toPercent(goal.progress)}%` }} />
               </div>
             </div>
 
             <div className="mt-3 flex items-center justify-between text-xs">
-              <div className="rounded-full border border-[#4a4a4a] bg-[#262626] px-2 py-0.5 text-[#d6d6d6]">{goal.quarter || goal.category || "Goal"}</div>
-              <div className="text-[#b8b8b8]">{goal.dueDate ? new Date(goal.dueDate).toLocaleDateString() : "No due date"}</div>
+              <div className="rounded-full border border-[var(--border)] bg-[var(--bg-hover)] px-2 py-0.5 text-[var(--text-secondary)]">{goal.quarter || goal.category || "Goal"}</div>
+              <div className="text-[var(--text-secondary)]">{goal.dueDate ? new Date(goal.dueDate).toLocaleDateString() : "No due date"}</div>
             </div>
 
             <div className="mt-3 flex items-center gap-1">
@@ -750,7 +750,7 @@ function GoalColumn({
           </button>
         ))}
 
-        <button onClick={onAdd} className="w-full rounded-xl border border-dashed border-[#444] bg-[#1f1f1f] px-3 py-2 text-sm text-[#bcbcbc] hover:bg-[#252525]">
+        <button onClick={onAdd} className="w-full rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-hover)] px-3 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-card)]">
           + Add goal
         </button>
       </div>
@@ -772,12 +772,13 @@ function AssigneeDots({ assignees }: { assignees: Array<{ id: string; name?: str
           .map((v) => v[0]?.toUpperCase() || "")
           .join("") || "NA";
         return (
-          <span key={a.id} className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#4a4a6f] text-[10px] font-semibold text-white">
+          <span key={a.id} className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--goal-avatar-bg)] text-[10px] font-semibold text-[var(--text-inverse)]">
             {initials}
           </span>
         );
       })}
-      {overflow > 0 ? <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#3e3e3e] text-[10px] font-semibold text-white">+{overflow}</span> : null}
+      {overflow > 0 ? <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--goal-avatar-overflow-bg)] text-[10px] font-semibold text-[var(--text-inverse)]">+{overflow}</span> : null}
     </>
   );
 }
+

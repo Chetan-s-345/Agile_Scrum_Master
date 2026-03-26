@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Users, Check, RefreshCw, Plus, Archive, Trash2 } from 'lucide-react';
+import { BlockLoadingOverlay } from "@/components/block-loading-overlay";
 
 type ProjectListItem = {
   id: string;
@@ -292,6 +293,7 @@ export default function SprintPlannerPage() {
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
+      <BlockLoadingOverlay active={loading || planning || creatingProject || creatingSprint || actingOnSprint} label="Loading sprint planner..." fullScreen={true} delayMs={420} />
       <div className="w-full">
         {/* Header */}
         <div className="mb-8">
@@ -374,7 +376,7 @@ export default function SprintPlannerPage() {
               </button>
               <button
                 onClick={() => void runPlanner()}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 disabled:opacity-60"
+                className="flex-1 bg-[var(--bg-card)] border border-[var(--border-strong)] text-[var(--text-primary)] font-semibold px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 hover:bg-[var(--bg-hover)] disabled:opacity-60"
                 disabled={!selectedProjectId || !selectedSprintId || planning || actingOnSprint}
               >
                 <Check className="w-4 h-4" />
@@ -384,7 +386,7 @@ export default function SprintPlannerPage() {
             <div className="flex gap-2 mt-2">
               <button
                 onClick={() => void archiveSelectedSprint()}
-                className="flex-1 bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-800 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 hover:bg-amber-100 dark:hover:bg-amber-900 transition disabled:opacity-60"
+                className="flex-1 bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-strong)] px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 hover:bg-[var(--bg-hover)] transition disabled:opacity-60"
                 disabled={!selectedSprintId || loading || planning || actingOnSprint}
               >
                 <Archive className="w-4 h-4" />
@@ -392,7 +394,7 @@ export default function SprintPlannerPage() {
               </button>
               <button
                 onClick={() => void deleteSelectedSprint()}
-                className="flex-1 bg-red-50 text-red-700 border border-red-200 dark:bg-red-950 dark:text-red-200 dark:border-red-800 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 hover:bg-red-100 dark:hover:bg-red-900 transition disabled:opacity-60"
+                className="flex-1 bg-[var(--bg-card)] text-[var(--accent-red)] border border-[var(--accent-red)]/40 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 hover:bg-[var(--bg-hover)] transition disabled:opacity-60"
                 disabled={!selectedSprintId || loading || planning || actingOnSprint}
               >
                 <Trash2 className="w-4 h-4" />
@@ -429,7 +431,7 @@ export default function SprintPlannerPage() {
             <div className="mt-5 flex gap-2">
               <button
                 onClick={() => void createProject()}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition disabled:opacity-60"
+                className="bg-[var(--bg-card)] border border-[var(--border-strong)] text-[var(--text-primary)] font-semibold px-4 py-2 rounded-lg transition hover:bg-[var(--bg-hover)] disabled:opacity-60"
                 disabled={!newProjectName.trim() || creatingProject}
               >
                 {creatingProject ? "Creating…" : "Create Project"}
@@ -490,7 +492,7 @@ export default function SprintPlannerPage() {
             <div className="mt-5 flex gap-2">
               <button
                 onClick={() => void createSprint()}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition disabled:opacity-60"
+                className="bg-[var(--bg-card)] border border-[var(--border-strong)] text-[var(--text-primary)] font-semibold px-4 py-2 rounded-lg transition hover:bg-[var(--bg-hover)] disabled:opacity-60"
                 disabled={!selectedProjectId || !newSprintName || !newSprintStartDate || !newSprintEndDate || creatingSprint}
               >
                 {creatingSprint ? "Creating…" : "Create"}
@@ -511,6 +513,25 @@ export default function SprintPlannerPage() {
             <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
           </div>
         )}
+        
+        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="text-xs text-slate-500 dark:text-slate-400">Planning Sprints</div>
+            <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{planningSprints.length}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="text-xs text-slate-500 dark:text-slate-400">Planned Tasks</div>
+            <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{planResult?.selectedTasks?.length || 0}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="text-xs text-slate-500 dark:text-slate-400">Total Points</div>
+            <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{planResult?.totalPoints || 0}</div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="text-xs text-slate-500 dark:text-slate-400">Capacity Usage</div>
+            <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{Math.round(capacityUsedPct)}%</div>
+          </div>
+        </div>
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -518,6 +539,15 @@ export default function SprintPlannerPage() {
           <div className="lg:col-span-2">
             <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
               <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">Planned Tasks</h2>
+              <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-800/40">
+                <div className="mb-1 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
+                  <span>Planner Overview</span>
+                  <span>{planResult?.selectedTasks?.length || 0} tasks • {planResult?.totalPoints || 0} pts</span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded bg-slate-200 dark:bg-zinc-700">
+                  <div className="h-full bg-[var(--accent-blue)]" style={{ width: `${capacityUsedPct}%` }} />
+                </div>
+              </div>
               <div className="space-y-3 max-h-96 overflow-y-auto">
                 {!planResult?.selectedTasks?.length ? (
                   <div className="p-4 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg">
@@ -539,7 +569,7 @@ export default function SprintPlannerPage() {
                               ? "bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200"
                               : task.priority === "medium"
                                 ? "bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200"
-                                : "bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200"
+                                : "bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200"
                           }`}
                         >
                           {task.priority}
@@ -547,7 +577,7 @@ export default function SprintPlannerPage() {
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-slate-600 dark:text-slate-400">ID: #{task.id.slice(0, 8)}</span>
-                        <span className="font-bold text-lg text-blue-600 dark:text-blue-400">{Number(task.story_points || 0)} pts</span>
+                        <span className="font-bold text-lg text-[var(--accent-blue)]">{Number(task.story_points || 0)} pts</span>
                       </div>
                     </div>
                   ))
@@ -596,7 +626,7 @@ export default function SprintPlannerPage() {
                           <span className="text-sm text-slate-600 dark:text-slate-400">{used}/{max}</span>
                         </div>
                         <div className="w-full bg-slate-200 dark:bg-slate-600 rounded-full h-2">
-                          <div className="bg-blue-500 h-2 rounded-full transition-all" style={{ width: `${pct}%` }}></div>
+                          <div className="bg-[var(--accent-blue)] h-2 rounded-full transition-all" style={{ width: `${pct}%` }}></div>
                         </div>
                       </div>
                     );

@@ -32,6 +32,20 @@ type Risk = Record<string, unknown>;
 
 type BurndownPoint = { day: number; date: string; idealRemaining: number; actualRemaining: number };
 
+function safe(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  return String(value);
+}
+
+function fmtDate(value: unknown): string {
+  const raw = safe(value);
+  if (!raw) return "-";
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return raw;
+  return dt.toLocaleDateString();
+}
+
 function normalizeSprint(data: SprintGetResp | null): Sprint | null {
   if (!data) return null;
   if (typeof data === "object" && data && "sprint" in data) {
@@ -149,13 +163,13 @@ export default function SprintDetailPage() {
             </button>
             <button
               onClick={startSprint}
-              className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 text-sm font-semibold"
+              className="rounded-lg bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 text-sm font-semibold"
             >
               Start
             </button>
             <button
               onClick={completeSprint}
-              className="rounded-lg bg-green-600 hover:bg-green-700 text-white px-3 py-2 text-sm font-semibold"
+              className="rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 text-sm font-semibold"
             >
               Complete
             </button>
@@ -225,18 +239,58 @@ export default function SprintDetailPage() {
         )}
 
         <div className="mt-6 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-          <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Burndown (raw)</div>
-          <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">Showing first 10 points.</div>
-          <pre className="mt-3 max-h-[320px] overflow-auto rounded-md bg-slate-50 dark:bg-black/40 p-3 text-xs text-slate-800 dark:text-slate-200">
-            {JSON.stringify(burndown.slice(0, 10), null, 2)}
-          </pre>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Burndown</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">Showing latest {Math.min(burndown.length, 10)} points</div>
+          </div>
+          {burndown.length ? (
+            <div className="mt-3 overflow-x-auto">
+              <table className="min-w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-zinc-800 text-slate-500 dark:text-slate-400">
+                    <th className="px-2 py-2">Day</th>
+                    <th className="px-2 py-2">Date</th>
+                    <th className="px-2 py-2">Ideal Remaining</th>
+                    <th className="px-2 py-2">Actual Remaining</th>
+                    <th className="px-2 py-2">Variance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {burndown.slice(-10).map((point) => {
+                    const variance = Number(point.actualRemaining || 0) - Number(point.idealRemaining || 0);
+                    const varianceClass = variance > 0 ? "text-red-600 dark:text-red-300" : "text-emerald-600 dark:text-emerald-300";
+                    return (
+                      <tr key={`${point.day}:${point.date}`} className="border-b border-slate-100 dark:border-zinc-800/60">
+                        <td className="px-2 py-2 text-slate-800 dark:text-slate-200">{point.day}</td>
+                        <td className="px-2 py-2 text-slate-700 dark:text-slate-300">{fmtDate(point.date)}</td>
+                        <td className="px-2 py-2 text-slate-700 dark:text-slate-300">{point.idealRemaining}</td>
+                        <td className="px-2 py-2 text-slate-700 dark:text-slate-300">{point.actualRemaining}</td>
+                        <td className={`px-2 py-2 font-semibold ${varianceClass}`}>{variance >= 0 ? `+${variance}` : variance}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="mt-3 text-sm text-slate-500 dark:text-slate-400">No burndown data available.</div>
+          )}
         </div>
 
         <div className="mt-6 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-          <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Risk (raw)</div>
-          <pre className="mt-3 max-h-[320px] overflow-auto rounded-md bg-slate-50 dark:bg-black/40 p-3 text-xs text-slate-800 dark:text-slate-200">
-            {JSON.stringify(risk, null, 2)}
-          </pre>
+          <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Risk Summary</div>
+          {risk && Object.keys(risk).length ? (
+            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+              {Object.entries(risk).map(([key, value]) => (
+                <div key={key} className="rounded-md border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/40 px-3 py-2">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400">{key}</div>
+                  <div className="mt-1 text-sm font-medium text-slate-800 dark:text-slate-200">{typeof value === "object" ? JSON.stringify(value) : String(value)}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 text-sm text-slate-500 dark:text-slate-400">No risk data available.</div>
+          )}
         </div>
       </div>
     </div>

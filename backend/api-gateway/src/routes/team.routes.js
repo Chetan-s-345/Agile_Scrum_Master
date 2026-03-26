@@ -6,6 +6,11 @@ const controller = require('../controllers/team.controller');
 const router = express.Router();
 router.use(authMiddleware, orgDbMiddleware);
 
+router.get('/intelligence', controller.getIntelligence);
+router.patch('/intelligence/skills/:developerId', controller.updateSkillMatrix);
+router.post('/intelligence/rebalance', controller.generateRebalance);
+router.post('/intelligence/rebalance/apply', controller.applyRebalance);
+
 router.get('/', controller.listTeams);
 router.post('/', controller.createTeam);
 router.delete('/:teamId', controller.deleteTeam);
