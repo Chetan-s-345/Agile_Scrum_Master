@@ -49,8 +49,8 @@ type BoardColumnData = {
 };
 
 const boardColumns: BoardColumnData[] = [
-  { key: "todo", title: "TO DO" },
-  { key: "in_progress", title: "IN PROGRESS" },
+  { key: "todo", title: "BACKLOG" },
+  { key: "in_progress", title: "IN DEVELOPMENT" },
   { key: "in_review", title: "IN REVIEW" },
   { key: "done", title: "DONE", done: true },
 ];
