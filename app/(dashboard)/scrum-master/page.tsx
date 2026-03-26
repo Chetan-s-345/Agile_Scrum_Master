@@ -68,6 +68,7 @@ export default function ScrumMasterPage() {
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(false);
+  const [agentsWarning, setAgentsWarning] = useState("");
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
@@ -100,20 +101,27 @@ export default function ScrumMasterPage() {
     const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/automation-policy`, { cache: "no-store" });
     const json = await resp.json().catch(() => ({}));
     if (!resp.ok) return;
+    const policy = (json?.policy || json) as Record<string, unknown>;
     const next =
-      Boolean(json?.createFromIssue) &&
-      Boolean(json?.createFromPr) &&
-      Boolean(json?.autoAssign) &&
-      Boolean(json?.monitoringEnabled);
+      Boolean(policy?.createFromIssue) &&
+      Boolean(policy?.createFromPr) &&
+      Boolean(policy?.autoAssign) &&
+      Boolean(policy?.monitoringEnabled);
     setAutoMode(next);
   }, [projectId]);
 
   const loadAgents = useCallback(async () => {
     if (!projectId) return;
     setLoadingAgents(true);
+    setAgentsWarning("");
     try {
       const resp = await fetch(`/api/agents?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
       const json = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setAgentsWarning(safe(json?.detail || json?.error) || `Failed to load agents (status ${resp.status}).`);
+      } else if (json?.warning?.detail) {
+        setAgentsWarning(safe(json.warning.detail));
+      }
       const rows = Array.isArray(json?.agents) ? json.agents : [];
       const normalized = rows
         .map((row: Record<string, unknown>) => ({
@@ -326,6 +334,7 @@ export default function ScrumMasterPage() {
         <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4">
           <div className="mb-3 text-sm font-semibold">Project Agents</div>
           {createSuccess ? <div className="mb-2 text-xs text-[var(--accent-green)]">{createSuccess}</div> : null}
+          {agentsWarning ? <div className="mb-2 text-xs text-amber-300">{agentsWarning}</div> : null}
 
           {customAgents.length ? (
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">

@@ -22,7 +22,17 @@ export async function GET(request: Request) {
   });
 
   if (response.status === 404) {
-    return NextResponse.json({ agents: [] }, { status: 200 });
+    return NextResponse.json(
+      {
+        agents: [],
+        warning: {
+          code: "AGENTS_ROUTE_UNAVAILABLE",
+          detail:
+            "Upstream /api/v1/agents returned 404. Ensure api-gateway is deployed with agents routes and API_GATEWAY_URL points to it.",
+        },
+      },
+      { status: 200 }
+    );
   }
 
   return response;
