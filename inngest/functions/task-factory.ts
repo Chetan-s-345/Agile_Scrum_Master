@@ -58,6 +58,8 @@ const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
 const VECTOR_DIMENSIONS = Number(process.env.VECTOR_DIMENSIONS || "1536");
 const DAILY_CLEANUP_CRON = "0 8 * * *";
 const MONITORING_CRON = "*/30 * * * *";
+const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 
 let universalPool: Pool | null = null;
 const tenantPools = new Map<string, Pool>();
@@ -310,6 +312,164 @@ function inferStoryPoints(priority: string): number {
   if (priority === "high") return 5;
   if (priority === "medium") return 3;
   return 2;
+}
+
+async function generateTaskDescription(input: {
+  title: string;
+  rawBody?: string;
+  issueNumber?: number;
+  prNumber?: number;
+  branchName?: string;
+  techTags?: string[];
+  priority?: string;
+  type?: string;
+  commitMessage?: string;
+  commitAuthor?: string;
+  commitUrl?: string;
+  similarTasks?: Array<{ sourceType: string; content: string }>;
+}): Promise<string> {
+  if (!GROQ_API_KEY) {
+    return buildBasicDescription(input);
+  }
+
+  try {
+    const context = buildContextForLLM(input);
+    const systemPrompt = `You are a technical task management assistant. Generate a clear, structured task description.
+Focus on: what needs to be done, why it matters, technical context, and dependencies.
+Keep it concise (3-5 sentences max) but comprehensive.
+Format: Clear problem statement, then bullet points for requirements if needed.`;
+
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${GROQ_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        temperature: 0.3,
+        max_tokens: 300,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: context },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("Groq LLM failed, falling back to basic description", response.status);
+      return buildBasicDescription(input);
+    }
+
+    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const generated = data.choices?.[0]?.message?.content?.trim?.();
+    if (generated) {
+      return generated;
+    }
+    return buildBasicDescription(input);
+  } catch (error) {
+    console.error("LLM description generation failed:", error);
+    return buildBasicDescription(input);
+  }
+}
+
+function buildContextForLLM(input: {
+  title: string;
+  rawBody?: string;
+  issueNumber?: number;
+  prNumber?: number;
+  branchName?: string;
+  techTags?: string[];
+  priority?: string;
+  type?: string;
+  commitMessage?: string;
+  commitAuthor?: string;
+  commitUrl?: string;
+  similarTasks?: Array<{ sourceType: string; content: string }>;
+}): string {
+  const parts: string[] = [];
+
+  if (input.issueNumber) {
+    parts.push(`GitHub Issue #${input.issueNumber}`);
+  } else if (input.prNumber) {
+    parts.push(`GitHub PR #${input.prNumber}`);
+  } else if (input.commitMessage) {
+    parts.push(`Commit: ${input.commitMessage}`);
+  }
+
+  parts.push(`Title: ${input.title}`);
+
+  if (input.rawBody) {
+    parts.push(`Description: ${input.rawBody.slice(0, 500)}`);
+  }
+
+  if (input.techTags?.length) {
+    parts.push(`Tech stack: ${input.techTags.join(", ")}`);
+  }
+
+  if (input.priority) {
+    parts.push(`Priority: ${input.priority}`);
+  }
+
+  if (input.type) {
+    parts.push(`Type: ${input.type}`);
+  }
+
+  if (input.similarTasks?.length) {
+    parts.push(
+      `Similar existing tasks:\n${input.similarTasks
+        .slice(0, 2)
+        .map((t) => `- [${t.sourceType}] ${String(t.content || "").slice(0, 100)}`)
+        .join("\n")}`
+    );
+  }
+
+  parts.push(
+    "Generate a task description that: (1) explains what needs to be done, (2) includes relevant context, (3) lists technical requirements/tech stack, (4) identifies dependencies."
+  );
+
+  return parts.filter(Boolean).join("\n");
+}
+
+function buildBasicDescription(input: {
+  title: string;
+  rawBody?: string;
+  issueNumber?: number;
+  prNumber?: number;
+  branchName?: string;
+  techTags?: string[];
+  priority?: string;
+  commitMessage?: string;
+  commitAuthor?: string;
+  similarTasks?: Array<{ sourceType: string; content: string }>;
+}): string {
+  const lines: string[] = [];
+
+  if (input.rawBody) {
+    lines.push(String(input.rawBody).trim());
+  } else {
+    lines.push(
+      `Task from ${input.issueNumber ? `issue #${input.issueNumber}` : input.prNumber ? `PR #${input.prNumber}` : "GitHub"}: ${input.title}`
+    );
+  }
+
+  if (input.techTags?.length) {
+    lines.push(`Tech tags: ${input.techTags.join(", ")}`);
+  }
+
+  if (input.priority) {
+    lines.push(`Priority: ${input.priority}`);
+  }
+
+  if (input.similarTasks?.length) {
+    lines.push("\nRelated tasks:");
+    for (const task of input.similarTasks.slice(0, 2)) {
+      const snippet = String(task.content || "").replace(/\s+/g, " ").slice(0, 100);
+      lines.push(`- [${task.sourceType}] ${snippet}`);
+    }
+  }
+
+  return lines.filter(Boolean).join("\n");
 }
 
 async function embedText(text: string): Promise<number[] | null> {
@@ -658,11 +818,23 @@ export const githubIssueToTask = inngest.createFunction(
       const ragRefs = duplicates.filter((r) => r.similarity >= 0.55).slice(0, 3);
       const issueUrl = `https://github.com/${data.repoFullName}/issues/${Number(data.issueNumber)}`;
 
+      const enhancedDescription = await step.run("generate-description", async () =>
+        generateTaskDescription({
+          title: data.title,
+          rawBody: data.body,
+          issueNumber: Number(data.issueNumber),
+          techTags,
+          priority,
+          type,
+          similarTasks: ragRefs,
+        })
+      );
+
       const created = await step.run("create-task", async () =>
         createTaskFromSource(orgPool, {
           projectId: data.projectId,
           title: data.title,
-          description: data.body || "",
+          description: enhancedDescription,
           priority,
           type,
           techTags,
@@ -794,10 +966,22 @@ export const prToTask = inngest.createFunction(
       const techTags = inferTechTags(data.title, data.body || "");
       const storyPoints = inferStoryPoints(priority);
       const ragRefs = await searchSimilar(orgPool, `${data.title}\n${data.body || ""}`, data.projectId);
+      
+      const enhancedDescription = await generateTaskDescription({
+        title: data.title,
+        rawBody: data.body,
+        prNumber: Number(data.prNumber),
+        branchName: data.branchName,
+        techTags,
+        priority,
+        type,
+        similarTasks: ragRefs.filter((r) => r.similarity >= 0.5).slice(0, 3),
+      });
+      
       const created = await createTaskFromSource(orgPool, {
         projectId: data.projectId,
         title: `Review: ${data.title}`,
-        description: data.body || "",
+        description: enhancedDescription,
         priority,
         type,
         techTags,
@@ -807,7 +991,7 @@ export const prToTask = inngest.createFunction(
         prNumber: Number(data.prNumber),
         prUrl: `https://github.com/${data.repoFullName}/pull/${Number(data.prNumber)}`,
       });
-      await upsertTaskEmbedding(created.taskId, created.code, `Review: ${data.title}`, data.body || "", data.projectId);
+      await upsertTaskEmbedding(created.taskId, created.code, `Review: ${data.title}`, enhancedDescription, data.projectId);
       await emitTaskCreated(created.taskId, data.projectId, data.orgId);
       await notifyProject(
         orgPool,
@@ -874,10 +1058,22 @@ export const githubPushToTask = inngest.createFunction(
 
         const priority = classifyPriority(message, "", []);
         const techTags = inferTechTags(message, "");
+        
+        const enhancedDescription = await generateTaskDescription({
+          title: message.slice(0, 120),
+          commitMessage: message,
+          commitAuthor: commit.author,
+          commitUrl: commit.url,
+          techTags,
+          priority,
+          type: "task",
+          similarTasks: duplicates.filter((r) => r.similarity >= 0.5).slice(0, 3),
+        });
+        
         const created = await createTaskFromSource(orgPool, {
           projectId: data.projectId,
           title: `Follow-up: ${message.slice(0, 120)}`,
-          description: `Generated from commit ${String(commit.id || "").slice(0, 12)} by ${String(commit.author || data.pusher || "unknown")}.\n${String(commit.url || "")}`,
+          description: enhancedDescription,
           priority,
           type: "task",
           techTags,
@@ -885,7 +1081,7 @@ export const githubPushToTask = inngest.createFunction(
           storyPoints: inferStoryPoints(priority),
           ragRefs: duplicates.filter((r) => r.similarity >= 0.5).slice(0, 3),
         });
-        await upsertTaskEmbedding(created.taskId, created.code, `Follow-up: ${message}`, String(commit.url || ""), data.projectId);
+        await upsertTaskEmbedding(created.taskId, created.code, `Follow-up: ${message}`, enhancedDescription, data.projectId);
         await emitTaskCreated(created.taskId, data.projectId, data.orgId);
         createdCount += 1;
       }

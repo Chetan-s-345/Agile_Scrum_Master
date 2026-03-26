@@ -100,19 +100,60 @@ async function ensureDefaultProject({ orgPool, actorMemberId, tokenRole }) {
 async function orgDbMiddleware(req, res, next) {
   try {
     const orgId = req?.user?.orgId;
-    if (!orgId) return res.status(400).json({ error: 'Missing orgId in token' });
+    if (!orgId) {
+      return res.status(400).json({
+        error: 'Missing orgId in token',
+        code: 'MISSING_ORG_ID',
+        detail: 'JWT token must include orgId field. Ensure user is authenticated with valid Next.js session.',
+      });
+    }
 
-    const pool = await db.getOrgPool(orgId);
+    let pool;
+    try {
+      pool = await db.getOrgPool(orgId);
+    } catch (poolError) {
+      const poolMsg = String(poolError?.message || poolError);
+      console.error('getOrgPool failed for orgId:', orgId, 'error:', poolError);
+      return res.status(503).json({
+        error: 'Organization database unavailable',
+        code: 'ORG_DB_UNAVAILABLE',
+        detail: `Failed to get org pool: ${poolMsg}. Ensure: (1) org database exists for ${orgId}, (2) UNIVERSAL_DATABASE_URL env var is set, (3) database connection string is valid.`,
+      });
+    }
+
     req.orgDb = pool;
     req.orgQuery = (sql, params) => pool.query(sql, params);
 
     // Bootstrap tenant DB for older orgs / partial setups.
-    await ensureTenantSchema(pool);
-    const actorMemberId = await ensureTeamMember({
-      orgPool: pool,
-      userId: req?.user?.userId,
-      tokenRole: req?.user?.role,
-    });
+    try {
+      await ensureTenantSchema(pool);
+    } catch (schemaError) {
+      const schemaMsg = String(schemaError?.message || schemaError);
+      console.error('ensureTenantSchema failed:', schemaError);
+      return res.status(503).json({
+        error: 'Tenant schema incomplete',
+        code: 'TENANT_SCHEMA_MISSING',
+        detail: `Database schema is not initialized: ${schemaMsg}. Run init.sql PART 2 on the org database.`,
+      });
+    }
+
+    let actorMemberId;
+    try {
+      actorMemberId = await ensureTeamMember({
+        orgPool: pool,
+        userId: req?.user?.userId,
+        tokenRole: req?.user?.role,
+      });
+    } catch (memberError) {
+      const memberMsg = String(memberError?.message || memberError);
+      console.error('ensureTeamMember failed for userId:', req?.user?.userId, 'error:', memberError);
+      return res.status(memberError?.statusCode || 500).json({
+        error: 'Failed to resolve team member',
+        code: memberError?.code || 'TEAM_MEMBER_RESOLUTION_FAILED',
+        detail: `${memberMsg}. Ensure user is registered in global_users table.`,
+      });
+    }
+
     req.actorMemberId = actorMemberId;
     await ensureDefaultProject({ orgPool: pool, actorMemberId, tokenRole: req?.user?.role });
 
@@ -120,7 +161,12 @@ async function orgDbMiddleware(req, res, next) {
   } catch (err) {
     const status = err?.statusCode || err?.status || 503;
     const message = err?.message || 'Database unavailable';
-    return res.status(status).json({ error: message, code: err?.code || undefined, details: err?.details || undefined });
+    console.error('orgDbMiddleware error:', err);
+    return res.status(status).json({
+      error: message,
+      code: err?.code || 'ORG_DB_MIDDLEWARE_ERROR',
+      details: err?.details || undefined,
+    });
   }
 }
 

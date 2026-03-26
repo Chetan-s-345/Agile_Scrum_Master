@@ -68,17 +68,18 @@ export default function AgentBubble() {
         onClick={toggleExpanded}
         aria-label="Toggle agent panel"
         className={[
-          "relative flex h-[52px] w-[52px] items-center justify-center rounded-full border text-white shadow-lg transition",
-          tone === "green" ? "border-emerald-400 bg-emerald-600" : "",
-          tone === "amber" ? "border-amber-400 bg-amber-600" : "",
-          tone === "red" ? "border-rose-400 bg-rose-600" : "",
-          tone === "gray" ? "border-slate-400 bg-slate-600" : "",
+          "relative flex h-[52px] w-[52px] items-center justify-center rounded-full border-2 bg-black text-white shadow-lg transition",
+          tone === "green" ? "border-[var(--accent-green)]" : "",
+          tone === "amber" ? "border-[var(--accent-yellow)]" : "",
+          tone === "red" ? "border-[var(--accent-red)]" : "",
+          tone === "gray" ? "border-[var(--border-strong)]" : "",
           !expanded && tone === "green" ? "animate-[pulse_2s_infinite]" : "",
+          "hover:shadow-xl",
         ].join(" ")}
       >
         <Bot className="h-5 w-5" />
         {pendingCount > 0 ? (
-          <span className="absolute -right-1 -top-1 rounded-full bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-900">{pendingCount}</span>
+          <span className="absolute -right-1 -top-1 rounded-full bg-[var(--accent-red)] px-1.5 py-0.5 text-[10px] font-semibold text-white">{pendingCount}</span>
         ) : null}
       </button>
 

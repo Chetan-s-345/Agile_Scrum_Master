@@ -45,7 +45,7 @@ class AssignmentService {
   async getCandidates(orgPool, { techTags, storyPoints, sprintId, excludeDeveloperId }) {
     const sprint = await this.getSprintDates(orgPool, sprintId);
 
-    const baseResp = await orgPool.query(
+    const withTechResp = await orgPool.query(
       `SELECT
          dp.id,
          dp.tech_stack,
@@ -66,14 +66,38 @@ class AssignmentService {
         : [techTags || [], storyPoints, String(sprintId)]
     );
 
-    const filteredByTech = 0; // SQL already filters by tech
-    const totalCandidates = baseResp.rows.length;
+    let baseRows = withTechResp.rows || [];
+    let totalCandidates = baseRows.length;
+    let filteredByTech = 0;
+
+    if (!baseRows.length) {
+      const fallbackResp = await orgPool.query(
+        `SELECT
+           dp.id,
+           dp.tech_stack,
+           dp.merit_score,
+           dp.assignment_weight,
+           dp.current_sprint_load,
+           dp.max_sprint_capacity,
+           dp.availability_status,
+           tm.full_name
+         FROM developer_profiles dp
+         JOIN team_members tm ON tm.id = dp.member_id
+         WHERE dp.availability_status = 'available'
+           ${excludeDeveloperId ? 'AND dp.id <> $1' : ''}
+         ORDER BY (dp.merit_score * dp.assignment_weight) DESC`,
+        excludeDeveloperId ? [String(excludeDeveloperId)] : []
+      );
+      baseRows = fallbackResp.rows || [];
+      totalCandidates = baseRows.length;
+      filteredByTech = totalCandidates;
+    }
 
     // Availability filter: capacity + leave overlap
     const remaining = [];
     let filteredByAvailability = 0;
 
-    for (const dev of baseResp.rows) {
+    for (const dev of baseRows) {
       const currentLoad = Number(dev.current_sprint_load || 0);
       const maxCap = Number(dev.max_sprint_capacity || 0);
       if (currentLoad + Number(storyPoints) > maxCap) {

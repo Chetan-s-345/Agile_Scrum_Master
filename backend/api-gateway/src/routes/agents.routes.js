@@ -327,15 +327,345 @@ async function ensureTaskAgentColumns(orgPool) {
   await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_agent_id TEXT');
 }
 
+function normalizeCommitTitle(message) {
+  const raw = safe(message);
+  if (!raw) return '';
+  const firstLine = raw.split(/\r?\n/)[0] || '';
+  const noPrefix = firstLine
+    .replace(/^(feat|fix|chore|refactor|perf|docs|test|build|ci|style)(\([^)]+\))?:\s*/i, '')
+    .replace(/\s*\(#\d+\)\s*$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!noPrefix) return '';
+  return noPrefix.charAt(0).toUpperCase() + noPrefix.slice(1);
+}
+
+function isGenericTaskTitle(title) {
+  const t = safe(title).toLowerCase();
+  if (!t) return true;
+  if (/^agent\s*\d+\s*task\s*\d+$/i.test(t)) return true;
+  if (/^task\s*\d+$/i.test(t)) return true;
+  if (/^repository\s+task\s*\d*$/i.test(t)) return true;
+  if (/^new\s+task\s*\d*$/i.test(t)) return true;
+  return false;
+}
+
+function buildSignalFromEvent(row) {
+  const payload = row?.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};
+  const eventType = safe(row?.event_type).toLowerCase();
+  const commitMsg = normalizeCommitTitle(payload?.message);
+  const issueTitle = safe(payload?.title);
+  const prTitle = safe(payload?.pull_request?.title || payload?.title);
+  const branch = safe(row?.branch_name || payload?.ref || payload?.pull_request?.head?.ref).replace(/^refs\/heads\//, '');
+  const sha = safe(row?.github_commit_sha || payload?.id || payload?.after);
+  const author = safe(payload?.author?.name || payload?.author?.username || payload?.pusher?.name || payload?.sender?.login);
+
+  const sourceTitle = commitMsg || prTitle || issueTitle;
+  if (!sourceTitle) return null;
+
+  return {
+    eventType: eventType || 'unknown',
+    title: sourceTitle,
+    details: safe(payload?.body || payload?.pull_request?.body),
+    branch,
+    sha,
+    author,
+    url: safe(payload?.url || payload?.html_url || payload?.pull_request?.html_url),
+    at: row?.event_at || row?.created_at || null,
+  };
+}
+
+function parseGithubToken(rawToken) {
+  const raw = safe(rawToken);
+  if (!raw) return '';
+  try {
+    const parsed = JSON.parse(raw);
+    return safe(parsed?.accessToken || parsed?.token || raw);
+  } catch {
+    return raw;
+  }
+}
+
+function fallbackDraftFromSignal(signal, prompt, agentName) {
+  const titleBase = normalizeCommitTitle(signal?.title) || 'Repository follow-up task';
+  const descriptionLines = [
+    `Generated from repository activity by ${agentName}.`,
+    `Source event: ${safe(signal?.eventType) || 'github_event'}`,
+    `Task intent: ${safe(prompt) || 'Review and implement changes suggested by repository activity.'}`,
+  ];
+  if (safe(signal?.branch)) descriptionLines.push(`Branch: ${safe(signal.branch)}`);
+  if (safe(signal?.sha)) descriptionLines.push(`Commit: ${safe(signal.sha).slice(0, 12)}`);
+  if (safe(signal?.author)) descriptionLines.push(`Author: ${safe(signal.author)}`);
+  if (safe(signal?.details)) descriptionLines.push(`Context: ${safe(signal.details).slice(0, 280)}`);
+  if (safe(signal?.url)) descriptionLines.push(`Reference: ${safe(signal.url)}`);
+  return {
+    title: titleBase,
+    description: descriptionLines.join('\n'),
+    priority: 'medium',
+    storyPoints: 3,
+  };
+}
+
+function inferLabelsFromDraft(draft, signal) {
+  const text = `${safe(draft?.title)} ${safe(draft?.description)} ${safe(signal?.title)} ${safe(signal?.details)}`.toLowerCase();
+  const labels = [];
+  const pairs = [
+    ['frontend', 'frontend'],
+    ['ui', 'frontend'],
+    ['react', 'react'],
+    ['next', 'nextjs'],
+    ['api', 'backend'],
+    ['backend', 'backend'],
+    ['database', 'sql'],
+    ['postgres', 'sql'],
+    ['auth', 'security'],
+    ['security', 'security'],
+    ['test', 'testing'],
+    ['jest', 'testing'],
+    ['bug', 'bug'],
+    ['fix', 'bugfix'],
+    ['perf', 'performance'],
+    ['refactor', 'refactor'],
+  ];
+  for (const [needle, label] of pairs) {
+    if (text.includes(needle) && !labels.includes(label)) labels.push(label);
+  }
+  return labels.slice(0, 8);
+}
+
+function ensureMeaningfulDraft(draft, signal, prompt, agentName) {
+  const fallback = fallbackDraftFromSignal(signal, prompt, agentName);
+  const title = safe(draft?.title);
+  const description = safe(draft?.description);
+  return {
+    title: !title || isGenericTaskTitle(title) ? fallback.title : title,
+    description: description || fallback.description,
+    priority: safe(draft?.priority || fallback.priority || 'medium').toLowerCase(),
+    storyPoints: Number(draft?.storyPoints || fallback.storyPoints || 3),
+  };
+}
+
+async function assignFallbackByLoad(orgPool, projectId, taskId, excludeDeveloperId) {
+  const candidatesResp = await orgPool.query(
+    `SELECT dp.id, tm.full_name
+     FROM developer_profiles dp
+     JOIN team_members tm ON tm.id = dp.member_id
+     JOIN project_members pm ON pm.member_id = tm.id
+     WHERE pm.project_id = $1
+       AND tm.is_active = TRUE
+       AND dp.availability_status = 'available'
+       AND ($2::text IS NULL OR dp.id::text <> $2::text)
+     ORDER BY (dp.current_sprint_load::numeric / GREATEST(dp.max_sprint_capacity, 1)) ASC, dp.merit_score DESC
+     LIMIT 1`,
+    [String(projectId), excludeDeveloperId ? String(excludeDeveloperId) : null]
+  );
+  const winner = candidatesResp.rows?.[0];
+  if (!winner?.id) return null;
+  await orgPool.query(
+    `UPDATE tasks
+     SET assignee_id = $1,
+         assigned_by = 'ai_fallback',
+         assigned_at = NOW(),
+         updated_at = NOW()
+     WHERE id = $2`,
+    [String(winner.id), String(taskId)]
+  );
+  return {
+    taskId: String(taskId),
+    developerId: String(winner.id),
+    developerName: safe(winner.full_name),
+    reason: 'Fallback assignment by lowest load among available project developers.',
+  };
+}
+
+async function getRepoSignals(orgPool, projectId, githubRepo, limit) {
+  const scoped = githubRepo
+    ? await orgPool.query(
+      `SELECT event_type, repo_name, github_commit_sha, branch_name, event_at, created_at, raw_payload
+       FROM github_events
+       WHERE repo_name = $1
+       ORDER BY event_at DESC NULLS LAST, created_at DESC
+       LIMIT $2`,
+      [githubRepo, limit]
+    )
+    : { rows: [] };
+
+  if (Array.isArray(scoped.rows) && scoped.rows.length > 0) {
+    return scoped.rows.map(buildSignalFromEvent).filter(Boolean);
+  }
+
+  const projectLinked = await orgPool.query(
+    `SELECT ge.event_type, ge.repo_name, ge.github_commit_sha, ge.branch_name, ge.event_at, ge.created_at, ge.raw_payload
+     FROM github_events ge
+     JOIN tasks t ON t.id = ge.task_id
+     WHERE t.project_id = $1
+     ORDER BY ge.event_at DESC NULLS LAST, ge.created_at DESC
+     LIMIT $2`,
+    [projectId, limit]
+  );
+  return (projectLinked.rows || []).map(buildSignalFromEvent).filter(Boolean);
+}
+
+async function fetchSignalsFromGithubApi(orgPool, githubRepo, limit) {
+  if (!githubRepo || !githubRepo.includes('/')) return [];
+  const tokenResp = await orgPool.query(
+    `SELECT access_token_enc
+     FROM github_integration
+     WHERE is_active = TRUE
+     ORDER BY created_at DESC
+     LIMIT 1`
+  );
+  const token = parseGithubToken(tokenResp.rows?.[0]?.access_token_enc);
+  if (!token) return [];
+  const [owner, repo] = githubRepo.split('/');
+  const response = await axios.get(`https://api.github.com/repos/${owner}/${repo}/commits`, {
+    params: { per_page: Math.max(1, Math.min(20, limit)) },
+    timeout: 20_000,
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'ai-sprint-manager-api-gateway',
+    },
+  });
+  return (response.data || []).map((commit) => ({
+    eventType: 'push',
+    title: normalizeCommitTitle(commit?.commit?.message || ''),
+    details: safe(commit?.commit?.message),
+    branch: '',
+    sha: safe(commit?.sha),
+    author: safe(commit?.commit?.author?.name || commit?.author?.login),
+    url: safe(commit?.html_url),
+    at: commit?.commit?.author?.date || null,
+  })).filter((item) => item.title);
+}
+
+function parseLlmDrafts(rawText) {
+  const text = safe(rawText);
+  if (!text) return [];
+  const stripped = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try {
+    const parsed = JSON.parse(stripped);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((row) => ({
+        title: safe(row?.title),
+        description: safe(row?.description),
+        priority: safe(row?.priority || 'medium').toLowerCase(),
+        storyPoints: Number(row?.storyPoints || row?.story_points || 3),
+      }))
+      .filter((row) => row.title && row.description)
+      .map((row) => ({
+        ...row,
+        priority: ['low', 'medium', 'high', 'critical'].includes(row.priority) ? row.priority : 'medium',
+        storyPoints: Number.isFinite(row.storyPoints) ? Math.max(1, Math.min(13, Math.round(row.storyPoints))) : 3,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+async function generateDraftsWithLlm({ prompt, taskCount, signals, githubRepo, agentName }) {
+  const apiKey = safe(process.env.GROQ_API_KEY);
+  if (!apiKey) return [];
+  const model = safe(process.env.GROQ_MODEL || 'llama-3.1-8b-instant');
+  const sourceLines = signals.slice(0, 12).map((s, idx) => {
+    const parts = [
+      `${idx + 1}. [${safe(s.eventType)}] ${safe(s.title)}`,
+      safe(s.details) ? `details=${safe(s.details).slice(0, 180)}` : '',
+      safe(s.branch) ? `branch=${safe(s.branch)}` : '',
+      safe(s.sha) ? `sha=${safe(s.sha).slice(0, 12)}` : '',
+      safe(s.author) ? `author=${safe(s.author)}` : '',
+    ].filter(Boolean);
+    return parts.join(' | ');
+  });
+
+  const system = 'You are a senior engineering planner. Return only JSON array of tasks. Each task must include: title, description, priority, storyPoints. Titles must be specific and repository-aware. Never use generic names like Agent 1 task 2, Task 1, or similar placeholders.';
+  const user = [
+    `Agent name: ${agentName}`,
+    `Repository: ${githubRepo || 'unknown'}`,
+    `Task count: ${taskCount}`,
+    `Operator intent: ${prompt}`,
+    'Recent repository signals:',
+    sourceLines.join('\n') || '- none',
+    'Output strictly valid JSON array, no markdown.',
+  ].join('\n');
+
+  const resp = await axios.post(
+    'https://api.groq.com/openai/v1/chat/completions',
+    {
+      model,
+      temperature: 0.2,
+      max_tokens: 1200,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+    },
+    {
+      timeout: 25_000,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      validateStatus: () => true,
+    }
+  );
+
+  if (resp.status < 200 || resp.status >= 300) return [];
+  const content = resp.data?.choices?.[0]?.message?.content;
+  return parseLlmDrafts(content);
+}
+
 router.get('/', async (req, res, next) => {
   try {
-    if (!req.orgDb) return jsonError(res, 500, 'Server error', 'Org database is not available.');
+    if (!req.orgDb) {
+      return jsonError(
+        res,
+        503,
+        'Service Unavailable',
+        'Organization database is not available. Ensure: (1) auth middleware passed (Bearer token valid), (2) org database is provisioned for user organization, (3) UNIVERSAL_DATABASE_URL is set in backend env'
+      );
+    }
+
+    if (!req.user || !req.user.userId) {
+      return jsonError(
+        res,
+        401,
+        'Unauthorized',
+        'User not found in request context. Verify JWT token contains userId field.'
+      );
+    }
+
+    if (!req.actorMemberId) {
+      return jsonError(
+        res,
+        403,
+        'Forbidden',
+        'Actor member ID not resolved. Verify user is registered as team member in organization.'
+      );
+    }
+
     await ensureCustomAgentsTables(req.orgDb);
     const projectId = safe(req.query.projectId);
     const runtime = getAgentsRuntime();
-    const agents = await buildRoster(req.orgDb, runtime, projectId || null);
+
+    let agents;
+    try {
+      agents = await buildRoster(req.orgDb, runtime, projectId || null);
+    } catch (rosterError) {
+      console.error('buildRoster failed:', rosterError);
+      return jsonError(
+        res,
+        500,
+        'Failed to build agent roster',
+        `Database error: ${String(rosterError?.message || rosterError)}`
+      );
+    }
+
     return res.status(200).json({ agents });
   } catch (err) {
+    console.error('GET /agents error:', err);
     return next(err);
   }
 });
@@ -929,6 +1259,7 @@ router.post('/:agentId/run', async (req, res, next) => {
 
     const createdTasks = [];
     const assignedTasks = [];
+    const assignmentFailures = [];
     const githubIssues = [];
     const githubIssueErrors = [];
     let monitoringEmail = null;
@@ -946,58 +1277,73 @@ router.post('/:agentId/run', async (req, res, next) => {
     }
 
     if ((role === 'task-generator' || role === 'custom') && sprintId) {
-      const aiBaseUrl = safe(process.env.AI_SERVICE_URL) || (safe(process.env.NODE_ENV).toLowerCase() === 'production' ? '' : 'http://127.0.0.1:8000');
-      let aiTaskTitles = [];
-
-      if (aiBaseUrl) {
+      const dbSignals = await getRepoSignals(req.orgDb, projectId, githubRepo, 24);
+      let repoSignals = dbSignals;
+      if (!repoSignals.length && githubRepo) {
         try {
-          const aiResp = await axios.post(
-            `${String(aiBaseUrl).replace(/\/+$/, '')}/autonomous/autopilot`,
-            {
-              projectId,
-              prompt,
-              taskCount: requestedTaskCount,
-              mode: 'task-generation',
-            },
-            {
-              timeout: 20_000,
-              validateStatus: () => true,
-            }
-          );
-
-          if (aiResp.status >= 200 && aiResp.status < 300) {
-            const proposed = Array.isArray(aiResp.data?.proposedTasks)
-              ? aiResp.data.proposedTasks
-              : Array.isArray(aiResp.data?.tasks)
-                ? aiResp.data.tasks
-                : [];
-            aiTaskTitles = proposed
-              .map((row) => safe(row?.title || row?.name || row?.taskTitle))
-              .filter(Boolean)
-              .slice(0, requestedTaskCount);
-          }
+          repoSignals = await fetchSignalsFromGithubApi(req.orgDb, githubRepo, 12);
         } catch {
-          // Fall back to prompt-based generation when AI service is unavailable.
+          repoSignals = [];
         }
       }
 
-      const lines = prompt
-        .split(/\r?\n/)
-        .map((line) => safe(line.replace(/^[-*\d.)\s]+/, '')))
-        .filter(Boolean)
-        .slice(0, requestedTaskCount);
-      const taskTitles = aiTaskTitles.length ? [...aiTaskTitles] : lines.length ? [...lines] : [];
-      while (taskTitles.length < requestedTaskCount) {
-        taskTitles.push(`${customAgent.name} task ${taskTitles.length + 1}`);
+      if (!repoSignals.length) {
+        repoSignals = [
+          {
+            eventType: 'manual-intent',
+            title: prompt,
+            details: 'No recent commit/PR/issue signals were available; generated from operator intent.',
+            branch: '',
+            sha: '',
+            author: '',
+            url: '',
+            at: new Date().toISOString(),
+          },
+        ];
       }
 
-      for (const title of taskTitles) {
+      let drafts = [];
+      try {
+        drafts = await generateDraftsWithLlm({
+          prompt,
+          taskCount: requestedTaskCount,
+          signals: repoSignals,
+          githubRepo,
+          agentName: customAgent.name,
+        });
+      } catch {
+        drafts = [];
+      }
+
+      if (!drafts.length) {
+        drafts = repoSignals.slice(0, requestedTaskCount).map((signal) => fallbackDraftFromSignal(signal, prompt, customAgent.name));
+      }
+
+      if (drafts.length && drafts.length < requestedTaskCount) {
+        let idx = 0;
+        while (drafts.length < requestedTaskCount) {
+          const signal = repoSignals[idx % repoSignals.length];
+          drafts.push(fallbackDraftFromSignal(signal, prompt, customAgent.name));
+          idx += 1;
+        }
+      }
+
+      let draftIdx = 0;
+      for (const draft of drafts.slice(0, requestedTaskCount)) {
+        const signal = repoSignals[draftIdx % repoSignals.length];
+        const cleanDraft = ensureMeaningfulDraft(draft, signal, prompt, customAgent.name);
+        const title = safe(cleanDraft.title);
+        const description = safe(cleanDraft.description);
+        const priority = safe(cleanDraft.priority || 'medium').toLowerCase();
+        const storyPoints = Number(cleanDraft.storyPoints || 3);
+        const labels = inferLabelsFromDraft(cleanDraft, signal);
         const createdTask = await executeActionWithPolicy(req.orgDb, context, 'create_task', {
           sprintId,
           title,
-          description: `Generated by ${customAgent.name}: ${prompt.slice(0, 240)}`,
-          priority: 'medium',
-          storyPoints: 2,
+          description,
+          priority: ['low', 'medium', 'high', 'critical'].includes(priority) ? priority : 'medium',
+          storyPoints: Number.isFinite(storyPoints) ? Math.max(1, Math.min(13, Math.round(storyPoints))) : 3,
+          labels,
         });
 
         let githubIssue = null;
@@ -1005,7 +1351,7 @@ router.post('/:agentId/run', async (req, res, next) => {
           try {
             githubIssue = await executeActionWithPolicy(req.orgDb, context, 'create_github_issue', {
               title,
-              body: `Generated by ${customAgent.name}\n\nTask: ${createdTask?.url || ''}`,
+              body: `${description}\n\nTask: ${createdTask?.url || ''}`,
               labels: ['ai-agent', 'task'],
             });
             if (githubIssue?.url) githubIssues.push(githubIssue);
@@ -1019,6 +1365,7 @@ router.post('/:agentId/run', async (req, res, next) => {
         }
 
         createdTasks.push({ ...createdTask, githubIssue });
+        draftIdx += 1;
       }
     }
 
@@ -1087,9 +1434,29 @@ router.post('/:agentId/run', async (req, res, next) => {
               developerName: safe(assignment.developer.name),
               reason: safe(assignment.reason),
             });
+          } else {
+            const fallback = await assignFallbackByLoad(req.orgDb, projectId, taskId, lastDeveloperId || null);
+            if (fallback?.developerId) {
+              lastDeveloperId = safe(fallback.developerId);
+              assignedTasks.push(fallback);
+            } else {
+              assignmentFailures.push({
+                taskId,
+                detail: safe(assignment?.reason || assignment?.suggestion || 'No eligible developer found for assignment.'),
+              });
+            }
           }
-        } catch {
-          // Keep run resilient even when assignment fails for specific tasks.
+        } catch (err) {
+          const fallback = await assignFallbackByLoad(req.orgDb, projectId, taskId, lastDeveloperId || null);
+          if (fallback?.developerId) {
+            lastDeveloperId = safe(fallback.developerId);
+            assignedTasks.push(fallback);
+          } else {
+            assignmentFailures.push({
+              taskId,
+              detail: safe(err?.message) || 'Assignment failed unexpectedly.',
+            });
+          }
         }
       }
     }
@@ -1196,7 +1563,14 @@ router.post('/:agentId/run', async (req, res, next) => {
       projectId,
       actionDescription: 'Custom agent run executed',
       reasoning: { source: 'manual-run', actor: String(req.user?.userId || ''), prompt },
-      dataUsed: { role, prompt, createdTasks: createdTasks.length, assignedTasks: assignedTasks.length, monitoringEmail },
+      dataUsed: {
+        role,
+        prompt,
+        createdTasks: createdTasks.length,
+        assignedTasks: assignedTasks.length,
+        assignmentFailures: assignmentFailures.length,
+        monitoringEmail,
+      },
       status: 'executed',
       resolvedBy: String(req.user?.userId || ''),
       resolutionType: 'auto-executed',
@@ -1206,11 +1580,12 @@ router.post('/:agentId/run', async (req, res, next) => {
       success: true,
       createdTasks,
       assignedTasks,
+      assignmentFailures,
       monitoringEmail,
       githubIssues,
       githubIssueErrors,
       githubRepo: githubRepo || null,
-      detail: `Run complete. Created ${createdTasks.length} task(s), assigned ${assignedTasks.length} task(s), mirrored ${githubIssues.length} issue(s) to GitHub${monitoringEmail?.attempted ? ', and processed monitoring email alerts' : ''}.`,
+      detail: `Run complete. Created ${createdTasks.length} task(s), assigned ${assignedTasks.length} task(s), assignment failures ${assignmentFailures.length}, mirrored ${githubIssues.length} issue(s) to GitHub${monitoringEmail?.attempted ? ', and processed monitoring email alerts' : ''}.`,
     });
   } catch (err) {
     return next(err);
