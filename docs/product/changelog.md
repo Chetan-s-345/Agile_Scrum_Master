@@ -7,6 +7,7 @@
 - Auto Assigner scored developers using skill match, workload, and throughput.
 - Monitor agent evaluated sprint health and emitted stale-task and risk alerts.
 - PR merge-aware automation closed linked tasks after merge confirmation.
+- Floating agent bubble surfaced real-time agent status on major dashboard flows.
 - Agentic Scrum Master controls centralized policy toggles and agent management.
 - Agent decision and run history surfaces were added for operational traceability.
 
@@ -26,6 +27,7 @@
 - GitHub activity tabs were added for overview, commits, pull requests, issues, workflows, and branches.
 - Webhook ingestion and dead-letter retry management were added for operational reliability.
 - Inngest background function orchestration was integrated for event-driven automation.
+- pgvector-backed RAG context operations were added for duplicate checks and context-aware automation.
 - AI/ML endpoints were added for risk narration, standup summarization, and planning support.
 - Copilot coding agent integration paths were added for task-driven development workflows.
 

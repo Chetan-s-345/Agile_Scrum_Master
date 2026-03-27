@@ -155,12 +155,12 @@ Route: /scrum-master
 Who uses it: Scrum Masters, Engineering Managers, Admins
 
 What this page shows:
-Agentic Scrum Master is the automation control hub for project policies and agents. It includes operational views for Task Generator, Assignment, Monitoring, and Custom agent roles. Teams use it to tune autonomy and inspect decisions.
+Agentic Scrum Master is the automation control hub for project policies and agents. It includes four operational tabs: Task Factory, Auto Assigner, Monitor, and Custom Agents. Teams use it to tune autonomy and inspect decisions.
 
 What you can do here:
-- Toggle automation policy: enable or pause issue, PR, assignment, and monitoring automation.
-- Manage agents: create, edit, pause, resume, or remove custom agents.
-- Inspect decisions and logs: review recent automation actions per agent.
+- Use the Task Factory tab: control task-creation automation from issues, PRs, and webhooks.
+- Use the Auto Assigner tab: run assignment now, tune behavior, and override assignments.
+- Use the Monitor and Custom Agents tabs: review risk automation, logs, and custom agent actions.
 
 What happens automatically:
 - Agent state changes affect real-time behavior for task creation, assignment, and monitoring.

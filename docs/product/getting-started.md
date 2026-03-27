@@ -71,4 +71,4 @@ Sprint is for Scrum Masters, engineering managers, product managers, developers,
 - Sprint health is monitored on schedule, with alerts for stale tasks, overload, and velocity risk.
 - Pull requests linked to task references can update and close matching tasks after merge.
 - Standup submissions are processed automatically, and blocker-related tasks are generated from detected blockers.
-- Standup summaries are compiled on the morning cadence (for example, 9:30 AM) and shared with the team.
+- Standup summaries are compiled at 9:30am and shared with the team.
