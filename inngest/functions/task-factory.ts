@@ -500,6 +500,7 @@ async function searchSimilar(
 ): Promise<Array<{ sourceId: string; sourceType: string; similarity: number; content: string }>> {
   const vector = await embedText(query);
   if (!vector) return [];
+  // Convert cosine distance to similarity so deduplication thresholds remain human-readable.
   const resp = await getUniversalPool().query(
     `SELECT source_id, source_type, content, 1 - (vector <=> $1::vector) AS similarity
      FROM embeddings
@@ -796,6 +797,7 @@ export const githubIssueToTask = inngest.createFunction(
       }
 
       const duplicates = await step.run("deduplicate", async () => searchSimilar(orgPool, data.title, data.projectId));
+  // Keep this strict to avoid merging separate issues that share broad wording.
       const duplicate = duplicates.find((r) => r.similarity > 0.85);
       if (duplicate) {
         await logAction(orgPool, {
@@ -1052,6 +1054,7 @@ export const githubPushToTask = inngest.createFunction(
         const message = String(commit.message || "").trim();
         if (!message) continue;
         const duplicates = await searchSimilar(orgPool, message, data.projectId);
+        // Commit messages are short/noisy, so use a slightly higher duplicate cutoff.
         if (duplicates.some((d) => d.similarity > 0.86)) {
           continue;
         }
@@ -1239,6 +1242,7 @@ export const customAgentRunObserved = inngest.createFunction(
 
 async function runMonitoringPulse(orgPool: Pool, orgId: string, projectId: string): Promise<void> {
   const policy = await getProjectPolicy(orgPool, projectId);
+  // Policy gating lets teams pause monitoring without changing deployment config.
   if (!policy.monitoringEnabled) return;
 
   const githubEvents = await orgPool.query(

@@ -3,6 +3,17 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
+/**
+ * ThemeStore - global theme state and DOM synchronization.
+ *
+ * Manages: dark/light theme mode.
+ * Consumers: navbar, theme provider, and pages that depend on the root theme class.
+ * Persisted: yes, theme value only, to keep preference stable across reloads.
+ *
+ * Design note: global state avoids hydration drift between isolated components.
+ * Update pattern: write store first, then mirror to document root attributes/classes.
+ */
+
 type ThemeMode = "dark" | "light";
 
 type ThemeState = {
@@ -39,6 +50,7 @@ export const useThemeStore = create<ThemeState>()(
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({ theme: state.theme }),
       onRehydrateStorage: () => (state) => {
+        // Re-apply after hydration so SSR markup and client preference converge immediately.
         const theme = state?.theme ?? "dark";
         applyTheme(theme);
       },
