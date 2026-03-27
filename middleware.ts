@@ -32,5 +32,7 @@ export const config = {
     '/sprint/:path*',
     '/tasks/:path*',
     '/assign/:path*',
+    '/auth/sign-in',
+    '/auth/sign-up',
   ],
 };

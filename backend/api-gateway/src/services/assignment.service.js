@@ -8,6 +8,12 @@ function toIsoDate(dateLike) {
   return new Date(dateLike).toISOString().slice(0, 10);
 }
 
+/**
+ * Computes percentage overlap between required task tags and developer stack.
+ *
+ * We keep this normalized to 0-100 so downstream ranking can combine signals
+ * without leaking implementation-specific weighting into API responses.
+ */
 function computeTechMatchScore(techTags, devTechStack) {
   const required = Array.isArray(techTags) ? techTags.map(String) : [];
   if (!required.length) return 0;
@@ -16,6 +22,12 @@ function computeTechMatchScore(techTags, devTechStack) {
   return Math.round((matched / required.length) * 10000) / 100;
 }
 
+/**
+ * Estimates remaining sprint capacity after assigning a task.
+ *
+ * Returning 0 for invalid capacity avoids giving accidental preference to
+ * malformed developer records and keeps ranking deterministic.
+ */
 function computeWorkloadScore(currentLoad, maxCapacity, storyPoints) {
   const max = Number(maxCapacity || 0);
   if (max <= 0) return 0;
@@ -156,6 +168,8 @@ class AssignmentService {
   pickWinner(ranked) {
     if (!ranked.length) return null;
 
+    // Restrict tie-break evaluation to top-ranked candidates so we preserve
+    // merit-based ordering while still preferring the least-loaded assignee.
     const top3 = ranked.slice(0, 3);
     let best = top3[0];
     let bestRemaining = -Infinity;
