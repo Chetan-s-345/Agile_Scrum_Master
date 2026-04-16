@@ -1,0 +1,58 @@
+{
+  "name": "agile-scrum-master-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "productName": "Agile Scrum Master Desktop",
+  "main": "electron/main.js",
+  "scripts": {
+    "install:frontend": "npm install --prefix frontend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:electron": "cross-env ELECTRON_START_URL=http://localhost:5173 electron .",
+    "dev": "concurrently -k \"npm run dev:frontend\" \"wait-on http://localhost:5173 && npm run dev:electron\"",
+    "build:frontend": "npm run build --prefix frontend",
+    "start": "electron .",
+    "dist": "npm run build:frontend && electron-builder",
+    "pack": "npm run build:frontend && electron-builder --dir"
+  },
+  "build": {
+    "appId": "com.agilescrummaster.desktop",
+    "directories": {
+      "output": "release"
+    },
+    "artifactName": "AgileScrumMaster-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "files": [
+      "electron/**/*",
+      "frontend/dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3",
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
+    "wait-on": "^8.0.1"
+  }
+}

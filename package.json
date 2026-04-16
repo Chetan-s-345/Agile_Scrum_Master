@@ -7,7 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "init:app-db": "node tools/init-nextjs-db.mjs"
+    "init:app-db": "node tools/init-nextjs-db.mjs",
+    "desktop:install": "npm --prefix desktop run install:frontend",
+    "desktop:dev": "npm --prefix desktop run dev",
+    "desktop:start": "npm --prefix desktop run start",
+    "desktop:build": "npm --prefix desktop run build:frontend",
+    "desktop:pack": "npm --prefix desktop run pack",
+    "desktop:dist": "npm --prefix desktop run dist"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
