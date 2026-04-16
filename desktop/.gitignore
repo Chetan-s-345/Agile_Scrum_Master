@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Frontend build outputs
+frontend/.next/
+frontend/out/
+frontend/dist/
+frontend-next-legacy-*/
+
+# Desktop/Electron build outputs
+dist/
+release/
+electron/dist/
+electron/release/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Test and coverage artifacts
+coverage/
+test-results/
+playwright-report/
+frontend/coverage/
+frontend/test-results/
+
+# Logs and runtime files
+*.log
+logs/
+electron/logs/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
