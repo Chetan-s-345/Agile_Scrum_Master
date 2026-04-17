@@ -12,6 +12,24 @@ type AgentConfig = {
   context_memo?: string;
 };
 
+type Agent = {
+  id: string;
+  name?: string;
+  type?: string;
+  status?: string;
+  running?: boolean;
+  lastRunAt?: string;
+  config?: AgentConfig;
+  stats?: AgentStats;
+};
+
+type Message = {
+  id?: string;
+  role?: string;
+  content?: string;
+  createdAt?: string;
+};
+
 type RunTask = {
   taskId?: string;
   id?: string;
@@ -101,6 +119,23 @@ function ago(value: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+  if (!window.desktopApi?.invoke) {
+    throw new Error("Desktop IPC bridge unavailable");
+  }
+
+  const response = await window.desktopApi.invoke(channel, payload);
+  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
+    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
+    if (!wrapped.ok) {
+      throw new Error(safe(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
+    }
+    return (wrapped.data as T) ?? (null as T);
+  }
+
+  return response as T;
+}
+
 export default function ScrumMasterAgentDetailPage() {
   const params = useParams<{ agentId: string }>();
   const router = useRouter();
@@ -110,7 +145,9 @@ export default function ScrumMasterAgentDetailPage() {
   const projectId = safe(search?.get("projectId"));
 
   const [loading, setLoading] = useState(true);
+  const [agent, setAgent] = useState<Agent | null>(null);
   const [config, setConfig] = useState<AgentConfig>({});
+  const [conversation, setConversation] = useState<Message[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [stats, setStats] = useState<AgentStats>({});
   const [prompt, setPrompt] = useState("");
@@ -159,25 +196,18 @@ export default function ScrumMasterAgentDetailPage() {
   }, [lastRun?.assignedTasks, stats.assignments]);
 
   const load = useCallback(async () => {
-    if (!agentId || !projectId) return;
+    if (!agentId) return;
     setLoading(true);
     setError("");
     try {
-      const [cfgResp, decResp, statsResp] = await Promise.all([
-        fetch(`/api/agents/${encodeURIComponent(agentId)}/config?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" }),
-        fetch(`/api/agents/${encodeURIComponent(agentId)}/decisions?projectId=${encodeURIComponent(projectId)}&page=1`, { cache: "no-store" }),
-        fetch(`/api/agents/${encodeURIComponent(agentId)}/stats?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" }),
+      const [agentData, conversationData, actionLogData] = await Promise.all([
+        invokeDesktop<Agent>("agent:getById", { agentId }),
+        invokeDesktop<Message[]>("agent:getConversation", { agentId }),
+        invokeDesktop<Decision[]>("agent:getActionLog", { agentId })
       ]);
 
-      const cfgJson = await cfgResp.json().catch(() => ({}));
-      const decJson = await decResp.json().catch(() => ({}));
-      const statsJson = await statsResp.json().catch(() => ({}));
-
-      if (!cfgResp.ok) {
-        setError(safe(cfgJson?.detail || cfgJson?.error) || "Failed to load agent configuration.");
-      }
-
-      const nextConfig = (cfgJson?.config || {}) as AgentConfig;
+      setAgent(agentData || null);
+      const nextConfig = (agentData?.config || {}) as AgentConfig;
       setConfig(nextConfig);
       setPrompt(safe(nextConfig.context_memo || ""));
       const nextTargets = Array.isArray((nextConfig.constraints as { notificationTargets?: unknown } | undefined)?.notificationTargets)
@@ -187,16 +217,18 @@ export default function ScrumMasterAgentDetailPage() {
         : [];
       setNotificationTargets([...new Set(nextTargets)]);
 
-      const rows = Array.isArray(decJson?.items) ? decJson.items : [];
-      setDecisions(rows as Decision[]);
-      setStats((statsJson?.stats || {}) as AgentStats);
+      setConversation(Array.isArray(conversationData) ? conversationData : []);
+      setDecisions(Array.isArray(actionLogData) ? actionLogData : []);
+      setStats((agentData?.stats || {}) as AgentStats);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load agent details");
     } finally {
       setLoading(false);
     }
-  }, [agentId, projectId]);
+  }, [agentId]);
 
   const savePrompt = useCallback(async () => {
-    if (!agentId || !projectId) return;
+    if (!agentId) return;
     setSaving(true);
     setError("");
     try {
@@ -207,53 +239,43 @@ export default function ScrumMasterAgentDetailPage() {
         notificationTargets,
       };
 
-      const resp = await fetch(`/api/agents/${encodeURIComponent(agentId)}/config`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId,
-          triggerSettings: config.trigger_settings || {},
-          autonomyLevel: Number(config.autonomy_level || 2),
+      await invokeDesktop<Agent>("agent:updateConfig", {
+        agentId,
+        config: {
+          trigger_settings: config.trigger_settings || {},
+          autonomy_level: Number(config.autonomy_level || 2),
           constraints: nextConstraints,
-          contextMemo: prompt,
-        }),
+          context_memo: prompt
+        }
       });
-
-      const json = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        setError(safe(json?.detail || json?.error) || "Failed to save prompt.");
-        return;
-      }
-
       await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save prompt");
     } finally {
       setSaving(false);
     }
-  }, [agentId, config.autonomy_level, config.constraints, config.trigger_settings, load, notificationTargets, projectId, prompt, ragEnabled]);
+  }, [agentId, config.autonomy_level, config.constraints, config.trigger_settings, load, notificationTargets, prompt, ragEnabled]);
 
   const runAgentNow = useCallback(async () => {
-    if (!agentId || !projectId) return;
+    if (!agentId) return;
     setRunning(true);
     setRunMessage("");
     setError("");
     try {
-      const resp = await fetch(`/api/agents/run`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId, projectId, promptTemplate: prompt, taskCount: 3, notificationTargets }),
+      const sent = await invokeDesktop<Message>("agent:sendMessage", {
+        agentId,
+        content: prompt || "Run a fresh analysis and post actionable updates."
       });
-      const json = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        setError(safe(json?.detail || json?.error) || "Failed to run agent.");
-        return;
-      }
-      setLastRun(json as RunResult);
-      setRunMessage(safe(json?.detail) || "Agent run completed.");
+      setRunMessage("Agent run completed.");
+      setLastRun({ createdTasks: [], assignedTasks: [], githubIssues: [], githubIssueErrors: [], githubRepo: null, monitoringEmail: null });
+      setConversation((prev) => [sent, ...prev]);
       await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to run agent");
     } finally {
       setRunning(false);
     }
-  }, [agentId, load, notificationTargets, projectId, prompt]);
+  }, [agentId, load, prompt]);
 
   const addNotificationTarget = useCallback(() => {
     const candidate = safe(notificationTargetInput).toLowerCase();
@@ -268,42 +290,35 @@ export default function ScrumMasterAgentDetailPage() {
   }, []);
 
   const toggleAgentStatus = useCallback(async () => {
-    if (!agentId || !projectId) return;
+    if (!agentId) return;
     setStatusBusy(true);
     setError("");
     try {
-      const nextStatus = isAgentActive ? "paused" : "active";
-      const resp = await fetch(`/api/agents/${encodeURIComponent(agentId)}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, status: nextStatus }),
+      await invokeDesktop<Agent>("agent:toggleRun", {
+        agentId,
+        running: !isAgentActive
       });
-      const json = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        setError(safe(json?.detail || json?.error) || "Failed to update status.");
-        return;
-      }
       await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update status");
     } finally {
       setStatusBusy(false);
     }
-  }, [agentId, isAgentActive, load, projectId]);
+  }, [agentId, isAgentActive, load]);
 
   const deleteAgent = useCallback(async () => {
-    if (!agentId || !projectId) return;
+    if (!agentId) return;
     if (!confirm("Delete this custom agent from this project?")) return;
     setDeleteBusy(true);
     setError("");
     try {
-      const resp = await fetch(`/api/agents/${encodeURIComponent(agentId)}?projectId=${encodeURIComponent(projectId)}`, {
-        method: "DELETE",
-      });
-      const json = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        setError(safe(json?.detail || json?.error) || "Failed to delete agent.");
-        return;
+      const result = await invokeDesktop<{ success?: boolean }>("agent:delete", { agentId });
+      if (!result?.success) {
+        throw new Error("Failed to delete agent");
       }
       router.push(`/scrum-master${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete agent");
     } finally {
       setDeleteBusy(false);
     }
@@ -323,8 +338,11 @@ export default function ScrumMasterAgentDetailPage() {
       />
       <div className="mx-auto max-w-[1100px] space-y-4">
         <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4">
-          <h1 className="text-xl font-semibold">Agent: {agentId || "unknown"}</h1>
+          <h1 className="text-xl font-semibold">Agent: {safe(agent?.name) || agentId || "unknown"}</h1>
           <div className="mt-1 text-xs text-[var(--text-secondary)]">Project: {projectId || "n/a"}</div>
+          <div className="mt-1 text-xs text-[var(--text-secondary)]">
+            Type: {safe(agent?.type) || "custom"} | Status: {safe(agent?.status) || "idle"} | Last run: {safe(agent?.lastRunAt) ? ago(safe(agent?.lastRunAt)) : "never"}
+          </div>
           <div className="mt-3 grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
             <div className="rounded border border-[var(--border)] bg-[var(--bg-surface)] p-2">AI Service: <span className="font-semibold">{stats.aiServiceConfigured ? "Connected" : "Not configured"}</span></div>
             <div className="rounded border border-[var(--border)] bg-[var(--bg-surface)] p-2">Inngest: <span className="font-semibold">{stats.inngestConfigured ? "Connected" : "Not configured"}</span></div>
@@ -386,6 +404,22 @@ export default function ScrumMasterAgentDetailPage() {
             </div>
           ) : null}
           {error ? <div className="mt-2 text-xs text-[var(--accent-red)]">{error}</div> : null}
+        </section>
+
+        <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4">
+          <h2 className="text-sm font-semibold">Conversation</h2>
+          <div className="mt-2 space-y-2">
+            {conversation.map((msg, idx) => (
+              <div key={`${safe(msg.id)}:${idx}`} className="rounded border border-[var(--border)] bg-[var(--bg-surface)] p-2 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">{safe(msg.role) || "message"}</span>
+                  <span className="text-[var(--text-secondary)]">{ago(safe(msg.createdAt))}</span>
+                </div>
+                <div className="mt-1 text-[var(--text-secondary)]">{safe(msg.content)}</div>
+              </div>
+            ))}
+            {!conversation.length ? <div className="text-xs text-[var(--text-secondary)]">No conversation messages yet.</div> : null}
+          </div>
         </section>
 
         <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4">

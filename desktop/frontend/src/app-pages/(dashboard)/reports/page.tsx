@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "@/next-shims/link";
+import { useSearchParams } from "@/next-shims/navigation";
 import { RefreshCw } from "lucide-react";
 
 type VelocityPoint = {
@@ -17,36 +18,55 @@ type VelocityPoint = {
 
 type ReportItem = {
   id: string;
+  sprintId?: string;
   name: string;
   date: string;
   type: string;
+  projectId?: string;
+  startDate?: string;
+  endDate?: string;
+  velocity?: number;
+  completionPct?: number | null;
+  generatedAt?: string;
 };
 
-type ReportsResp = {
-  velocityHistory?: VelocityPoint[];
-  reports?: ReportItem[];
-  error?: string;
+type ReportsData = {
+  velocityHistory: VelocityPoint[];
+  reports: ReportItem[];
 };
 
-async function fetchJson<T>(url: string): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const resp = await fetch(url, { cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+function asText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+  if (!window.desktopApi?.invoke) {
+    throw new Error("Desktop IPC bridge unavailable");
   }
-  return { ok: resp.ok, status: resp.status, data };
+  const response = await window.desktopApi.invoke(channel, payload);
+  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
+    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
+    if (!wrapped.ok) {
+      throw new Error(asText(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
+    }
+    return (wrapped.data as T) ?? (null as T);
+  }
+  return response as T;
 }
 
 export default function ReportsPage() {
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<ReportsResp | null>(null);
+  const [data, setData] = useState<ReportsData>({ velocityHistory: [], reports: [] });
 
-  const velocityHistory = useMemo(() => (Array.isArray(data?.velocityHistory) ? data!.velocityHistory! : []), [data]);
-  const reports = useMemo(() => (Array.isArray(data?.reports) ? data!.reports! : []), [data]);
+  const projectFilter = String(searchParams.get("projectId") || "").trim();
+  const startDateFilter = String(searchParams.get("startDate") || searchParams.get("from") || "").trim();
+  const endDateFilter = String(searchParams.get("endDate") || searchParams.get("to") || "").trim();
+  const generateSprintId = String(searchParams.get("generateSprintId") || "").trim();
+
+  const velocityHistory = useMemo(() => (Array.isArray(data.velocityHistory) ? data.velocityHistory : []), [data]);
+  const reports = useMemo(() => (Array.isArray(data.reports) ? data.reports : []), [data]);
 
   const avgVelocity = useMemo(() => {
     if (!velocityHistory.length) return 0;
@@ -66,22 +86,41 @@ export default function ReportsPage() {
   async function load() {
     setLoading(true);
     setError(null);
-    const resp = await fetchJson<ReportsResp>("/api/reports");
-    if (!resp.ok) {
-      setData(null);
-      setError(String(resp.data?.error || `Failed to load reports (${resp.status})`));
+    try {
+      if (generateSprintId) {
+        await invokeDesktop<ReportItem>("reports:generate", { sprintId: generateSprintId });
+      }
+
+      const dateRange = startDateFilter || endDateFilter ? { startDate: startDateFilter, endDate: endDateFilter } : undefined;
+
+      const [reportItems, velocityItems] = await Promise.all([
+        invokeDesktop<ReportItem[]>("reports:getAll", {
+          projectId: projectFilter || undefined,
+          dateRange,
+        }),
+        invokeDesktop<VelocityPoint[]>("reports:getVelocityHistory", {
+          count: 6,
+          projectId: projectFilter || undefined,
+        }),
+      ]);
+
+      setData({
+        reports: Array.isArray(reportItems) ? reportItems : [],
+        velocityHistory: Array.isArray(velocityItems) ? velocityItems : [],
+      });
+    } catch (err) {
+      setData({ velocityHistory: [], reports: [] });
+      setError(err instanceof Error ? err.message : "Failed to load reports");
+    } finally {
       setLoading(false);
-      return;
     }
-    setData(resp.data);
-    setLoading(false);
   }
 
   useEffect(() => {
     (async () => {
       await load();
     })();
-  }, []);
+  }, [projectFilter, startDateFilter, endDateFilter, generateSprintId]);
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
@@ -173,13 +212,13 @@ export default function ReportsPage() {
                 reports.map((report) => (
                   <Link
                     key={report.id}
-                    href={`/reports/${encodeURIComponent(report.id)}`}
+                    href={`/reports/${encodeURIComponent(report.sprintId || report.id)}`}
                     className="block p-3 bg-slate-50 dark:bg-black/30 rounded-lg hover:bg-slate-100 dark:hover:bg-black/40 transition border border-slate-200 dark:border-zinc-800"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="font-medium text-slate-900 dark:text-white text-sm">{report.name}</p>
-                        <p className="text-xs text-slate-600 dark:text-slate-400">{String(report.date).slice(0, 10)} • {report.type}</p>
+                        <p className="text-xs text-slate-600 dark:text-slate-400">{String(report.generatedAt || report.date).slice(0, 10)} • {report.type}</p>
                       </div>
                       <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 underline">Open</span>
                     </div>

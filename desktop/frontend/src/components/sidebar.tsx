@@ -224,9 +224,11 @@ function SortableSpaceRow({
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: space.id });
   const style = { transform: CSS.Transform.toString(transform), transition };
 
+  const projectRouteId = encodeURIComponent(space.slug || space.id);
+
   if (collapsed) {
     return (
-      <Link ref={setNodeRef} style={style} href={`/projects/${encodeURIComponent(space.id)}`} className="flex h-9 items-center justify-center rounded-md hover:bg-[#2a2a2a]">
+      <Link ref={setNodeRef} style={style} href={`/projects/${projectRouteId}`} className="flex h-9 items-center justify-center rounded-md hover:bg-[#2a2a2a]">
         <PanelsTopLeft className="h-4 w-4" />
       </Link>
     );
@@ -239,7 +241,7 @@ function SortableSpaceRow({
           <PanelsTopLeft className="h-3.5 w-3.5" />
         </button>
 
-        <Link href={`/projects/${encodeURIComponent(space.id)}`} className="rounded p-1 hover:bg-[#1f1f1f]" title="Open space page">
+        <Link href={`/projects/${projectRouteId}`} className="rounded p-1 hover:bg-[#1f1f1f]" title="Open space page">
           <Grid3X3 className="h-3.5 w-3.5" />
         </Link>
 
@@ -657,7 +659,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                       onDuplicate={() => void duplicateSpace(space.id)}
                       onSetDefault={() => void setDefaultSpace(space.id)}
                       onCopyLink={() => {
-                        void navigator.clipboard.writeText(`${window.location.origin}/projects/${encodeURIComponent(space.id)}`);
+                        const projectRouteId = encodeURIComponent(space.slug || space.id);
+                        void navigator.clipboard.writeText(`${window.location.origin}/projects/${projectRouteId}`);
                         setContextMenuId(null);
                       }}
                       onArchiveToggle={(v) => void archiveSpace(space.id, v)}
