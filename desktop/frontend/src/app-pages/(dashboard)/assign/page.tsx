@@ -516,7 +516,10 @@ export default function AssignmentEnginePage() {
                               <div className="flex items-center justify-between gap-2">
                                 <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">Suggestions</div>
                                 <button
-                                  onClick={() => setSuggestForTaskId(null)}
+                                  onClick={() => {
+                                    setSuggestForTaskId(null);
+                                    setSelectedTaskId(null);
+                                  }}
                                   className="text-xs font-semibold text-slate-700 dark:text-slate-200 underline"
                                 >
                                   Close
