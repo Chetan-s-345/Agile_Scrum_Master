@@ -132,6 +132,32 @@ function cloneTask(task) {
   };
 }
 
+function cloneDeveloper(developer) {
+  return {
+    id: asString(developer.id),
+    name: asString(developer.name || "Developer"),
+    capacity: Math.max(1, asNumber(developer.capacity, 20)),
+  };
+}
+
+function getSprintList() {
+  const map = new Map();
+
+  for (const task of tasks) {
+    const sprintId = asString(task.sprintId);
+    if (!sprintId) continue;
+    if (map.has(sprintId)) continue;
+
+    map.set(sprintId, {
+      id: sprintId,
+      name: asString(task.sprintName || `Sprint ${sprintId}`),
+      status: asString(task.sprintStatus || "planning"),
+    });
+  }
+
+  return [...map.values()];
+}
+
 function getDeveloperById(developerId) {
   return developers.find((developer) => asString(developer.id) === asString(developerId)) || null;
 }
@@ -173,6 +199,26 @@ function assignTaskInternal(taskId, developerId) {
   };
 
   return cloneTask(tasks[taskIndex]);
+}
+
+function getAllAssignmentsByDeveloper(sprintId) {
+  const normalizedSprintId = asString(sprintId || "");
+
+  return developers.map((developer) => {
+    const developerId = asString(developer.id);
+    const developerTasks = tasks
+      .filter((task) => {
+        if (asString(task.assignee?.id) !== developerId) return false;
+        if (!normalizedSprintId) return true;
+        return asString(task.sprintId) === normalizedSprintId;
+      })
+      .map(cloneTask);
+
+    return {
+      developer: cloneDeveloper(developer),
+      tasks: developerTasks,
+    };
+  });
 }
 
 function registerAssignIpcHandlers(ipcMain) {
@@ -218,6 +264,29 @@ function registerAssignIpcHandlers(ipcMain) {
     }
 
     return updated;
+  });
+
+  ipcMain.handle(CHANNELS.ASSIGNMENT.GET_ALL_ASSIGNMENTS, async (_event, payload) => {
+    const sprintId = asString(payload?.sprintId || "");
+    return getAllAssignmentsByDeveloper(sprintId);
+  });
+
+  ipcMain.handle(CHANNELS.ASSIGNMENT.REASSIGN_TASK, async (_event, payload) => {
+    const taskId = asString(payload?.taskId || "");
+    const newDeveloperId = asString(payload?.newDeveloperId || "");
+
+    if (!taskId) {
+      throw new Error("taskId is required");
+    }
+    if (!newDeveloperId) {
+      throw new Error("newDeveloperId is required");
+    }
+
+    return assignTaskInternal(taskId, newDeveloperId);
+  });
+
+  ipcMain.handle(CHANNELS.ASSIGNMENT.GET_SPRINT_LIST, async () => {
+    return getSprintList();
   });
 }
 

@@ -19,6 +19,13 @@ const CHANNELS = {
     BULK_ASSIGN: "assign:bulkAssign"
   },
 
+  // Assignment overview channels
+  ASSIGNMENT: {
+    GET_ALL_ASSIGNMENTS: "assignment:getAllAssignments",
+    REASSIGN_TASK: "assignment:reassignTask",
+    GET_SPRINT_LIST: "assignment:getSprintList"
+  },
+
   // Admin control panel channels
   ADMIN: {
     GET_USERS: "admin:getUsers",
@@ -27,6 +34,27 @@ const CHANNELS = {
     GET_AUDIT_LOGS: "admin:getAuditLogs",
     GET_FEATURE_FLAGS: "admin:getFeatureFlags",
     TOGGLE_FEATURE_FLAG: "admin:toggleFeatureFlag"
+  },
+
+  // Backlog channels
+  BACKLOG: {
+    GET_ITEMS: "backlog:getItems",
+    CREATE_ITEM: "backlog:createItem",
+    UPDATE_ITEM: "backlog:updateItem",
+    REORDER_ITEMS: "backlog:reorderItems",
+    ADD_TO_SPRINT: "backlog:addToSprint",
+    BULK_UPDATE: "backlog:bulkUpdate",
+    DELETE_ITEM: "backlog:deleteItem",
+    BULK_DELETE: "backlog:bulkDelete"
+  },
+
+  // Board channels
+  BOARD: {
+    GET_SPRINT_BACKLOG: "board:getSprintBacklog",
+    MOVE_TO_BOARD: "board:moveToBoard",
+    GET_TASKS_WITH_PRS: "board:getTasksWithPRs",
+    LINK_PR: "board:linkPR",
+    UNLINK_PR: "board:unlinkPR"
   },
 
   // App metadata and health

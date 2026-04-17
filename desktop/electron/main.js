@@ -1,9 +1,11 @@
 const path = require("path");
 const fs = require("fs");
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const { registerDashboardIpcHandlers } = require("./ipc/dashboard");
 const { registerAssignIpcHandlers } = require("./ipc/assign");
 const { registerAdminIpcHandlers } = require("./ipc/admin");
+const { registerBacklogIpcHandlers } = require("./ipc/backlog");
+const { registerBoardIpcHandlers } = require("./ipc/board");
 
 app.setName("Agile Scrum Master Desktop");
 if (process.platform === "win32") {
@@ -49,6 +51,16 @@ app.whenReady().then(() => {
   registerDashboardIpcHandlers(ipcMain);
   registerAssignIpcHandlers(ipcMain);
   registerAdminIpcHandlers(ipcMain);
+  registerBacklogIpcHandlers(ipcMain);
+  registerBoardIpcHandlers(ipcMain);
+
+  ipcMain.handle("system:openExternal", async (_event, payload) => {
+    const raw = String(payload?.url || "").trim();
+    if (!raw) throw new Error("url is required");
+    await shell.openExternal(raw);
+    return { success: true };
+  });
+
   createWindow();
 
   app.on("activate", () => {
