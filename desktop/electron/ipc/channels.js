@@ -4,6 +4,31 @@
  */
 
 const CHANNELS = {
+  // Dashboard overview channels
+  DASHBOARD: {
+    GET_SUMMARY: "dashboard:getSummary",
+    GET_RECENT_ACTIVITY: "dashboard:getRecentActivity",
+    GET_BURNDOWN_DATA: "dashboard:getBurndownData"
+  },
+
+  // Assignment channels
+  ASSIGN: {
+    GET_UNASSIGNED_TASKS: "assign:getUnassignedTasks",
+    GET_DEVELOPERS_WITH_WORKLOAD: "assign:getDevelopersWithWorkload",
+    ASSIGN_TASK: "assign:assignTask",
+    BULK_ASSIGN: "assign:bulkAssign"
+  },
+
+  // Admin control panel channels
+  ADMIN: {
+    GET_USERS: "admin:getUsers",
+    UPDATE_USER_ROLE: "admin:updateUserRole",
+    REMOVE_USER: "admin:removeUser",
+    GET_AUDIT_LOGS: "admin:getAuditLogs",
+    GET_FEATURE_FLAGS: "admin:getFeatureFlags",
+    TOGGLE_FEATURE_FLAG: "admin:toggleFeatureFlag"
+  },
+
   // App metadata and health
   APP: {
     GET_VERSION: "app:getVersion",

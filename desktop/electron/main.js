@@ -1,6 +1,9 @@
 const path = require("path");
 const fs = require("fs");
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, ipcMain } = require("electron");
+const { registerDashboardIpcHandlers } = require("./ipc/dashboard");
+const { registerAssignIpcHandlers } = require("./ipc/assign");
+const { registerAdminIpcHandlers } = require("./ipc/admin");
 
 app.setName("Agile Scrum Master Desktop");
 if (process.platform === "win32") {
@@ -43,6 +46,9 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  registerDashboardIpcHandlers(ipcMain);
+  registerAssignIpcHandlers(ipcMain);
+  registerAdminIpcHandlers(ipcMain);
   createWindow();
 
   app.on("activate", () => {
