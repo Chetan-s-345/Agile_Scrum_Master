@@ -6,6 +6,10 @@ const { registerAssignIpcHandlers } = require("./ipc/assign");
 const { registerAdminIpcHandlers } = require("./ipc/admin");
 const { registerBacklogIpcHandlers } = require("./ipc/backlog");
 const { registerBoardIpcHandlers } = require("./ipc/board");
+const { registerFormsIpcHandlers } = require("./ipc/forms");
+const { registerPagesIpcHandlers } = require("./ipc/pages");
+const { registerSprintIpcHandlers } = require("./ipc/sprint");
+const { registerTimelineIpcHandlers } = require("./ipc/timeline");
 
 app.setName("Agile Scrum Master Desktop");
 if (process.platform === "win32") {
@@ -53,6 +57,10 @@ app.whenReady().then(() => {
   registerAdminIpcHandlers(ipcMain);
   registerBacklogIpcHandlers(ipcMain);
   registerBoardIpcHandlers(ipcMain);
+  registerFormsIpcHandlers(ipcMain);
+  registerPagesIpcHandlers(ipcMain);
+  registerSprintIpcHandlers(ipcMain);
+  registerTimelineIpcHandlers(ipcMain);
 
   ipcMain.handle("system:openExternal", async (_event, payload) => {
     const raw = String(payload?.url || "").trim();

@@ -57,6 +57,37 @@ const CHANNELS = {
     UNLINK_PR: "board:unlinkPR"
   },
 
+  // Forms channels
+  FORMS: {
+    GET_TEMPLATES: "forms:getTemplates",
+    GET_TASK_FORMS: "forms:getTaskForms",
+    SUBMIT_FORM: "forms:submitForm",
+    ATTACH_TEMPLATE: "forms:attachTemplate"
+  },
+
+  // Pages channels
+  PAGES: {
+    GET_LIST: "pages:getList",
+    GET_CONTENT: "pages:getContent",
+    CREATE_PAGE: "pages:createPage",
+    UPDATE_PAGE: "pages:updatePage",
+    DELETE_PAGE: "pages:deletePage"
+  },
+
+  // Sprint analytics channels
+  SPRINT: {
+    GET_SUMMARY: "sprint:getSummary",
+    GET_BURNDOWN: "sprint:getBurndown",
+    GET_VELOCITY_HISTORY: "sprint:getVelocityHistory",
+    GET_CONTRIBUTORS: "sprint:getContributors"
+  },
+
+  // Timeline channels
+  TIMELINE: {
+    GET_TASKS: "timeline:getTasks",
+    UPDATE_TASK_DATES: "timeline:updateTaskDates"
+  },
+
   // App metadata and health
   APP: {
     GET_VERSION: "app:getVersion",
