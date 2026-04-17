@@ -45,6 +45,18 @@ const allowedInvokeChannels = new Set([
   "sprint:getContributors",
   "timeline:getTasks",
   "timeline:updateTaskDates",
+  "developers:getAll",
+  "developers:invite",
+  "developers:search",
+  "developers:getById",
+  "developers:getStats",
+  "developers:getCurrentTasks",
+  "developers:getSprintHistory",
+  "developers:updateProfile",
+  "github:getConnectionStatus",
+  "github:getLinkedRepos",
+  "github:getRecentPRs",
+  "github:syncNow",
   "system:openExternal",
 ]);
 

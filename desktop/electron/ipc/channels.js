@@ -88,6 +88,26 @@ const CHANNELS = {
     UPDATE_TASK_DATES: "timeline:updateTaskDates"
   },
 
+  // Developers directory channels
+  DEVELOPERS: {
+    GET_ALL: "developers:getAll",
+    INVITE: "developers:invite",
+    SEARCH: "developers:search",
+    GET_BY_ID: "developers:getById",
+    GET_STATS: "developers:getStats",
+    GET_CURRENT_TASKS: "developers:getCurrentTasks",
+    GET_SPRINT_HISTORY: "developers:getSprintHistory",
+    UPDATE_PROFILE: "developers:updateProfile"
+  },
+
+  // GitHub integration channels
+  GITHUB: {
+    GET_CONNECTION_STATUS: "github:getConnectionStatus",
+    GET_LINKED_REPOS: "github:getLinkedRepos",
+    GET_RECENT_PRS: "github:getRecentPRs",
+    SYNC_NOW: "github:syncNow"
+  },
+
   // App metadata and health
   APP: {
     GET_VERSION: "app:getVersion",
