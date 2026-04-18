@@ -36,10 +36,8 @@ jobs:
         run: |
           if [[ -f "cloud/package.json" ]]; then
             echo "app_dir=cloud" >> "$GITHUB_OUTPUT"
-          elif [[ -f "package.json" ]]; then
-            echo "app_dir=." >> "$GITHUB_OUTPUT"
           else
-            echo "Could not find cloud app package.json"
+            echo "Could not find cloud/package.json. Run this workflow from repo root with the cloud folder present."
             exit 1
           fi
 
