@@ -9,6 +9,8 @@
     "dev:frontend": "npm run dev --prefix frontend",
     "dev:electron": "cross-env ELECTRON_START_URL=http://localhost:5173 electron .",
     "dev": "concurrently -k \"npm run dev:frontend\" \"wait-on http://localhost:5173 && npm run dev:electron\"",
+    "lint": "npm run lint --prefix frontend",
+    "build": "npm run build:frontend",
     "build:frontend": "npm run build --prefix frontend",
     "start": "electron .",
     "dist": "npm run build:frontend && electron-builder",

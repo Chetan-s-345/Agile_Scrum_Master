@@ -28,13 +28,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  vercel-deploy:
+  pre-deploy-checks:
     if: >
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'vercel')) ||
+      (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'production')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            cloud/package-lock.json
+            desktop/package-lock.json
+            desktop/frontend/package-lock.json
+
+      - name: Install cloud dependencies
+        working-directory: cloud
+        run: npm ci
+
+      - name: Lint cloud
+        working-directory: cloud
+        run: npm run lint
+
+      - name: Build cloud
+        working-directory: cloud
+        run: npm run build
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install desktop frontend dependencies
+        working-directory: desktop
+        run: npm ci --prefix frontend
+
+      - name: Lint desktop
+        working-directory: desktop
+        run: npm run lint
+
+      - name: Build desktop
+        working-directory: desktop
+        run: npm run build
+
+  vercel-deploy:
+    needs: pre-deploy-checks
+    if: >
+      needs.pre-deploy-checks.result == 'success' &&
+      ((github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'vercel')) ||
+      github.event_name == 'workflow_run')
     runs-on: ubuntu-latest
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -52,8 +103,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
+          cache-dependency-path: cloud/package-lock.json
 
-      - name: Install dependencies
+      - name: Install cloud dependencies
+        working-directory: cloud
         run: npm ci
 
       - name: Install Vercel CLI
@@ -67,21 +120,23 @@ jobs:
           echo "flags=--prod" >> "$GITHUB_OUTPUT"
 
       - name: Pull Vercel environment
+        working-directory: cloud
         run: vercel pull --yes --environment=${{ steps.vercel-env.outputs.environment }} --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Build Vercel output
+        working-directory: cloud
         run: vercel build ${{ steps.vercel-env.outputs.flags }} --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Deploy to Vercel
+        working-directory: cloud
         run: vercel deploy --prebuilt ${{ steps.vercel-env.outputs.flags }} --token=${{ secrets.VERCEL_TOKEN }}
 
   render-deploy:
+    needs: pre-deploy-checks
     if: >
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'render')) ||
-      (github.event_name == 'workflow_run' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'production')
+      needs.pre-deploy-checks.result == 'success' &&
+      ((github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'render')) ||
+      github.event_name == 'workflow_run')
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Render API Gateway deploy
