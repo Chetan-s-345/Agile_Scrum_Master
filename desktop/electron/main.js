@@ -1662,6 +1662,241 @@ function registerProfileHandlers() {
   });
 }
 
+function sprintOverviewDbPath() {
+  return path.join(app.getPath("userData"), "sprint.overview.db.json");
+}
+
+function defaultSprintOverviewData() {
+  return {
+    currentSprintId: "sprint-24",
+    sprints: {
+      "sprint-24": {
+        id: "sprint-24",
+        name: "Sprint 24",
+        goal: "Stabilize desktop IPC wiring for settings and sprint workflows.",
+        startDate: "2026-04-01",
+        endDate: "2026-04-15",
+        status: "active",
+      },
+    },
+    tasksBySprint: {
+      "sprint-24": [
+        { id: "sp24-1", title: "Wire settings profile IPC", status: "done", assignee: "Demo User" },
+        { id: "sp24-2", title: "Wire settings team IPC", status: "in_progress", assignee: "Sprint Lead" },
+        { id: "sp24-3", title: "Wire skill-gap IPC", status: "blocked", assignee: "Frontend Engineer" },
+        { id: "sp24-4", title: "Validate sprint overview flow", status: "todo", assignee: "Demo User" },
+      ],
+    },
+    eventsBySprint: {
+      "sprint-24": [
+        { id: "sp24-ev-1", type: "review", title: "Sprint Review", scheduledAt: "2026-04-16T14:00:00.000Z" },
+        { id: "sp24-ev-2", type: "retro", title: "Sprint Retrospective", scheduledAt: "2026-04-17T14:00:00.000Z" },
+      ],
+    },
+  };
+}
+
+function readSprintOverviewData() {
+  try {
+    const filePath = sprintOverviewDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultSprintOverviewData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const defaults = defaultSprintOverviewData();
+    return {
+      currentSprintId: String(parsed?.currentSprintId || defaults.currentSprintId),
+      sprints: parsed?.sprints && typeof parsed.sprints === "object" ? parsed.sprints : defaults.sprints,
+      tasksBySprint:
+        parsed?.tasksBySprint && typeof parsed.tasksBySprint === "object"
+          ? parsed.tasksBySprint
+          : defaults.tasksBySprint,
+      eventsBySprint:
+        parsed?.eventsBySprint && typeof parsed.eventsBySprint === "object"
+          ? parsed.eventsBySprint
+          : defaults.eventsBySprint,
+    };
+  } catch {
+    return defaultSprintOverviewData();
+  }
+}
+
+function writeSprintOverviewData(data) {
+  fs.writeFileSync(sprintOverviewDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function resolveSprintRecord(data, sprintId) {
+  const requested = String(sprintId || "").trim();
+  const byRequested = requested ? data.sprints?.[requested] : null;
+  const byCurrent = data.sprints?.[String(data.currentSprintId || "")] || null;
+  return byRequested || byCurrent || null;
+}
+
+function applySprintChanges(current, changes) {
+  const source = changes && typeof changes === "object" ? changes : {};
+  const next = { ...current };
+
+  if (Object.prototype.hasOwnProperty.call(source, "name")) {
+    next.name = String(source.name || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "goal")) {
+    next.goal = String(source.goal || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "startDate")) {
+    next.startDate = String(source.startDate || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "endDate")) {
+    next.endDate = String(source.endDate || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "status")) {
+    next.status = String(source.status || "").trim().toLowerCase();
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "plannedPoints")) {
+    next.plannedPoints = Number(source.plannedPoints || 0);
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "completedPoints")) {
+    next.completedPoints = Number(source.completedPoints || 0);
+  }
+
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+function registerSprintHandlers() {
+  ipcMain.handle(CHANNELS.SPRINT.GET_BY_ID, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const data = readSprintOverviewData();
+      const sprint = data.sprints?.[sprintId] || null;
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+      return IPCResponse.success(sprint);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint by id", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT.GET_CURRENT, async (_event, payload = {}) => {
+    try {
+      const data = readSprintOverviewData();
+      const sprint = resolveSprintRecord(data, payload.sprintId);
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+      return IPCResponse.success(sprint);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load current sprint", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT.GET_TASKS, async (_event, payload = {}) => {
+    try {
+      const data = readSprintOverviewData();
+      const sprint = resolveSprintRecord(data, payload.sprintId);
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+      const tasks = Array.isArray(data.tasksBySprint?.[String(sprint.id || "")])
+        ? data.tasksBySprint[String(sprint.id || "")]
+        : [];
+      return IPCResponse.success(tasks);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint tasks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT.UPDATE, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+      if (!changes) {
+        return IPCResponse.validation("changes", "changes is required");
+      }
+
+      const data = readSprintOverviewData();
+      const current = data.sprints?.[sprintId] || null;
+      if (!current) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const next = applySprintChanges(current, changes);
+      const status = String(next.status || "").trim().toLowerCase();
+      if (status && !["planning", "active", "completed", "cancelled"].includes(status)) {
+        return IPCResponse.validation("status", "status must be planning|active|completed|cancelled");
+      }
+      if (!String(next.name || "").trim()) {
+        return IPCResponse.validation("name", "name cannot be empty");
+      }
+
+      data.sprints[sprintId] = next;
+      if (!data.currentSprintId) {
+        data.currentSprintId = sprintId;
+      }
+      writeSprintOverviewData(data);
+      return IPCResponse.success(next);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update sprint", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT.UPDATE_STATUS, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      const status = String(payload.status || "").trim().toLowerCase();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+      if (!["planning", "active", "completed", "cancelled"].includes(status)) {
+        return IPCResponse.validation("status", "status must be planning|active|completed|cancelled");
+      }
+
+      const data = readSprintOverviewData();
+      const current = data.sprints?.[sprintId] || null;
+      if (!current) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const updated = applySprintChanges(current, { status });
+      data.sprints[sprintId] = updated;
+      if (!data.currentSprintId) {
+        data.currentSprintId = sprintId;
+      }
+      writeSprintOverviewData(data);
+      return IPCResponse.success(updated);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update sprint status", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT.GET_EVENTS, async (_event, payload = {}) => {
+    try {
+      const data = readSprintOverviewData();
+      const sprint = resolveSprintRecord(data, payload.sprintId);
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+      const events = Array.isArray(data.eventsBySprint?.[String(sprint.id || "")])
+        ? data.eventsBySprint[String(sprint.id || "")]
+        : [];
+      return IPCResponse.success(events);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint events", String(error));
+    }
+  });
+}
+
 function projectsDbPath() {
   return path.join(app.getPath("userData"), "projects.db.json");
 }
@@ -4574,6 +4809,7 @@ app.whenReady().then(() => {
   registerMonitoringHandlers();
   registerOnboardingHandlers();
   registerProfileHandlers();
+  registerSprintHandlers();
   registerProjectHandlers();
   registerReportsHandlers();
   registerScrumMasterHandlers();

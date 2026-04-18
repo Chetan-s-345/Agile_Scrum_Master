@@ -79,7 +79,13 @@ const CHANNELS = {
     GET_SUMMARY: "sprint:getSummary",
     GET_BURNDOWN: "sprint:getBurndown",
     GET_VELOCITY_HISTORY: "sprint:getVelocityHistory",
-    GET_CONTRIBUTORS: "sprint:getContributors"
+    GET_CONTRIBUTORS: "sprint:getContributors",
+    GET_BY_ID: "sprint:getById",
+    GET_CURRENT: "sprint:getCurrent",
+    GET_TASKS: "sprint:getTasks",
+    UPDATE: "sprint:update",
+    UPDATE_STATUS: "sprint:updateStatus",
+    GET_EVENTS: "sprint:getEvents"
   },
 
   // Timeline channels
