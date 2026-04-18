@@ -3,6 +3,17 @@
 import { create } from "zustand";
 import { io } from "socket.io-client";
 
+/**
+ * AgentStore - coordinates agent status, approvals, and action feed for the active project.
+ *
+ * Manages: current project scope, polling caches, realtime feed, and approval actions.
+ * Consumers: dashboard surfaces that render agent timeline/approvals and action summaries.
+ * Persisted: no. Data is ephemeral by design so each session reflects current backend state.
+ *
+ * Design note: this lives in a global store because agent updates affect multiple widgets.
+ * Update pattern: poll for eventual consistency, then patch quickly via Socket.IO events.
+ */
+
 function toArray(value, key) {
   if (!value || typeof value !== "object") return [];
   const list = value[key];
@@ -92,6 +103,7 @@ export const useAgentStore = create((set, get) => ({
 
   refreshAll: async () => {
     set({ loading: true, error: "" });
+    // Fetch these in parallel so the drawer can render a coherent snapshot quickly.
     await Promise.all([get().refreshAgents(), get().refreshApprovals(), get().refreshActions()]);
     set({ loading: false });
   },
@@ -105,6 +117,7 @@ export const useAgentStore = create((set, get) => ({
 
     const socket = io(url, { transports: ["websocket", "polling"] });
     socket.on("connect", () => {
+      // Joining project rooms keeps the stream scoped and avoids cross-project event noise.
       socket.emit("project:join", { projectId: get().projectId });
     });
 

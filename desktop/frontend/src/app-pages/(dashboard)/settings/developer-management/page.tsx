@@ -2,31 +2,62 @@
 
 import { useEffect, useState } from "react";
 
-type Member = { id: string; fullName?: string; email?: string; role?: string };
+type Member = {
+  id: string;
+  name?: string;
+  fullName?: string;
+  email?: string;
+  role?: string;
+  teams?: string[];
+  lastActive?: string;
+  status?: string;
+};
+
 type Invitation = {
   id: string;
   email: string;
   role: string;
-  status: string;
-  created_at?: string;
-  expires_at?: string;
+  status?: string;
+  invitedBy?: string;
+  createdAt?: string;
+  expiresAt?: string;
 };
-type InvitationsResp = { items?: Invitation[]; invitations?: Invitation[]; error?: string };
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+function safe(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  return String(value);
+}
+
+function formatDate(value?: string): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "-";
+  return date.toLocaleDateString();
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+  if (!window.desktopApi?.invoke) {
+    throw new Error("Desktop IPC bridge unavailable");
   }
-  return { ok: resp.ok, status: resp.status, data };
+
+  const response = await window.desktopApi.invoke(channel, payload);
+  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
+    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
+    if (!wrapped.ok) {
+      throw new Error(safe(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
+    }
+    return (wrapped.data as T) ?? (null as T);
+  }
+
+  return response as T;
 }
 
 export default function DeveloperManagementPage() {
   const [loading, setLoading] = useState(true);
+  const [savingRoleFor, setSavingRoleFor] = useState<string | null>(null);
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
+  const [revokingInvitationId, setRevokingInvitationId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [pendingInvitations, setPendingInvitations] = useState<Invitation[]>([]);
@@ -37,28 +68,22 @@ export default function DeveloperManagementPage() {
   async function load() {
     setLoading(true);
     setError(null);
-    const [resp, invitationsResp] = await Promise.all([
-      fetchJson<{ members?: Member[] }>("/api/org/members?page=1&limit=200"),
-      fetchJson<InvitationsResp>("/api/org/invitations"),
-    ]);
+    try {
+      const [membersData, invitationsData] = await Promise.all([
+        invokeDesktop<Member[]>("developers:getOrgMembers"),
+        invokeDesktop<Invitation[]>("developers:getPendingInvitations")
+      ]);
 
-    if (!resp.ok) {
-      setError(`Failed to load developers (${resp.status})`);
+      setMembers(Array.isArray(membersData) ? membersData : []);
+      setPendingInvitations(Array.isArray(invitationsData) ? invitationsData : []);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message || "Failed to load developers");
       setMembers([]);
       setPendingInvitations([]);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const invitations = Array.isArray(invitationsResp.data?.items)
-      ? invitationsResp.data.items
-      : Array.isArray(invitationsResp.data?.invitations)
-      ? invitationsResp.data.invitations
-      : [];
-
-    setMembers(Array.isArray(resp.data?.members) ? resp.data.members : []);
-    setPendingInvitations(invitations.filter((inv) => String(inv.status || "").toLowerCase() === "pending"));
-    setLoading(false);
   }
 
   useEffect(() => {
@@ -75,37 +100,73 @@ export default function DeveloperManagementPage() {
     setInviting(true);
     setError(null);
 
-    const resp = await fetchJson<{ error?: string }>("/api/org/members/invite", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: nextEmail, role }),
-    });
-
-    setInviting(false);
-    if (!resp.ok) {
-      setError(resp.data?.error || "Invite failed");
-      return;
+    try {
+      await invokeDesktop<Invitation>("developers:inviteToOrg", { email: nextEmail, role });
+      setEmail("");
+      await load();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message || "Invite failed");
+    } finally {
+      setInviting(false);
     }
-
-    setEmail("");
-    await load();
   }
 
   async function removeDeveloper(memberId: string) {
     const confirmed = window.confirm("Remove this developer from organization?");
     if (!confirmed) return;
 
-    const resp = await fetchJson<{ error?: string }>(`/api/org/members/${encodeURIComponent(memberId)}`, {
-      method: "DELETE",
-    });
-
-    if (!resp.ok) {
-      setError(resp.data?.error || "Remove failed");
-      return;
+    setRemovingMemberId(memberId);
+    setError(null);
+    try {
+      const result = await invokeDesktop<{ success?: boolean }>("developers:removeFromOrg", { userId: memberId });
+      if (!result?.success) {
+        throw new Error("Remove failed");
+      }
+      await load();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message || "Remove failed");
+    } finally {
+      setRemovingMemberId(null);
     }
-
-    await load();
   }
+
+  async function updateRole(memberId: string, nextRole: string) {
+    setSavingRoleFor(memberId);
+    setError(null);
+    try {
+      const updated = await invokeDesktop<Member>("developers:updateRole", { userId: memberId, role: nextRole });
+      setMembers((prev) => prev.map((member) => (member.id === memberId ? { ...member, ...updated } : member)));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message || "Role update failed");
+      await load();
+    } finally {
+      setSavingRoleFor(null);
+    }
+  }
+
+  async function revokeInvitation(invitationId: string) {
+    setRevokingInvitationId(invitationId);
+    setError(null);
+    try {
+      const result = await invokeDesktop<{ success?: boolean }>("developers:revokeInvitation", { invitationId });
+      if (!result?.success) {
+        throw new Error("Revoke failed");
+      }
+      setPendingInvitations((prev) => prev.filter((inv) => inv.id !== invitationId));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message || "Revoke failed");
+    } finally {
+      setRevokingInvitationId(null);
+    }
+  }
+
+  const seatUsed = members.length;
+  const seatTotal = Math.max(1, Math.max(20, members.length));
+  const nearSeatLimit = seatUsed >= Math.ceil(seatTotal * 0.8);
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
@@ -118,6 +179,16 @@ export default function DeveloperManagementPage() {
         {error ? (
           <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-4 py-3 text-sm text-red-700 dark:text-red-300">{error}</div>
         ) : null}
+
+        <section className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+          <div className="text-sm font-semibold text-slate-900 dark:text-white mb-3">Seats</div>
+          <div className="text-sm text-slate-700 dark:text-slate-200">
+            Used: <span className="font-semibold">{seatUsed}</span> / <span className="font-semibold">{seatTotal}</span>
+          </div>
+          {nearSeatLimit ? (
+            <div className="mt-2 text-xs text-amber-700 dark:text-amber-300">Seat usage is nearing capacity. Consider upgrading your plan.</div>
+          ) : null}
+        </section>
 
         <section className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
           <div className="text-sm font-semibold text-slate-900 dark:text-white mb-3">Add Developer</div>
@@ -161,29 +232,47 @@ export default function DeveloperManagementPage() {
                     <th className="px-4 py-2 text-left">Name</th>
                     <th className="px-4 py-2 text-left">Email</th>
                     <th className="px-4 py-2 text-left">Role</th>
+                    <th className="px-4 py-2 text-left">Teams</th>
+                    <th className="px-4 py-2 text-left">Last Active</th>
+                    <th className="px-4 py-2 text-left">Status</th>
                     <th className="px-4 py-2 text-left">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {members.map((m) => (
                     <tr key={m.id} className="border-b border-slate-100 dark:border-zinc-800">
-                      <td className="px-4 py-2">{m.fullName || "-"}</td>
+                      <td className="px-4 py-2">{m.fullName || m.name || "-"}</td>
                       <td className="px-4 py-2">{m.email || "-"}</td>
-                      <td className="px-4 py-2">{m.role || "developer"}</td>
+                      <td className="px-4 py-2">
+                        <select
+                          value={safe(m.role) || "developer"}
+                          onChange={(e) => void updateRole(m.id, e.target.value)}
+                          disabled={savingRoleFor === m.id}
+                          className="rounded border border-slate-200 dark:border-zinc-700 px-2 py-1 bg-white dark:bg-zinc-950"
+                        >
+                          <option value="developer">developer</option>
+                          <option value="manager">manager</option>
+                          <option value="admin">admin</option>
+                        </select>
+                      </td>
+                      <td className="px-4 py-2">{Array.isArray(m.teams) && m.teams.length ? m.teams.join(", ") : "-"}</td>
+                      <td className="px-4 py-2">{formatDate(m.lastActive)}</td>
+                      <td className="px-4 py-2">{safe(m.status) || "active"}</td>
                       <td className="px-4 py-2">
                         <button
                           type="button"
                           onClick={() => void removeDeveloper(m.id)}
+                          disabled={removingMemberId === m.id}
                           className="rounded border border-red-300 dark:border-red-900 px-2 py-1 text-xs font-semibold text-red-700 dark:text-red-300"
                         >
-                          Remove
+                          {removingMemberId === m.id ? "Removing..." : "Remove"}
                         </button>
                       </td>
                     </tr>
                   ))}
                   {!members.length ? (
                     <tr>
-                      <td colSpan={4} className="px-4 py-6 text-center text-slate-600 dark:text-slate-300">No developers found.</td>
+                      <td colSpan={7} className="px-4 py-6 text-center text-slate-600 dark:text-slate-300">No developers found.</td>
                     </tr>
                   ) : null}
                 </tbody>
@@ -203,10 +292,22 @@ export default function DeveloperManagementPage() {
                   <div>
                     <div className="font-medium text-slate-900 dark:text-white">{inv.email}</div>
                     <div className="text-xs text-slate-600 dark:text-slate-300">Role: {inv.role}</div>
+                    <div className="text-xs text-slate-600 dark:text-slate-300">Invited by: {safe(inv.invitedBy) || "-"}</div>
+                    <div className="text-xs text-slate-600 dark:text-slate-300">Expiry: {formatDate(inv.expiresAt)}</div>
                   </div>
-                  <span className="rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 px-2 py-1 text-xs font-semibold">
-                    Pending
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 px-2 py-1 text-xs font-semibold">
+                      Pending
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void revokeInvitation(inv.id)}
+                      disabled={revokingInvitationId === inv.id}
+                      className="rounded border border-red-300 dark:border-red-900 px-2 py-1 text-xs font-semibold text-red-700 dark:text-red-300"
+                    >
+                      {revokingInvitationId === inv.id ? "Revoking..." : "Revoke"}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

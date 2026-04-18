@@ -85,6 +85,7 @@ const appPages: LinkItem[] = [
   { label: "Agentic Scrum Master", href: "/scrum-master", icon: Bot },
   { label: "Sprints", href: "/sprints", icon: Flag },
   { label: "Tasks", href: "/tasks", icon: ListTodo },
+  { label: "Pages", href: "/pages", icon: PanelsTopLeft },
   { label: "GitHub", href: "/github", icon: GitBranch },
   { label: "Assignment", href: "/assignment", icon: Compass },
   { label: "Monitoring", href: "/monitoring", icon: Activity },
