@@ -220,11 +220,24 @@ const CHANNELS = {
 
   // User profile management
   PROFILE: {
+    GET: "profile:get",
     GET_CURRENT: "profile:getCurrent",
     UPDATE: "profile:update",
     CHANGE_PASSWORD: "profile:changePassword",
+    CHANGE_EMAIL: "profile:changeEmail",
     UPLOAD_AVATAR: "profile:uploadAvatar",
-    GET_ACTIVITY_STATS: "profile:getActivityStats"
+    GET_ACTIVITY_STATS: "profile:getActivityStats",
+    GET_SESSIONS: "profile:getSessions",
+    REVOKE_SESSION: "profile:revokeSession",
+    TOGGLE_2FA: "profile:toggle2FA"
+  },
+
+  // User preferences and personal defaults
+  PREFERENCES: {
+    GET: "preferences:get",
+    UPDATE: "preferences:update",
+    GET_AUTO_TASK_RULES: "preferences:getAutoTaskRules",
+    SAVE_AUTO_TASK_RULES: "preferences:saveAutoTaskRules"
   },
 
   // Project detail and management

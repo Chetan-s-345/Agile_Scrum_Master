@@ -1391,16 +1391,26 @@ function profileDbPath() {
 }
 
 function defaultProfileData() {
+  const now = new Date();
   return {
     userProfile: {
       id: "user-1",
+      displayName: "Demo User",
       name: "Demo User",
       email: "demo@agilescrummaster.dev",
       role: "member",
+      title: "Scrum Master",
+      phone: "+1 (555) 0142",
       bio: "Scrum practitioner focused on team flow and delivery quality.",
       timezone: "UTC",
       githubUsername: "demo-user",
       slack: "@demo-user",
+      ssoProviders: [
+        { id: "google", name: "Google", connected: true },
+        { id: "github", name: "GitHub", connected: false },
+      ],
+      twoFactorEnabled: false,
+      twoFactorQrCodeUrl: null,
       avatarUrl: null,
       notifications: {
         emailDailyDigest: true,
@@ -1408,6 +1418,22 @@ function defaultProfileData() {
         standupReminders: true
       }
     },
+    sessions: [
+      {
+        sessionId: "session-current",
+        device: "Desktop App (Windows)",
+        ipAddress: "127.0.0.1",
+        lastActiveAt: now.toISOString(),
+        current: true,
+      },
+      {
+        sessionId: "session-web-1",
+        device: "Chrome on macOS",
+        ipAddress: "10.0.0.42",
+        lastActiveAt: new Date(now.getTime() - 3 * 60 * 60 * 1000).toISOString(),
+        current: false,
+      },
+    ],
     activityStats: {
       tasksCompleted: 42,
       prsReviewed: 17,
@@ -1431,8 +1457,20 @@ function readProfileData() {
     return {
       userProfile: {
         ...defaults.userProfile,
-        ...(parsed?.userProfile && typeof parsed.userProfile === "object" ? parsed.userProfile : {})
+        ...(parsed?.userProfile && typeof parsed.userProfile === "object" ? parsed.userProfile : {}),
+        displayName: String(
+          parsed?.userProfile?.displayName || parsed?.userProfile?.name || defaults.userProfile.displayName
+        ),
+        name: String(parsed?.userProfile?.name || parsed?.userProfile?.displayName || defaults.userProfile.name),
+        title: String(parsed?.userProfile?.title || defaults.userProfile.title),
+        phone: String(parsed?.userProfile?.phone || defaults.userProfile.phone),
+        ssoProviders: Array.isArray(parsed?.userProfile?.ssoProviders)
+          ? parsed.userProfile.ssoProviders
+          : defaults.userProfile.ssoProviders,
+        twoFactorEnabled: Boolean(parsed?.userProfile?.twoFactorEnabled),
+        twoFactorQrCodeUrl: parsed?.userProfile?.twoFactorQrCodeUrl || null,
       },
+      sessions: Array.isArray(parsed?.sessions) ? parsed.sessions : defaults.sessions,
       activityStats: {
         ...defaults.activityStats,
         ...(parsed?.activityStats && typeof parsed.activityStats === "object" ? parsed.activityStats : {})
@@ -1449,6 +1487,15 @@ function writeProfileData(data) {
 }
 
 function registerProfileHandlers() {
+  ipcMain.handle(CHANNELS.PROFILE.GET, async () => {
+    try {
+      const data = readProfileData();
+      return IPCResponse.success(data.userProfile);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load profile", String(error));
+    }
+  });
+
   ipcMain.handle(CHANNELS.PROFILE.GET_CURRENT, async () => {
     try {
       const data = readProfileData();
@@ -1463,10 +1510,15 @@ function registerProfileHandlers() {
       const data = readProfileData();
       const changes = payload && typeof payload === "object" ? payload : {};
 
+      const nextDisplayName = String(changes.displayName || changes.name || data.userProfile.displayName || data.userProfile.name);
+
       data.userProfile = {
         ...data.userProfile,
-        name: String(changes.name || data.userProfile.name),
+        displayName: nextDisplayName,
+        name: nextDisplayName,
+        title: String(changes.title || data.userProfile.title || ""),
         bio: String(changes.bio || data.userProfile.bio || ""),
+        phone: String(changes.phone || data.userProfile.phone || ""),
         timezone: String(changes.timezone || data.userProfile.timezone || "UTC"),
         notifications:
           changes.notifications && typeof changes.notifications === "object"
@@ -1479,6 +1531,29 @@ function registerProfileHandlers() {
       return IPCResponse.success(data.userProfile);
     } catch (error) {
       return IPCResponse.internalError("Failed to update profile", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PROFILE.CHANGE_EMAIL, async (_event, payload = {}) => {
+    try {
+      const newEmail = String(payload.newEmail || "").trim().toLowerCase();
+      const password = String(payload.password || "");
+
+      if (!newEmail || !newEmail.includes("@")) {
+        return IPCResponse.validation("newEmail", "newEmail must be a valid email");
+      }
+      if (!password) {
+        return IPCResponse.validation("password", "password is required");
+      }
+
+      const data = readProfileData();
+      data.userProfile.email = newEmail;
+      data.userProfile.updatedAt = new Date().toISOString();
+      writeProfileData(data);
+
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to change email", String(error));
     }
   });
 
@@ -1526,6 +1601,63 @@ function registerProfileHandlers() {
       return IPCResponse.success(data.activityStats);
     } catch (error) {
       return IPCResponse.internalError("Failed to load profile activity stats", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PROFILE.GET_SESSIONS, async () => {
+    try {
+      const data = readProfileData();
+      return IPCResponse.success(Array.isArray(data.sessions) ? data.sessions : []);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load active sessions", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PROFILE.REVOKE_SESSION, async (_event, payload = {}) => {
+    try {
+      const sessionId = String(payload.sessionId || "").trim();
+      if (!sessionId) {
+        return IPCResponse.validation("sessionId", "sessionId is required");
+      }
+
+      const data = readProfileData();
+      const index = (Array.isArray(data.sessions) ? data.sessions : []).findIndex(
+        (session) => String(session.sessionId || "") === sessionId
+      );
+      if (index < 0) {
+        return IPCResponse.notFound("Session");
+      }
+
+      if (Boolean(data.sessions[index]?.current)) {
+        return IPCResponse.validation("sessionId", "current session cannot be revoked");
+      }
+
+      data.sessions.splice(index, 1);
+      writeProfileData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to revoke session", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PROFILE.TOGGLE_2FA, async (_event, payload = {}) => {
+    try {
+      const enabled = Boolean(payload.enabled);
+      const data = readProfileData();
+
+      data.userProfile.twoFactorEnabled = enabled;
+      data.userProfile.twoFactorQrCodeUrl = enabled
+        ? `otpauth://totp/AgileScrumMaster:${encodeURIComponent(String(data.userProfile.email || "user"))}?secret=ASM${Math.random().toString(36).slice(2, 12).toUpperCase()}&issuer=AgileScrumMaster`
+        : null;
+      data.userProfile.updatedAt = new Date().toISOString();
+      writeProfileData(data);
+
+      return IPCResponse.success({
+        success: true,
+        qrCodeUrl: data.userProfile.twoFactorQrCodeUrl || undefined,
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to toggle 2FA", String(error));
     }
   });
 }
@@ -3565,6 +3697,203 @@ function registerOrgHandlers() {
   });
 }
 
+function preferencesDbPath() {
+  return path.join(app.getPath("userData"), "preferences.db.json");
+}
+
+function defaultUserPreferences() {
+  return {
+    theme: "system",
+    language: "en",
+    notifications: {
+      email: {
+        sprintAlerts: true,
+        digestEmail: true,
+        assignmentAlerts: true,
+      },
+      inApp: {
+        sprintAlerts: true,
+        digestEmail: true,
+        assignmentAlerts: true,
+      },
+    },
+  };
+}
+
+function defaultAutoTaskRules() {
+  return [
+    { id: "createFromIssues", category: "toggle", enabled: true },
+    { id: "createFromUnlinkedPrs", category: "toggle", enabled: true },
+    { id: "sprintReadyLabel", category: "setting", value: "sprint-ready" },
+    { id: "label:bug", category: "labelMapping", label: "bug", taskType: "bug" },
+    { id: "label:enhancement", category: "labelMapping", label: "enhancement", taskType: "story" },
+    { id: "label:task", category: "labelMapping", label: "task", taskType: "task" },
+  ];
+}
+
+function normalizePreferences(input) {
+  const defaults = defaultUserPreferences();
+  const source = input && typeof input === "object" ? input : {};
+  const notifications = source.notifications && typeof source.notifications === "object" ? source.notifications : {};
+  const email = notifications.email && typeof notifications.email === "object" ? notifications.email : {};
+  const inApp = notifications.inApp && typeof notifications.inApp === "object" ? notifications.inApp : {};
+  const theme = String(source.theme || defaults.theme).toLowerCase();
+
+  return {
+    theme: theme === "dark" || theme === "light" || theme === "system" ? theme : defaults.theme,
+    language: String(source.language || defaults.language || "en"),
+    notifications: {
+      email: {
+        sprintAlerts: Boolean(email.sprintAlerts ?? defaults.notifications.email.sprintAlerts),
+        digestEmail: Boolean(email.digestEmail ?? defaults.notifications.email.digestEmail),
+        assignmentAlerts: Boolean(email.assignmentAlerts ?? defaults.notifications.email.assignmentAlerts),
+      },
+      inApp: {
+        sprintAlerts: Boolean(inApp.sprintAlerts ?? defaults.notifications.inApp.sprintAlerts),
+        digestEmail: Boolean(inApp.digestEmail ?? defaults.notifications.inApp.digestEmail),
+        assignmentAlerts: Boolean(inApp.assignmentAlerts ?? defaults.notifications.inApp.assignmentAlerts),
+      },
+    },
+  };
+}
+
+function normalizeAutoTaskRules(rulesInput) {
+  const allowedTypes = new Set(["task", "story", "bug"]);
+  const fallback = defaultAutoTaskRules();
+  if (!Array.isArray(rulesInput) || !rulesInput.length) {
+    return fallback;
+  }
+
+  return rulesInput
+    .map((rule) => {
+      if (!rule || typeof rule !== "object") {
+        return null;
+      }
+
+      const category = String(rule.category || "").trim();
+      const id = String(rule.id || "").trim();
+      if (!category || !id) {
+        return null;
+      }
+
+      if (category === "toggle") {
+        return { id, category, enabled: Boolean(rule.enabled) };
+      }
+
+      if (category === "setting") {
+        return { id, category, value: String(rule.value || "").trim() };
+      }
+
+      if (category === "labelMapping") {
+        const label = String(rule.label || "").trim().toLowerCase();
+        const taskType = String(rule.taskType || "task").trim().toLowerCase();
+        if (!label || !allowedTypes.has(taskType)) {
+          return null;
+        }
+        return { id, category, label, taskType };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+}
+
+function readPreferencesData() {
+  try {
+    const filePath = preferencesDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = {
+        userPreferences: defaultUserPreferences(),
+        autoTaskRules: defaultAutoTaskRules(),
+      };
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return {
+      userPreferences: normalizePreferences(parsed?.userPreferences),
+      autoTaskRules: normalizeAutoTaskRules(parsed?.autoTaskRules),
+    };
+  } catch {
+    return {
+      userPreferences: defaultUserPreferences(),
+      autoTaskRules: defaultAutoTaskRules(),
+    };
+  }
+}
+
+function writePreferencesData(data) {
+  fs.writeFileSync(preferencesDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function registerPreferencesHandlers() {
+  ipcMain.handle(CHANNELS.PREFERENCES.GET, async () => {
+    try {
+      const data = readPreferencesData();
+      return IPCResponse.success(data.userPreferences);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load user preferences", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PREFERENCES.UPDATE, async (_event, payload = {}) => {
+    try {
+      const current = readPreferencesData();
+      const incoming = {
+        ...current.userPreferences,
+        theme: payload.theme ?? current.userPreferences.theme,
+        language: payload.language ?? current.userPreferences.language,
+        notifications:
+          payload.notifications && typeof payload.notifications === "object"
+            ? {
+                ...current.userPreferences.notifications,
+                ...payload.notifications,
+              }
+            : current.userPreferences.notifications,
+      };
+      const normalized = normalizePreferences(incoming);
+
+      writePreferencesData({
+        ...current,
+        userPreferences: normalized,
+      });
+
+      return IPCResponse.success(normalized);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update user preferences", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PREFERENCES.GET_AUTO_TASK_RULES, async () => {
+    try {
+      const data = readPreferencesData();
+      return IPCResponse.success(data.autoTaskRules);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load auto-task rules", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PREFERENCES.SAVE_AUTO_TASK_RULES, async (_event, payload = {}) => {
+    try {
+      const current = readPreferencesData();
+      if (!Array.isArray(payload.rules)) {
+        return IPCResponse.validation("rules", "rules must be an array");
+      }
+
+      const nextRules = normalizeAutoTaskRules(payload.rules);
+      writePreferencesData({
+        ...current,
+        autoTaskRules: nextRules,
+      });
+
+      return IPCResponse.success(nextRules);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to save auto-task rules", String(error));
+    }
+  });
+}
+
 function registerSystemHandlers() {
   ipcMain.handle(CHANNELS.SYSTEM.OPEN_EXTERNAL, async (_event, payload = {}) => {
     try {
@@ -3643,6 +3972,7 @@ app.whenReady().then(() => {
   registerBillingHandlers();
   registerDevelopersHandlers();
   registerOrgHandlers();
+  registerPreferencesHandlers();
   createWindow();
 
   for (const deepLink of initialDeepLinks) {

@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
-type ThemeMode = "dark" | "light";
+type ThemeMode = "dark" | "light" | "system";
 
 type ThemeState = {
   theme: ThemeMode;
@@ -14,9 +14,13 @@ type ThemeState = {
 
 function applyTheme(theme: ThemeMode) {
   if (typeof document === "undefined") return;
+  const resolvedTheme =
+    theme === "system"
+      ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+      : theme;
   const root = document.documentElement;
   root.setAttribute("data-theme", theme);
-  root.classList.toggle("dark", theme === "dark");
+  root.classList.toggle("dark", resolvedTheme === "dark");
 }
 
 export const useThemeStore = create<ThemeState>()(
