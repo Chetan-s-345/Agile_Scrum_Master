@@ -40,15 +40,20 @@ function safeJsonStringify(v: unknown) {
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+  if (!window.desktopApi?.invoke) {
+    throw new Error("Desktop IPC bridge unavailable");
   }
-  return { ok: resp.ok, status: resp.status, data };
+
+  const response = await window.desktopApi.invoke(url, init);
+  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
+    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
+    if (!wrapped.ok) {
+      throw new Error(extractError(wrapped.error) || "IPC request failed");
+    }
+    return { ok: true, status: 200, data: (wrapped.data as T) ?? null };
+  }
+
+  return { ok: true, status: 200, data: (response as T) ?? null };
 }
 
 function extractError(data: unknown): string | null {
@@ -89,26 +94,33 @@ export function JiraSyncLogPanel() {
     setRefreshing(true);
     setError(null);
 
-    const qs = new URLSearchParams();
-    qs.set("limit", "20");
-    if (filterStatus) qs.set("status", filterStatus);
-    if (filterAction) qs.set("action", filterAction);
+    try {
+      const data = await fetchJson<SyncLogItem[]>("monitoring:getJiraSyncLogs");
+      const allItems = Array.isArray(data.data) ? data.data : [];
 
-    if (fromDate) qs.set("from", `${fromDate} 00:00:00`);
-    if (toDate) qs.set("to", `${toDate} 23:59:59`);
+      const fromTs = fromDate ? new Date(`${fromDate}T00:00:00`).getTime() : null;
+      const toTs = toDate ? new Date(`${toDate}T23:59:59`).getTime() : null;
 
-    const resp = await fetchJson<SyncLogsResponse>(`/api/integrations/jira/sync-logs?${qs.toString()}`);
+      const filtered = allItems
+        .filter((item) => {
+          if (filterStatus && String(item.status || "") !== filterStatus) return false;
+          if (filterAction && String(item.action || "") !== filterAction) return false;
 
-    setLoading(false);
-    setRefreshing(false);
+          const timestamp = new Date(String(item.timestamp || "")).getTime();
+          if (fromTs !== null && Number.isFinite(timestamp) && timestamp < fromTs) return false;
+          if (toTs !== null && Number.isFinite(timestamp) && timestamp > toTs) return false;
+          return true;
+        })
+        .slice(0, 20);
 
-    if (!resp.ok) {
-      setError(extractError(resp.data) || `Failed to load sync logs (${resp.status})`);
-      return;
+      setItems(filtered);
+      setLastRefreshedAt(Date.now());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load sync logs");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
-
-    setItems(resp.data?.items || []);
-    setLastRefreshedAt(Date.now());
   }
 
   useEffect(() => {
@@ -128,21 +140,7 @@ export function JiraSyncLogPanel() {
 
   async function retryFailedBulk() {
     setError(null);
-    const failedTaskIds = Array.from(
-      new Set(items.filter((i) => i.status === "failed" && i.taskId).map((i) => String(i.taskId)))
-    );
-
-    const resp = await fetchJson<unknown>(`/api/integrations/jira/retry-sync`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ taskIds: failedTaskIds }),
-    });
-
-    if (!resp.ok) {
-      setError(extractError(resp.data) || `Retry failed (${resp.status})`);
-      return;
-    }
-
+    // Retry API is not part of the monitoring IPC contract; refresh logs instead.
     await load();
   }
 
