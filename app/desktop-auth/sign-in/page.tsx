@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 
 const DEFAULT_CALLBACK_URI = "asmdesktop://auth-callback";
 
@@ -18,7 +18,7 @@ function buildDesktopCallbackUrl(redirectUri: string, token: string): string {
   return callback.toString();
 }
 
-export default function DesktopSignInPage() {
+function DesktopSignInContent() {
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,5 +108,13 @@ export default function DesktopSignInPage() {
         </p>
       </div>
     </main>
+  );
+}
+
+export default function DesktopSignInPage() {
+  return (
+    <Suspense fallback={<main className="min-h-screen bg-[#0a0a0a]" />}>
+      <DesktopSignInContent />
+    </Suspense>
   );
 }

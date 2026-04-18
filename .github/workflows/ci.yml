@@ -28,18 +28,31 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: cloud/package-lock.json
+          cache-dependency-path: "**/package-lock.json"
+
+      - name: Resolve cloud app directory
+        id: cloud-dir
+        shell: bash
+        run: |
+          if [[ -f "cloud/package.json" ]]; then
+            echo "app_dir=cloud" >> "$GITHUB_OUTPUT"
+          elif [[ -f "package.json" ]]; then
+            echo "app_dir=." >> "$GITHUB_OUTPUT"
+          else
+            echo "Could not find cloud app package.json"
+            exit 1
+          fi
 
       - name: Install cloud dependencies
-        working-directory: cloud
+        working-directory: ${{ steps.cloud-dir.outputs.app_dir }}
         run: npm ci
 
       - name: Lint cloud
-        working-directory: cloud
+        working-directory: ${{ steps.cloud-dir.outputs.app_dir }}
         run: npm run lint
 
       - name: Build cloud
-        working-directory: cloud
+        working-directory: ${{ steps.cloud-dir.outputs.app_dir }}
         run: npm run build
 
   desktop-quality:
