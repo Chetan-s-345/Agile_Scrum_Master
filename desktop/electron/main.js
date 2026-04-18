@@ -3377,6 +3377,194 @@ function registerDevelopersHandlers() {
   });
 }
 
+function orgSettingsDbPath() {
+  return path.join(app.getPath("userData"), "org.settings.db.json");
+}
+
+function defaultOrgSettings() {
+  const now = new Date().toISOString();
+  return {
+    id: "org-default",
+    name: "Agile Scrum Master",
+    slug: "agile-scrum-master",
+    logoUrl: "",
+    description: "",
+    industry: "Software",
+    size: "1-10",
+    ownerId: "user-1",
+    preferences: {
+      defaultSprintLengthDays: 14,
+      workingDays: ["monday", "tuesday", "wednesday", "thursday", "friday"],
+      timezone: "UTC",
+      notificationSettings: {},
+      dbStatus: {
+        provider: "postgres",
+        connectionMode: "manual",
+        status: "not_provisioned",
+        provisioned: false,
+        connected: false,
+        projectId: null,
+        connectionStringMasked: null,
+      },
+    },
+    plan: {
+      slug: "free",
+      name: "Free",
+    },
+    subscription: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function readOrgSettings() {
+  try {
+    const filePath = orgSettingsDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultOrgSettings();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const defaults = defaultOrgSettings();
+    const preferences = parsed?.preferences && typeof parsed.preferences === "object" ? parsed.preferences : {};
+
+    return {
+      ...defaults,
+      ...parsed,
+      preferences: {
+        ...defaults.preferences,
+        ...preferences,
+      },
+    };
+  } catch {
+    return defaultOrgSettings();
+  }
+}
+
+function writeOrgSettings(settings) {
+  fs.writeFileSync(orgSettingsDbPath(), JSON.stringify(settings, null, 2), "utf8");
+}
+
+function registerOrgHandlers() {
+  ipcMain.handle(CHANNELS.ORG.GET_SETTINGS, async () => {
+    try {
+      const settings = readOrgSettings();
+      return IPCResponse.success(settings);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load org settings", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.ORG.UPDATE, async (_event, payload = {}) => {
+    try {
+      const current = readOrgSettings();
+      const nextName = payload.name == null ? current.name : String(payload.name || "").trim();
+
+      if (!nextName) {
+        return IPCResponse.validation("name", "name cannot be empty");
+      }
+
+      const incomingPreferences = payload.preferences && typeof payload.preferences === "object" ? payload.preferences : {};
+      const next = {
+        ...current,
+        name: nextName,
+        logoUrl: payload.logoUrl == null ? current.logoUrl : String(payload.logoUrl || "").trim(),
+        description:
+          payload.description == null ? current.description : String(payload.description || "").trim(),
+        industry: payload.industry == null ? current.industry : String(payload.industry || "").trim(),
+        size: payload.size == null ? current.size : String(payload.size || "").trim(),
+        preferences: {
+          ...current.preferences,
+          ...incomingPreferences,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+
+      writeOrgSettings(next);
+      return IPCResponse.success(next);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update org settings", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.ORG.UPLOAD_LOGO, async (_event, payload = {}) => {
+    try {
+      const base64Image = String(payload.base64Image || "").trim();
+      if (!base64Image) {
+        return IPCResponse.validation("base64Image", "base64Image is required");
+      }
+
+      const logoUrl = base64Image.startsWith("data:image/")
+        ? base64Image
+        : `data:image/png;base64,${base64Image}`;
+
+      const current = readOrgSettings();
+      const next = {
+        ...current,
+        logoUrl,
+        updatedAt: new Date().toISOString(),
+      };
+      writeOrgSettings(next);
+
+      return IPCResponse.success({ logoUrl });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to upload org logo", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.ORG.TRANSFER_OWNERSHIP, async (_event, payload = {}) => {
+    try {
+      const newOwnerId = String(payload.newOwnerId || "").trim();
+      if (!newOwnerId) {
+        return IPCResponse.validation("newOwnerId", "newOwnerId is required");
+      }
+
+      const developers = readDevelopersData();
+      const exists = developers.members.some((member) => String(member.id || "") === newOwnerId);
+      if (!exists) {
+        return IPCResponse.notFound("New owner");
+      }
+
+      const current = readOrgSettings();
+      const next = {
+        ...current,
+        ownerId: newOwnerId,
+        updatedAt: new Date().toISOString(),
+      };
+      writeOrgSettings(next);
+
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to transfer ownership", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.ORG.DELETE, async (_event, payload = {}) => {
+    try {
+      const confirmName = String(payload.confirmName || "").trim();
+      const current = readOrgSettings();
+
+      if (!confirmName) {
+        return IPCResponse.validation("confirmName", "confirmName is required");
+      }
+      if (confirmName !== String(current.name || "")) {
+        return IPCResponse.validation("confirmName", "confirmName does not match organization name");
+      }
+
+      const filePath = orgSettingsDbPath();
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete organization", String(error));
+    }
+  });
+}
+
 function registerSystemHandlers() {
   ipcMain.handle(CHANNELS.SYSTEM.OPEN_EXTERNAL, async (_event, payload = {}) => {
     try {
@@ -3454,6 +3642,7 @@ app.whenReady().then(() => {
   registerAgentHandlers();
   registerBillingHandlers();
   registerDevelopersHandlers();
+  registerOrgHandlers();
   createWindow();
 
   for (const deepLink of initialDeepLinks) {

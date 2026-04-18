@@ -296,6 +296,15 @@ const CHANNELS = {
     REVOKE_INVITATION: "developers:revokeInvitation"
   },
 
+  // Organization settings and ownership controls
+  ORG: {
+    GET_SETTINGS: "org:getSettings",
+    UPDATE: "org:update",
+    UPLOAD_LOGO: "org:uploadLogo",
+    TRANSFER_OWNERSHIP: "org:transferOwnership",
+    DELETE: "org:delete"
+  },
+
   // Events (one-way from main to renderer)
   EVENTS: {
     UPDATE_STATUS: "updates:status",
