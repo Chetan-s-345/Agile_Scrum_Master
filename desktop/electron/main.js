@@ -3303,6 +3303,616 @@ function registerBillingHandlers() {
   });
 }
 
+function teamsDbPath() {
+  return path.join(app.getPath("userData"), "teams.db.json");
+}
+
+function defaultTeamsData() {
+  return {
+    teams: [
+      {
+        id: "team-1",
+        name: "Platform",
+        description: "Build and maintain the core platform.",
+        leadId: "user-1",
+        projectIds: ["project-1", "project-2"],
+        memberIds: ["user-1", "user-2"],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: "team-2",
+        name: "Web",
+        description: "Deliver dashboard and web experiences.",
+        leadId: "user-3",
+        projectIds: ["project-3"],
+        memberIds: ["user-3"],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  };
+}
+
+function normalizeTeamRecord(input) {
+  return {
+    id: String(input?.id || randomUUID()),
+    name: String(input?.name || "").trim(),
+    description: String(input?.description || "").trim(),
+    leadId: String(input?.leadId || "").trim(),
+    projectIds: Array.isArray(input?.projectIds)
+      ? input.projectIds.map((id) => String(id || "").trim()).filter(Boolean)
+      : [],
+    memberIds: Array.isArray(input?.memberIds)
+      ? input.memberIds.map((id) => String(id || "").trim()).filter(Boolean)
+      : [],
+    createdAt: String(input?.createdAt || new Date().toISOString()),
+    updatedAt: String(input?.updatedAt || new Date().toISOString()),
+  };
+}
+
+function readTeamsData() {
+  try {
+    const filePath = teamsDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultTeamsData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const seeded = defaultTeamsData();
+    return {
+      teams: Array.isArray(parsed?.teams)
+        ? parsed.teams.map((team) => normalizeTeamRecord(team)).filter((team) => Boolean(team.name))
+        : seeded.teams,
+    };
+  } catch {
+    return defaultTeamsData();
+  }
+}
+
+function writeTeamsData(data) {
+  fs.writeFileSync(teamsDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function buildTeamView(team, members) {
+  const memberLookup = new Map(members.map((member) => [String(member.id || ""), member]));
+  const normalizedMemberIds = Array.isArray(team.memberIds)
+    ? team.memberIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+
+  return {
+    id: String(team.id || ""),
+    name: String(team.name || ""),
+    description: String(team.description || ""),
+    leadId: String(team.leadId || ""),
+    lead:
+      memberLookup.has(String(team.leadId || ""))
+        ? {
+            id: String(memberLookup.get(String(team.leadId || ""))?.id || ""),
+            fullName: String(
+              memberLookup.get(String(team.leadId || ""))?.fullName ||
+                memberLookup.get(String(team.leadId || ""))?.name ||
+                ""
+            ),
+            email: String(memberLookup.get(String(team.leadId || ""))?.email || ""),
+          }
+        : null,
+    membersCount: normalizedMemberIds.length,
+    projectsCount: Array.isArray(team.projectIds) ? team.projectIds.length : 0,
+    members: normalizedMemberIds.map((memberId) => {
+      const member = memberLookup.get(memberId) || {};
+      return {
+        id: memberId,
+        fullName: String(member.fullName || member.name || ""),
+        email: String(member.email || ""),
+        role: String(member.role || "member"),
+      };
+    }),
+    projectIds: Array.isArray(team.projectIds) ? team.projectIds : [],
+    createdAt: String(team.createdAt || ""),
+    updatedAt: String(team.updatedAt || ""),
+  };
+}
+
+function registerTeamsHandlers() {
+  ipcMain.handle(CHANNELS.TEAMS.GET_ALL, async () => {
+    try {
+      const data = readTeamsData();
+      const developers = readDevelopersData();
+      const teams = data.teams.map((team) => buildTeamView(team, developers.members));
+      return IPCResponse.success(teams);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load teams", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TEAMS.CREATE, async (_event, payload = {}) => {
+    try {
+      const name = String(payload.name || "").trim();
+      const description = String(payload.description || "").trim();
+      const leadId = String(payload.leadId || "").trim();
+
+      if (!name) {
+        return IPCResponse.validation("name", "name is required");
+      }
+
+      const developers = readDevelopersData();
+      if (leadId && !developers.members.some((member) => String(member.id || "") === leadId)) {
+        return IPCResponse.validation("leadId", "leadId must be an existing org member");
+      }
+
+      const data = readTeamsData();
+      const next = normalizeTeamRecord({
+        id: randomUUID(),
+        name,
+        description,
+        leadId,
+        projectIds: [],
+        memberIds: leadId ? [leadId] : [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+
+      data.teams.unshift(next);
+      writeTeamsData(data);
+
+      return IPCResponse.success(buildTeamView(next, developers.members));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to create team", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TEAMS.UPDATE, async (_event, payload = {}) => {
+    try {
+      const teamId = String(payload.teamId || "").trim();
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+      if (!teamId) {
+        return IPCResponse.validation("teamId", "teamId is required");
+      }
+      if (!changes) {
+        return IPCResponse.validation("changes", "changes is required");
+      }
+
+      const data = readTeamsData();
+      const index = data.teams.findIndex((team) => String(team.id || "") === teamId);
+      if (index < 0) {
+        return IPCResponse.notFound("Team");
+      }
+
+      const developers = readDevelopersData();
+      const current = data.teams[index];
+      const nextName =
+        Object.prototype.hasOwnProperty.call(changes, "name")
+          ? String(changes.name || "").trim()
+          : current.name;
+
+      if (!nextName) {
+        return IPCResponse.validation("name", "name cannot be empty");
+      }
+
+      const nextLeadId =
+        Object.prototype.hasOwnProperty.call(changes, "leadId")
+          ? String(changes.leadId || "").trim()
+          : String(current.leadId || "").trim();
+
+      if (nextLeadId && !developers.members.some((member) => String(member.id || "") === nextLeadId)) {
+        return IPCResponse.validation("leadId", "leadId must be an existing org member");
+      }
+
+      let nextMemberIds = Array.isArray(current.memberIds)
+        ? current.memberIds.map((id) => String(id || "").trim()).filter(Boolean)
+        : [];
+      if (nextLeadId && !nextMemberIds.includes(nextLeadId)) {
+        nextMemberIds = [nextLeadId, ...nextMemberIds];
+      }
+
+      const updated = normalizeTeamRecord({
+        ...current,
+        name: nextName,
+        description:
+          Object.prototype.hasOwnProperty.call(changes, "description")
+            ? String(changes.description || "").trim()
+            : String(current.description || ""),
+        leadId: nextLeadId,
+        memberIds: nextMemberIds,
+        updatedAt: new Date().toISOString(),
+      });
+
+      data.teams[index] = updated;
+      writeTeamsData(data);
+
+      return IPCResponse.success(buildTeamView(updated, developers.members));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update team", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TEAMS.DELETE, async (_event, payload = {}) => {
+    try {
+      const teamId = String(payload.teamId || "").trim();
+      if (!teamId) {
+        return IPCResponse.validation("teamId", "teamId is required");
+      }
+
+      const data = readTeamsData();
+      const before = data.teams.length;
+      data.teams = data.teams.filter((team) => String(team.id || "") !== teamId);
+      const deleted = data.teams.length < before;
+      if (!deleted) {
+        return IPCResponse.notFound("Team");
+      }
+
+      writeTeamsData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete team", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TEAMS.ADD_MEMBER, async (_event, payload = {}) => {
+    try {
+      const teamId = String(payload.teamId || "").trim();
+      const userId = String(payload.userId || "").trim();
+      if (!teamId) {
+        return IPCResponse.validation("teamId", "teamId is required");
+      }
+      if (!userId) {
+        return IPCResponse.validation("userId", "userId is required");
+      }
+
+      const developers = readDevelopersData();
+      if (!developers.members.some((member) => String(member.id || "") === userId)) {
+        return IPCResponse.validation("userId", "userId must be an existing org member");
+      }
+
+      const data = readTeamsData();
+      const index = data.teams.findIndex((team) => String(team.id || "") === teamId);
+      if (index < 0) {
+        return IPCResponse.notFound("Team");
+      }
+
+      const current = data.teams[index];
+      const nextMemberIds = Array.isArray(current.memberIds)
+        ? current.memberIds.map((id) => String(id || "").trim()).filter(Boolean)
+        : [];
+      if (!nextMemberIds.includes(userId)) {
+        nextMemberIds.push(userId);
+      }
+
+      const updated = normalizeTeamRecord({
+        ...current,
+        memberIds: nextMemberIds,
+        updatedAt: new Date().toISOString(),
+      });
+      data.teams[index] = updated;
+      writeTeamsData(data);
+
+      return IPCResponse.success(buildTeamView(updated, developers.members));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to add team member", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TEAMS.REMOVE_MEMBER, async (_event, payload = {}) => {
+    try {
+      const teamId = String(payload.teamId || "").trim();
+      const userId = String(payload.userId || "").trim();
+      if (!teamId) {
+        return IPCResponse.validation("teamId", "teamId is required");
+      }
+      if (!userId) {
+        return IPCResponse.validation("userId", "userId is required");
+      }
+
+      const developers = readDevelopersData();
+      const data = readTeamsData();
+      const index = data.teams.findIndex((team) => String(team.id || "") === teamId);
+      if (index < 0) {
+        return IPCResponse.notFound("Team");
+      }
+
+      const current = data.teams[index];
+      const nextMemberIds = (Array.isArray(current.memberIds) ? current.memberIds : [])
+        .map((id) => String(id || "").trim())
+        .filter((id) => Boolean(id) && id !== userId);
+
+      if (String(current.leadId || "") === userId) {
+        return IPCResponse.validation("userId", "cannot remove team lead; set a different lead first");
+      }
+
+      const updated = normalizeTeamRecord({
+        ...current,
+        memberIds: nextMemberIds,
+        updatedAt: new Date().toISOString(),
+      });
+      data.teams[index] = updated;
+      writeTeamsData(data);
+
+      return IPCResponse.success(buildTeamView(updated, developers.members));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to remove team member", String(error));
+    }
+  });
+}
+
+function skillGapDbPath() {
+  return path.join(app.getPath("userData"), "skill-gap.db.json");
+}
+
+function defaultSkillGapData() {
+  return {
+    skills: [
+      { id: "skill-frontend", name: "Frontend", category: "Frontend", importance: 5, defaultLevel: 2 },
+      { id: "skill-backend", name: "Backend", category: "Backend", importance: 5, defaultLevel: 2 },
+      { id: "skill-devops", name: "DevOps", category: "DevOps", importance: 4, defaultLevel: 2 },
+      { id: "skill-testing", name: "Testing", category: "Testing", importance: 5, defaultLevel: 2 },
+      { id: "skill-database", name: "Database", category: "Backend", importance: 4, defaultLevel: 2 },
+      { id: "skill-security", name: "Security", category: "Platform", importance: 4, defaultLevel: 2 },
+    ],
+    matrixByMember: {},
+    trainingAssignments: [],
+  };
+}
+
+function clampSkillLevel(value) {
+  return Math.max(1, Math.min(5, Number(value || 1)));
+}
+
+function normalizeSkillGapData(input) {
+  const defaults = defaultSkillGapData();
+  const source = input && typeof input === "object" ? input : {};
+  const normalizedSkills = Array.isArray(source.skills)
+    ? source.skills
+        .map((skill) => ({
+          id: String(skill?.id || "").trim(),
+          name: String(skill?.name || "").trim(),
+          category: String(skill?.category || "General").trim(),
+          importance: Math.max(1, Math.min(5, Number(skill?.importance || 3))),
+          defaultLevel: clampSkillLevel(skill?.defaultLevel || 2),
+        }))
+        .filter((skill) => Boolean(skill.id) && Boolean(skill.name))
+    : defaults.skills;
+
+  const matrixByMember =
+    source.matrixByMember && typeof source.matrixByMember === "object" ? source.matrixByMember : {};
+
+  return {
+    skills: normalizedSkills.length ? normalizedSkills : defaults.skills,
+    matrixByMember,
+    trainingAssignments: Array.isArray(source.trainingAssignments)
+      ? source.trainingAssignments
+      : defaults.trainingAssignments,
+  };
+}
+
+function readSkillGapData() {
+  try {
+    const filePath = skillGapDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultSkillGapData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return normalizeSkillGapData(parsed);
+  } catch {
+    return defaultSkillGapData();
+  }
+}
+
+function writeSkillGapData(data) {
+  fs.writeFileSync(skillGapDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function mapSkillGapMembers(developers) {
+  return developers.map((member) => ({
+    id: String(member.id || ""),
+    fullName: String(member.fullName || member.name || ""),
+    email: String(member.email || ""),
+    role: String(member.role || "developer"),
+  }));
+}
+
+function buildSkillGapMatrix(members, skills, matrixByMember) {
+  return members.map((member) =>
+    skills.map((skill) =>
+      clampSkillLevel(matrixByMember?.[String(member.id || "")]?.[String(skill.id || "")] ?? skill.defaultLevel ?? 2)
+    )
+  );
+}
+
+function detectRequiredSkills(sprintId, skills, members, matrix) {
+  const labelMap = {
+    "ui": ["skill-frontend", "skill-testing"],
+    "frontend": ["skill-frontend", "skill-testing"],
+    "api": ["skill-backend", "skill-database", "skill-testing"],
+    "backend": ["skill-backend", "skill-database"],
+    "devops": ["skill-devops", "skill-security"],
+    "infra": ["skill-devops", "skill-security"],
+    "qa": ["skill-testing"],
+    "security": ["skill-security", "skill-backend"],
+  };
+
+  const sprintKey = String(sprintId || "").toLowerCase();
+  const upcomingLabels = sprintKey.includes("24")
+    ? ["frontend", "api", "qa", "devops"]
+    : sprintKey.includes("23")
+      ? ["backend", "security", "qa"]
+      : ["frontend", "backend", "qa"];
+
+  const pressureBySkill = new Map();
+  upcomingLabels.forEach((label) => {
+    const skillsForLabel = Array.isArray(labelMap[label]) ? labelMap[label] : [];
+    skillsForLabel.forEach((skillId) => {
+      pressureBySkill.set(skillId, Number(pressureBySkill.get(skillId) || 0) + 1);
+    });
+  });
+
+  const skillIndex = new Map(skills.map((skill, index) => [String(skill.id || ""), index]));
+  const required = skills
+    .filter((skill) => pressureBySkill.has(String(skill.id || "")))
+    .map((skill) => {
+      const skillId = String(skill.id || "");
+      const col = Number(skillIndex.get(skillId));
+      const demand = Number(pressureBySkill.get(skillId) || 0);
+      const availability = matrix.reduce(
+        (count, row) => count + (Number(row[col] || 0) >= 3 ? 1 : 0),
+        0
+      );
+      const importance = Math.max(1, Math.min(5, Number(skill.importance || 3)));
+      const gapScore = Math.max(0, demand + importance - availability);
+
+      return {
+        skillId,
+        name: String(skill.name || ""),
+        category: String(skill.category || "General"),
+        demand,
+        importance,
+        availability,
+        gapScore,
+        membersCount: members.length,
+      };
+    })
+    .sort((a, b) => {
+      if (b.gapScore !== a.gapScore) return b.gapScore - a.gapScore;
+      if (b.importance !== a.importance) return b.importance - a.importance;
+      return a.name.localeCompare(b.name);
+    });
+
+  return required;
+}
+
+function registerSkillGapHandlers() {
+  ipcMain.handle(CHANNELS.SKILL_GAP.GET_MATRIX, async () => {
+    try {
+      const data = readSkillGapData();
+      const developers = readDevelopersData();
+      const members = mapSkillGapMembers(developers.members);
+      const matrix = buildSkillGapMatrix(members, data.skills, data.matrixByMember);
+
+      return IPCResponse.success({
+        members,
+        skills: data.skills,
+        matrix,
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load skill-gap matrix", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SKILL_GAP.UPDATE_SKILL_LEVEL, async (_event, payload = {}) => {
+    try {
+      const memberId = String(payload.memberId || "").trim();
+      const skillId = String(payload.skillId || "").trim();
+      const level = clampSkillLevel(payload.level);
+
+      if (!memberId) {
+        return IPCResponse.validation("memberId", "memberId is required");
+      }
+      if (!skillId) {
+        return IPCResponse.validation("skillId", "skillId is required");
+      }
+
+      const developers = readDevelopersData();
+      const memberExists = developers.members.some((member) => String(member.id || "") === memberId);
+      if (!memberExists) {
+        return IPCResponse.notFound("Member");
+      }
+
+      const data = readSkillGapData();
+      const skillExists = data.skills.some((skill) => String(skill.id || "") === skillId);
+      if (!skillExists) {
+        return IPCResponse.notFound("Skill");
+      }
+
+      if (!data.matrixByMember || typeof data.matrixByMember !== "object") {
+        data.matrixByMember = {};
+      }
+      if (!data.matrixByMember[memberId] || typeof data.matrixByMember[memberId] !== "object") {
+        data.matrixByMember[memberId] = {};
+      }
+
+      data.matrixByMember[memberId][skillId] = level;
+      writeSkillGapData(data);
+
+      const row = data.skills.map((skill) =>
+        clampSkillLevel(data.matrixByMember?.[memberId]?.[String(skill.id || "")] ?? skill.defaultLevel ?? 2)
+      );
+
+      return IPCResponse.success(row);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update skill level", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SKILL_GAP.GET_REQUIRED_SKILLS, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "sprint-24").trim();
+      const data = readSkillGapData();
+      const developers = readDevelopersData();
+      const members = mapSkillGapMembers(developers.members);
+      const matrix = buildSkillGapMatrix(members, data.skills, data.matrixByMember);
+      const required = detectRequiredSkills(sprintId, data.skills, members, matrix);
+      return IPCResponse.success(required);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load required skills", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SKILL_GAP.ASSIGN_TRAINING, async (_event, payload = {}) => {
+    try {
+      const memberId = String(payload.memberId || "").trim();
+      const skillId = String(payload.skillId || "").trim();
+      const resourceUrl = String(payload.resourceUrl || "").trim();
+
+      if (!memberId) {
+        return IPCResponse.validation("memberId", "memberId is required");
+      }
+      if (!skillId) {
+        return IPCResponse.validation("skillId", "skillId is required");
+      }
+      if (!resourceUrl || !/^https?:\/\//i.test(resourceUrl)) {
+        return IPCResponse.validation("resourceUrl", "resourceUrl must be a valid http(s) url");
+      }
+
+      const developers = readDevelopersData();
+      const memberExists = developers.members.some((member) => String(member.id || "") === memberId);
+      if (!memberExists) {
+        return IPCResponse.notFound("Member");
+      }
+
+      const data = readSkillGapData();
+      const skillExists = data.skills.some((skill) => String(skill.id || "") === skillId);
+      if (!skillExists) {
+        return IPCResponse.notFound("Skill");
+      }
+
+      const assignment = {
+        id: `training-${randomUUID()}`,
+        memberId,
+        skillId,
+        resourceUrl,
+        assignedAt: new Date().toISOString(),
+      };
+
+      data.trainingAssignments = [
+        assignment,
+        ...(Array.isArray(data.trainingAssignments) ? data.trainingAssignments : []).filter(
+          (item) => !(String(item.memberId || "") === memberId && String(item.skillId || "") === skillId)
+        ),
+      ];
+      writeSkillGapData(data);
+
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to assign training", String(error));
+    }
+  });
+}
+
 function developersDbPath() {
   return path.join(app.getPath("userData"), "developers.org.db.json");
 }
@@ -3970,6 +4580,8 @@ app.whenReady().then(() => {
   registerTaskHandlers();
   registerAgentHandlers();
   registerBillingHandlers();
+  registerTeamsHandlers();
+  registerSkillGapHandlers();
   registerDevelopersHandlers();
   registerOrgHandlers();
   registerPreferencesHandlers();

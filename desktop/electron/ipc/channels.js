@@ -240,6 +240,24 @@ const CHANNELS = {
     SAVE_AUTO_TASK_RULES: "preferences:saveAutoTaskRules"
   },
 
+  // Team management settings
+  TEAMS: {
+    GET_ALL: "teams:getAll",
+    CREATE: "teams:create",
+    UPDATE: "teams:update",
+    DELETE: "teams:delete",
+    ADD_MEMBER: "teams:addMember",
+    REMOVE_MEMBER: "teams:removeMember"
+  },
+
+  // Skill gap analysis and training assignment
+  SKILL_GAP: {
+    GET_MATRIX: "skillGap:getMatrix",
+    UPDATE_SKILL_LEVEL: "skillGap:updateSkillLevel",
+    GET_REQUIRED_SKILLS: "skillGap:getRequiredSkills",
+    ASSIGN_TRAINING: "skillGap:assignTraining"
+  },
+
   // Project detail and management
   PROJECTS: {
     GET_BY_ID: "projects:getById",
