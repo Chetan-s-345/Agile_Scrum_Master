@@ -327,11 +327,20 @@ const CHANNELS = {
 
   // Task detail and task-level collaboration
   TASKS: {
+    GET_ALL: "tasks:getAll",
+    CREATE: "tasks:create",
+    BULK_UPDATE: "tasks:bulkUpdate",
+    BULK_DELETE: "tasks:bulkDelete",
     GET_BY_ID: "tasks:getById",
+    UPDATE: "tasks:update",
     GET_ACTIVITY_LOG: "tasks:getActivityLog",
     ADD_BLOCKER: "tasks:addBlocker",
     REMOVE_BLOCKER: "tasks:removeBlocker",
-    ADD_COMMENT: "tasks:addComment"
+    ADD_COMMENT: "tasks:addComment",
+    DELETE_COMMENT: "tasks:deleteComment",
+    ADD_ATTACHMENT: "tasks:addAttachment",
+    LINK_TASK: "tasks:linkTask",
+    DELETE: "tasks:delete"
   },
 
   // Agent detail, chat, and runtime controls

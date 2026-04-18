@@ -3507,6 +3507,14 @@ function defaultTasksData() {
           { id: "task-2", title: "Validate prompt 26 wiring", status: "todo", relation: "linked" },
           { id: "task-3", title: "Review task risk thresholds", status: "in_review", relation: "blocked-by" }
         ],
+        attachments: [
+          {
+            id: "att-1",
+            fileName: "task-note.txt",
+            filePath: "C:/attachments/task-note.txt",
+            createdAt
+          }
+        ],
         createdAt,
         updatedAt
       }
@@ -3590,6 +3598,7 @@ function ensureTask(taskId, data) {
     blockers: [],
     comments: [],
     relatedTasks: [],
+    attachments: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -3615,6 +3624,307 @@ function appendTaskEvent(data, taskId, event) {
   const id = String(taskId || "").trim();
   const list = Array.isArray(data.activityByTask[id]) ? data.activityByTask[id] : [];
   data.activityByTask[id] = [event, ...list].slice(0, 100);
+}
+
+function normalizeTaskStatus(value) {
+  const raw = String(value || "todo").trim().toLowerCase();
+  const aliases = {
+    "to do": "todo",
+    doing: "in_progress",
+    "in progress": "in_progress",
+    "in-progress": "in_progress",
+    "in review": "in_review",
+    "in-review": "in_review"
+  };
+  const normalized = aliases[raw] || raw;
+  const allowed = new Set(["todo", "in_progress", "in_review", "blocked", "done", "archived"]);
+  return allowed.has(normalized) ? normalized : "todo";
+}
+
+function normalizeTaskPriority(value, fallback = "medium") {
+  const normalized = String(value || fallback).trim().toLowerCase();
+  if (normalized === "low" || normalized === "medium" || normalized === "high") {
+    return normalized;
+  }
+  return fallback;
+}
+
+function normalizeTaskLabels(task) {
+  if (Array.isArray(task.labels)) {
+    return task.labels.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+
+  if (Array.isArray(task.techTags)) {
+    return task.techTags.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+
+  return [];
+}
+
+function normalizeStoryPoints(value) {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed >= 0) {
+    return Math.round(parsed);
+  }
+  return 0;
+}
+
+function resolveAssigneeById(assigneeId) {
+  const id = String(assigneeId || "").trim();
+  if (!id) return null;
+
+  const developers = readDevelopersData();
+  const person = Array.isArray(developers?.developers)
+    ? developers.developers.find((item) => String(item.id || "") === id)
+    : null;
+
+  return {
+    id,
+    name: String(person?.name || person?.full_name || `Member ${id}`)
+  };
+}
+
+function resolveSprintContext(sprintId) {
+  const normalizedSprintId = String(sprintId || "").trim();
+  if (!normalizedSprintId) {
+    return { sprintId: "", sprintName: "Unscheduled", projectId: "" };
+  }
+
+  const projectsData = readProjectsData();
+  const sprintsByProject =
+    projectsData?.sprintsByProject && typeof projectsData.sprintsByProject === "object"
+      ? projectsData.sprintsByProject
+      : {};
+
+  for (const [projectId, sprints] of Object.entries(sprintsByProject)) {
+    const found = Array.isArray(sprints)
+      ? sprints.find((item) => String(item?.id || "") === normalizedSprintId)
+      : null;
+    if (found) {
+      return {
+        sprintId: normalizedSprintId,
+        sprintName: String(found.name || `Sprint ${normalizedSprintId}`),
+        projectId: String(projectId || "")
+      };
+    }
+  }
+
+  return {
+    sprintId: normalizedSprintId,
+    sprintName: `Sprint ${normalizedSprintId}`,
+    projectId: ""
+  };
+}
+
+function toBoardTask(task, index) {
+  const labels = normalizeTaskLabels(task);
+  const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+  const doneCount = subtasks.filter((item) => normalizeTaskStatus(item?.status) === "done").length;
+  const assignee = task?.assignee && typeof task.assignee === "object"
+    ? {
+        id: String(task.assignee.id || ""),
+        name: String(task.assignee.name || "Unassigned")
+      }
+    : null;
+
+  return {
+    ...task,
+    id: String(task.id || `task-${index + 1}`),
+    taskKey: String(task.taskKey || `TSK-${index + 1}`),
+    title: String(task.title || "Untitled task"),
+    description: String(task.description || ""),
+    status: normalizeTaskStatus(task.status),
+    priority: normalizeTaskPriority(task.priority),
+    storyPoints: normalizeStoryPoints(task.storyPoints ?? task.points),
+    techTags: labels,
+    labels,
+    aiRiskScore: Number.isFinite(Number(task.aiRiskScore)) ? Number(task.aiRiskScore) : null,
+    subtaskProgress: {
+      done: doneCount,
+      total: subtasks.length
+    },
+    assignee
+  };
+}
+
+function taskMatchesFilters(task, filters) {
+  const sprintId = String(filters?.sprintId || "").trim();
+  const status = String(filters?.status || "").trim();
+  const assigneeId = String(filters?.assigneeId || "").trim();
+  const priority = String(filters?.priority || "").trim().toLowerCase();
+  const query = String(filters?.query || filters?.q || "").trim().toLowerCase();
+
+  if (sprintId && String(task.sprintId || "") !== sprintId) return false;
+  if (status && normalizeTaskStatus(task.status) !== normalizeTaskStatus(status)) return false;
+  if (assigneeId && String(task.assignee?.id || "") !== assigneeId) return false;
+  if (priority && normalizeTaskPriority(task.priority) !== normalizeTaskPriority(priority)) return false;
+
+  if (query) {
+    const haystack = [
+      String(task.title || ""),
+      String(task.description || ""),
+      String(task.assignee?.name || ""),
+      ...normalizeTaskLabels(task)
+    ]
+      .join(" ")
+      .toLowerCase();
+    if (!haystack.includes(query)) return false;
+  }
+
+  if (Boolean(filters?.riskOnly)) {
+    const score = Number(task.aiRiskScore || 0);
+    if (!Number.isFinite(score) || score < 70) return false;
+  }
+
+  return true;
+}
+
+function syncParentSubtaskStatus(data, task) {
+  const parentId = String(task?.parentTaskId || "").trim();
+  if (!parentId) return;
+
+  const parentIndex = data.tasks.findIndex((item) => String(item.id || "") === parentId);
+  if (parentIndex < 0) return;
+
+  const parent = data.tasks[parentIndex];
+  const subtasks = Array.isArray(parent.subtasks) ? parent.subtasks : [];
+  const nextSubtasks = subtasks.map((item) => {
+    if (String(item.id || "") !== String(task.id || "")) return item;
+    return {
+      ...item,
+      status: normalizeTaskStatus(task.status),
+      title: String(task.title || item.title || "Untitled subtask"),
+      assignee: task.assignee || item.assignee || null
+    };
+  });
+
+  data.tasks[parentIndex] = {
+    ...parent,
+    subtasks: nextSubtasks,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function buildTaskWithRelations(task, data) {
+  const relatedTasks = Array.isArray(task.relatedTasks) ? task.relatedTasks : [];
+  const parentTaskId = String(task.parentTaskId || "").trim();
+  const parentTask = parentTaskId
+    ? data.tasks.find((item) => String(item.id || "") === parentTaskId) || null
+    : null;
+
+  return {
+    ...task,
+    comments: Array.isArray(task.comments) ? task.comments : [],
+    blockers: Array.isArray(task.blockers) ? task.blockers : [],
+    attachments: Array.isArray(task.attachments) ? task.attachments : [],
+    labels: normalizeTaskLabels(task),
+    techTags: normalizeTaskLabels(task),
+    relatedTasks,
+    blockedByTasks: relatedTasks.filter((item) => String(item?.relation || "") === "blocked-by"),
+    parentTask: parentTask
+      ? {
+          id: String(parentTask.id || ""),
+          title: String(parentTask.title || ""),
+          status: normalizeTaskStatus(parentTask.status)
+        }
+      : null
+  };
+}
+
+function applyTaskChanges(task, changes) {
+  const next = { ...task };
+
+  if (Object.prototype.hasOwnProperty.call(changes, "title")) {
+    next.title = String(changes.title || "").trim() || next.title;
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "description")) {
+    next.description = String(changes.description || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "acceptanceCriteria")) {
+    next.acceptanceCriteria = String(changes.acceptanceCriteria || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "status")) {
+    next.status = normalizeTaskStatus(changes.status);
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "priority")) {
+    next.priority = normalizeTaskPriority(changes.priority, normalizeTaskPriority(next.priority));
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "dueDate")) {
+    next.dueDate = String(changes.dueDate || "").trim();
+  }
+
+  if (Object.prototype.hasOwnProperty.call(changes, "points") || Object.prototype.hasOwnProperty.call(changes, "storyPoints")) {
+    next.storyPoints = normalizeStoryPoints(changes.points ?? changes.storyPoints);
+    next.points = next.storyPoints;
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "labels")) {
+    const labels = Array.isArray(changes.labels)
+      ? changes.labels.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    next.labels = labels;
+    next.techTags = labels;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(changes, "assigneeId")) {
+    next.assignee = resolveAssigneeById(changes.assigneeId);
+    next.assigneeId = String(next.assignee?.id || "");
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "projectId")) {
+    next.projectId = String(changes.projectId || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "sprintId")) {
+    const sprintContext = resolveSprintContext(changes.sprintId);
+    next.sprintId = sprintContext.sprintId;
+    next.sprint = sprintContext.sprintName;
+    next.projectId = String(next.projectId || sprintContext.projectId || "");
+  }
+
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+function removeTaskReferences(data, deletedTaskId) {
+  data.tasks = data.tasks.map((task) => {
+    const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+    const relatedTasks = Array.isArray(task.relatedTasks) ? task.relatedTasks : [];
+    const nextParentTaskId = String(task.parentTaskId || "") === deletedTaskId ? "" : task.parentTaskId;
+
+    return {
+      ...task,
+      parentTaskId: nextParentTaskId,
+      subtasks: subtasks.filter((item) => String(item?.id || "") !== deletedTaskId),
+      relatedTasks: relatedTasks.filter((item) => String(item?.id || "") !== deletedTaskId)
+    };
+  });
+}
+
+function deleteCommentById(data, commentId) {
+  for (let i = 0; i < data.tasks.length; i += 1) {
+    const task = data.tasks[i];
+    const comments = Array.isArray(task.comments) ? task.comments : [];
+    const index = comments.findIndex((comment) => String(comment.id || "") === commentId);
+    if (index < 0) continue;
+
+    const [removed] = comments.splice(index, 1);
+    data.tasks[i] = {
+      ...task,
+      comments,
+      updatedAt: new Date().toISOString()
+    };
+
+    appendTaskEvent(data, String(task.id || ""), {
+      id: `evt-${randomUUID()}`,
+      type: "comment_removed",
+      title: "Comment deleted",
+      detail: String(removed?.content || "Comment removed"),
+      status: "updated",
+      time: new Date().toISOString()
+    });
+
+    return true;
+  }
+
+  return false;
 }
 
 function buildTaskAnalysis(task, events) {
@@ -3645,6 +3955,405 @@ function buildTaskAnalysis(task, events) {
 }
 
 function registerTaskHandlers() {
+  ipcMain.handle(CHANNELS.TASKS.GET_ALL, async (_event, payload = {}) => {
+    try {
+      const filters =
+        payload?.filters && typeof payload.filters === "object"
+          ? payload.filters
+          : payload && typeof payload === "object"
+            ? payload
+            : {};
+
+      const data = readTasksData();
+      const normalized = data.tasks.map((task, index) => toBoardTask(task, index));
+      const filtered = normalized.filter((task) => taskMatchesFilters(task, filters));
+
+      return IPCResponse.success({
+        items: filtered,
+        total: filtered.length
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load tasks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.CREATE, async (_event, payload = {}) => {
+    try {
+      const title = String(payload.title || "").trim();
+      if (!title) {
+        return IPCResponse.validation("title", "title is required");
+      }
+
+      const now = new Date().toISOString();
+      const assignee = resolveAssigneeById(payload.assigneeId);
+      const sprintContext = resolveSprintContext(payload.sprintId);
+      const taskId = `task-${randomUUID()}`;
+      const priority = normalizeTaskPriority(payload.priority);
+      const points = normalizeStoryPoints(payload.points ?? payload.storyPoints);
+      const labels = Array.isArray(payload.labels)
+        ? payload.labels.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      const parentTaskId = String(payload.parentTaskId || "").trim();
+      const data = readTasksData();
+
+      const created = {
+        id: taskId,
+        taskKey: `TSK-${data.tasks.length + 1}`,
+        title,
+        description: String(payload.description || "").trim(),
+        status: normalizeTaskStatus(payload.status || "todo"),
+        priority,
+        storyPoints: points,
+        points,
+        labels,
+        techTags: labels,
+        aiRiskScore: priority === "high" ? 78 : priority === "medium" ? 52 : 24,
+        assignee,
+        assigneeId: assignee?.id || "",
+        projectId: String(payload.projectId || sprintContext.projectId || "").trim(),
+        sprintId: String(payload.sprintId || sprintContext.sprintId || "").trim(),
+        sprint: String(payload.sprint || sprintContext.sprintName || "Unscheduled"),
+        parentTaskId,
+        subtasks: [],
+        blockers: [],
+        comments: [],
+        relatedTasks: [],
+        attachments: [],
+        createdAt: now,
+        updatedAt: now
+      };
+
+      data.tasks.push(created);
+
+      if (parentTaskId) {
+        const parentIndex = data.tasks.findIndex((item) => String(item.id || "") === parentTaskId);
+        if (parentIndex >= 0) {
+          const parent = data.tasks[parentIndex];
+          const parentSubtasks = Array.isArray(parent.subtasks) ? parent.subtasks : [];
+          data.tasks[parentIndex] = {
+            ...parent,
+            subtasks: [
+              ...parentSubtasks,
+              {
+                id: created.id,
+                title: created.title,
+                status: created.status,
+                taskKey: created.taskKey,
+                assignee: created.assignee
+              }
+            ],
+            updatedAt: now
+          };
+        }
+      }
+
+      appendTaskEvent(data, created.id, {
+        id: `evt-${randomUUID()}`,
+        type: "created",
+        title: "Task created",
+        detail: `Task ${created.title} created via desktop board`,
+        status: "created",
+        time: now
+      });
+
+      writeTasksData(data);
+      return IPCResponse.success(toBoardTask(created, data.tasks.length - 1));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to create task", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.BULK_UPDATE, async (_event, payload = {}) => {
+    try {
+      const ids = Array.isArray(payload.ids)
+        ? payload.ids.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+
+      if (!ids.length) {
+        return IPCResponse.validation("ids", "ids is required");
+      }
+      if (!changes) {
+        return IPCResponse.validation("changes", "changes is required");
+      }
+
+      const now = new Date().toISOString();
+      const data = readTasksData();
+      const updatedTasks = [];
+
+      for (const id of ids) {
+        const index = data.tasks.findIndex((item) => String(item.id || "") === id);
+        if (index < 0) continue;
+
+        const current = data.tasks[index];
+        const next = { ...current };
+
+        if (Object.prototype.hasOwnProperty.call(changes, "title")) {
+          next.title = String(changes.title || "").trim() || next.title;
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "description")) {
+          next.description = String(changes.description || "").trim();
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "status")) {
+          next.status = normalizeTaskStatus(changes.status);
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "priority")) {
+          next.priority = normalizeTaskPriority(changes.priority, normalizeTaskPriority(next.priority));
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "points") || Object.prototype.hasOwnProperty.call(changes, "storyPoints")) {
+          next.storyPoints = normalizeStoryPoints(changes.points ?? changes.storyPoints);
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "sprintId")) {
+          const sprintContext = resolveSprintContext(changes.sprintId);
+          next.sprintId = sprintContext.sprintId;
+          next.sprint = sprintContext.sprintName;
+          next.projectId = String(next.projectId || sprintContext.projectId || "");
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "projectId")) {
+          next.projectId = String(changes.projectId || "").trim();
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "assigneeId")) {
+          next.assignee = resolveAssigneeById(changes.assigneeId);
+          next.assigneeId = String(next.assignee?.id || "");
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "labels")) {
+          const labels = Array.isArray(changes.labels)
+            ? changes.labels.map((item) => String(item || "").trim()).filter(Boolean)
+            : [];
+          next.labels = labels;
+          next.techTags = labels;
+        }
+
+        next.updatedAt = now;
+        data.tasks[index] = next;
+        syncParentSubtaskStatus(data, next);
+
+        appendTaskEvent(data, id, {
+          id: `evt-${randomUUID()}`,
+          type: "updated",
+          title: "Task updated",
+          detail: "Task fields updated from board action",
+          status: normalizeTaskStatus(next.status),
+          time: now
+        });
+
+        updatedTasks.push(toBoardTask(next, index));
+      }
+
+      writeTasksData(data);
+      return IPCResponse.success({
+        updated: updatedTasks,
+        count: updatedTasks.length
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update tasks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.BULK_DELETE, async (_event, payload = {}) => {
+    try {
+      const ids = Array.isArray(payload.ids)
+        ? payload.ids.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      if (!ids.length) {
+        return IPCResponse.validation("ids", "ids is required");
+      }
+
+      const idSet = new Set(ids);
+      const data = readTasksData();
+
+      data.tasks = data.tasks
+        .filter((task) => !idSet.has(String(task.id || "")))
+        .map((task) => {
+          const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+          return {
+            ...task,
+            subtasks: subtasks.filter((item) => !idSet.has(String(item?.id || "")))
+          };
+        });
+
+      for (const id of ids) {
+        delete data.activityByTask[id];
+      }
+
+      writeTasksData(data);
+      return IPCResponse.success({
+        deletedIds: ids,
+        count: ids.length
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete tasks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.UPDATE, async (_event, payload = {}) => {
+    try {
+      const taskId = String(payload.taskId || "").trim();
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+      if (!taskId) {
+        return IPCResponse.validation("taskId", "taskId is required");
+      }
+      if (!changes) {
+        return IPCResponse.validation("changes", "changes is required");
+      }
+
+      const data = readTasksData();
+      const { task, index } = ensureTask(taskId, data);
+      const updated = applyTaskChanges(task, changes);
+      data.tasks[index] = updated;
+      syncParentSubtaskStatus(data, updated);
+
+      appendTaskEvent(data, taskId, {
+        id: `evt-${randomUUID()}`,
+        type: "updated",
+        title: "Task updated",
+        detail: "Task edited from detail page",
+        status: normalizeTaskStatus(updated.status),
+        time: new Date().toISOString()
+      });
+
+      writeTasksData(data);
+      return IPCResponse.success(buildTaskWithRelations(updated, data));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update task", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.DELETE_COMMENT, async (_event, payload = {}) => {
+    try {
+      const commentId = String(payload.commentId || "").trim();
+      if (!commentId) {
+        return IPCResponse.validation("commentId", "commentId is required");
+      }
+
+      const data = readTasksData();
+      const removed = deleteCommentById(data, commentId);
+      if (!removed) {
+        return IPCResponse.notFound("Comment");
+      }
+
+      writeTasksData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete comment", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.ADD_ATTACHMENT, async (_event, payload = {}) => {
+    try {
+      const taskId = String(payload.taskId || "").trim();
+      const filePath = String(payload.filePath || "").trim();
+      if (!taskId) {
+        return IPCResponse.validation("taskId", "taskId is required");
+      }
+      if (!filePath) {
+        return IPCResponse.validation("filePath", "filePath is required");
+      }
+
+      const data = readTasksData();
+      const { task, index } = ensureTask(taskId, data);
+      const attachment = {
+        id: `att-${randomUUID()}`,
+        fileName: path.basename(filePath),
+        filePath,
+        createdAt: new Date().toISOString()
+      };
+
+      data.tasks[index] = {
+        ...task,
+        attachments: [...(Array.isArray(task.attachments) ? task.attachments : []), attachment],
+        updatedAt: new Date().toISOString()
+      };
+
+      appendTaskEvent(data, taskId, {
+        id: `evt-${randomUUID()}`,
+        type: "attachment_added",
+        title: "Attachment added",
+        detail: attachment.fileName,
+        status: "updated",
+        time: attachment.createdAt
+      });
+
+      writeTasksData(data);
+      return IPCResponse.success(attachment);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to add attachment", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.LINK_TASK, async (_event, payload = {}) => {
+    try {
+      const taskId = String(payload.taskId || "").trim();
+      const targetId = String(payload.targetId || "").trim();
+      const linkType = String(payload.linkType || "linked").trim() || "linked";
+      if (!taskId) {
+        return IPCResponse.validation("taskId", "taskId is required");
+      }
+      if (!targetId) {
+        return IPCResponse.validation("targetId", "targetId is required");
+      }
+
+      const data = readTasksData();
+      const { task, index } = ensureTask(taskId, data);
+      const { task: targetTask } = ensureTask(targetId, data);
+
+      const link = {
+        id: String(targetTask.id || targetId),
+        title: String(targetTask.title || `Task ${targetId}`),
+        status: normalizeTaskStatus(targetTask.status),
+        relation: linkType
+      };
+
+      const relatedTasks = Array.isArray(task.relatedTasks) ? task.relatedTasks : [];
+      const deduped = relatedTasks.filter(
+        (item) => !(String(item?.id || "") === link.id && String(item?.relation || "") === link.relation)
+      );
+
+      data.tasks[index] = {
+        ...task,
+        relatedTasks: [link, ...deduped],
+        updatedAt: new Date().toISOString()
+      };
+
+      appendTaskEvent(data, taskId, {
+        id: `evt-${randomUUID()}`,
+        type: "task_linked",
+        title: "Task linked",
+        detail: `${link.relation}: ${link.title}`,
+        status: "updated",
+        time: new Date().toISOString()
+      });
+
+      writeTasksData(data);
+      return IPCResponse.success(link);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to link task", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.DELETE, async (_event, payload = {}) => {
+    try {
+      const taskId = String(payload.taskId || "").trim();
+      if (!taskId) {
+        return IPCResponse.validation("taskId", "taskId is required");
+      }
+
+      const data = readTasksData();
+      const existingIndex = data.tasks.findIndex((item) => String(item.id || "") === taskId);
+      if (existingIndex < 0) {
+        return IPCResponse.notFound("Task");
+      }
+
+      data.tasks.splice(existingIndex, 1);
+      delete data.activityByTask[taskId];
+      removeTaskReferences(data, taskId);
+      writeTasksData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete task", String(error));
+    }
+  });
+
   ipcMain.handle(CHANNELS.TASKS.GET_BY_ID, async (_event, payload = {}) => {
     try {
       const taskId = String(payload.taskId || "").trim();
@@ -3655,7 +4364,7 @@ function registerTaskHandlers() {
       const data = readTasksData();
       const { task } = ensureTask(taskId, data);
       writeTasksData(data);
-      return IPCResponse.success(task);
+      return IPCResponse.success(buildTaskWithRelations(task, data));
     } catch (error) {
       return IPCResponse.internalError("Failed to load task", String(error));
     }
