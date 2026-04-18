@@ -157,13 +157,9 @@ jobs:
         working-directory: ${{ steps.cloud-dir.outputs.app_dir }}
         run: vercel pull --yes --environment=${{ steps.vercel-env.outputs.environment }} --token=${{ secrets.VERCEL_TOKEN }}
 
-      - name: Build Vercel output
-        working-directory: ${{ steps.cloud-dir.outputs.app_dir }}
-        run: vercel build ${{ steps.vercel-env.outputs.flags }} --token=${{ secrets.VERCEL_TOKEN }}
-
       - name: Deploy to Vercel
         working-directory: ${{ steps.cloud-dir.outputs.app_dir }}
-        run: vercel deploy --prebuilt ${{ steps.vercel-env.outputs.flags }} --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy ${{ steps.vercel-env.outputs.flags }} --yes --token=${{ secrets.VERCEL_TOKEN }}
 
   render-deploy:
     needs: pre-deploy-checks

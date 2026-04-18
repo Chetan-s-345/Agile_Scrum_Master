@@ -9,7 +9,7 @@ services:
   - type: web
     name: asm-api-gateway
     runtime: node
-    rootDir: backend/api-gateway
+    rootDir: cloud/backend/api-gateway
     plan: free
     buildCommand: npm ci
     startCommand: npm start
@@ -62,7 +62,7 @@ services:
   - type: web
     name: asm-ai-service
     runtime: python
-    rootDir: backend/ai-service
+    rootDir: cloud/backend/ai-service
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
