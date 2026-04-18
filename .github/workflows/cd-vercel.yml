@@ -56,8 +56,12 @@ jobs:
         run: |
           if [[ -f "cloud/package.json" ]]; then
             echo "app_dir=cloud" >> "$GITHUB_OUTPUT"
+            echo "legacy_root=false" >> "$GITHUB_OUTPUT"
+          elif [[ -f "package.json" ]]; then
+            echo "app_dir=." >> "$GITHUB_OUTPUT"
+            echo "legacy_root=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Could not find cloud/package.json. Run this workflow from repo root with the cloud folder present."
+            echo "Could not find package.json for cloud app."
             exit 1
           fi
 
@@ -66,8 +70,14 @@ jobs:
         run: npm ci
 
       - name: Lint cloud
+        shell: bash
         working-directory: ${{ steps.cloud-dir.outputs.app_dir }}
-        run: npm run lint
+        run: |
+          if [[ "${{ steps.cloud-dir.outputs.legacy_root }}" == "true" ]]; then
+            npm run lint -- --ignore-pattern desktop/**
+          else
+            npm run lint
+          fi
 
       - name: Build cloud
         working-directory: ${{ steps.cloud-dir.outputs.app_dir }}
@@ -120,8 +130,12 @@ jobs:
         run: |
           if [[ -f "cloud/package.json" ]]; then
             echo "app_dir=cloud" >> "$GITHUB_OUTPUT"
+            echo "legacy_root=false" >> "$GITHUB_OUTPUT"
+          elif [[ -f "package.json" ]]; then
+            echo "app_dir=." >> "$GITHUB_OUTPUT"
+            echo "legacy_root=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Could not find cloud/package.json. Run this workflow from repo root with the cloud folder present."
+            echo "Could not find package.json for cloud app."
             exit 1
           fi
 
