@@ -35,6 +35,28 @@ type NotificationsItem = {
 
 type ChangelogItem = { id: string; title: string; date: string; detail: string };
 
+type AuthSessionPayload = {
+  authenticated?: boolean;
+  session?: {
+    user?: {
+      id?: string;
+      email?: string;
+      fullName?: string;
+    };
+  };
+};
+
+type IPCWrapped<T> = {
+  ok?: boolean;
+  data?: T;
+  error?: { message?: string; detail?: string };
+};
+
+type DesktopProfilePayload = {
+  name?: string;
+  email?: string;
+};
+
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -139,7 +161,7 @@ export function Navbar() {
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [switchProjectOpen, setSwitchProjectOpen] = useState(false);
   const [userName, setUserName] = useState("Developer");
-  const [userEmail, setUserEmail] = useState("unknown@local");
+  const [userEmail, setUserEmail] = useState("");
 
   const [toast, setToast] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
@@ -156,16 +178,37 @@ export function Navbar() {
   useEffect(() => {
     let ignore = false;
     async function loadBootData() {
-      const [projectsResp, sprintsResp, devResp, meResp] = await Promise.all([
+      const [projectsResp, sprintsResp, devResp] = await Promise.all([
         fetch("/api/projects", { cache: "no-store" }),
         fetch("/api/sprints", { cache: "no-store" }),
         fetch("/api/developers", { cache: "no-store" }),
-        fetch("/api/auth/me", { cache: "no-store" }),
       ]);
       const projectsData = await projectsResp.json().catch(() => null) as { items?: Project[] } | null;
       const sprintsData = await sprintsResp.json().catch(() => null) as { items?: Sprint[] } | null;
       const devData = await devResp.json().catch(() => null) as { items?: Developer[] } | null;
-      const meData = await meResp.json().catch(() => null) as Record<string, unknown> | null;
+
+      let nextName = "Developer";
+      let nextEmail = "";
+
+      if (window.desktopApi?.invoke) {
+        const [authState, profileState] = await Promise.all([
+          window.desktopApi.invoke<AuthSessionPayload>("auth:getSession").catch(() => null),
+          window.desktopApi.invoke<IPCWrapped<DesktopProfilePayload>>("profile:getCurrent").catch(() => null),
+        ]);
+        const desktopUser = authState?.session?.user;
+        const desktopProfile = profileState?.ok ? profileState?.data : null;
+
+        if (desktopProfile) {
+          nextName = asString(desktopProfile.name) || nextName;
+          nextEmail = asString(desktopProfile.email) || nextEmail;
+        }
+
+        if (authState?.authenticated && desktopUser) {
+          nextName = asString(desktopUser.fullName) || asString(desktopUser.email) || nextName;
+          nextEmail = asString(desktopUser.email) || nextEmail;
+        }
+      }
+
       if (ignore) return;
 
       const projectItems = Array.isArray(projectsData?.items) ? projectsData!.items : [];
@@ -173,10 +216,6 @@ export function Navbar() {
       setCurrentProjectId((prev) => (prev || String(projectItems[0]?.id || "")));
       setSprints(Array.isArray(sprintsData?.items) ? sprintsData!.items : []);
       setDevelopers(Array.isArray(devData?.items) ? devData!.items : []);
-
-      const user = (meData?.user || meData?.member || meData || {}) as Record<string, unknown>;
-      const nextName = asString(user.name) || asString(user.fullName) || asString(user.email) || "Developer";
-      const nextEmail = asString(user.email) || "unknown@local";
       setUserName(nextName);
       setUserEmail(nextEmail);
     }
@@ -389,8 +428,13 @@ export function Navbar() {
   }
 
   async function logout() {
-    await fetch("/api/auth/sign-out", { method: "POST" });
-    router.push("/login");
+    if (window.desktopApi?.invoke) {
+      await window.desktopApi.invoke("auth:clearSession").catch(() => undefined);
+    } else {
+      await fetch("/api/auth/sign-out", { method: "POST" });
+    }
+    setAvatarOpen(false);
+    router.push("/");
   }
 
   return (

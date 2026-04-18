@@ -4,7 +4,8 @@ const { randomUUID } = require("crypto");
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const CHANNELS = require("./ipc/channels");
 const IPCResponse = require("./utils/ipc-response");
-const { registerAuthIpcHandlers, processDesktopAuthCallback } = require("./ipc/auth");
+const { registerDashboardIpcHandlers } = require("./ipc/dashboard");
+const { registerAuthIpcHandlers, processDesktopAuthCallback, getStoredSession } = require("./ipc/auth");
 
 const AUTH_PROTOCOL = "asmdesktop";
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -1772,11 +1773,11 @@ function defaultProfileData() {
       },
     ],
     activityStats: {
-      tasksCompleted: 42,
-      prsReviewed: 17,
-      standupsAttended: 29
+      tasksCompleted: 0,
+      prsReviewed: 0,
+      standupsAttended: 0
     },
-    passwordHashHint: "desktop-local"
+    passwordHashHint: ""
   };
 }
 
@@ -1823,6 +1824,63 @@ function writeProfileData(data) {
   fs.writeFileSync(profileDbPath(), JSON.stringify(data, null, 2), "utf8");
 }
 
+function getDesktopGatewayBaseUrl() {
+  const candidate = String(
+    process.env.DESKTOP_API_GATEWAY_URL ||
+      process.env.API_GATEWAY_URL ||
+      process.env.NEXT_PUBLIC_API_URL ||
+      "http://localhost:4000"
+  ).trim();
+
+  return candidate.replace(/\/+$/, "");
+}
+
+function getDesktopSessionToken() {
+  const session = getStoredSession();
+  const token = String(session?.accessToken || "").trim();
+  if (!token) {
+    throw new Error("Desktop session not found. Please sign in.");
+  }
+  return token;
+}
+
+async function desktopGatewayRequest(method, pathname, body) {
+  const token = getDesktopSessionToken();
+  const baseUrl = getDesktopGatewayBaseUrl();
+  const url = `${baseUrl}${pathname}`;
+
+  const response = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store"
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = String(payload?.detail || payload?.error || response.statusText || "Request failed").trim();
+    throw new Error(`Gateway request failed (${response.status}): ${detail}`);
+  }
+
+  return payload;
+}
+
+function firstArray(payload, preferredKeys = []) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+
+  for (const key of preferredKeys) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+
+  const found = Object.values(payload).find((value) => Array.isArray(value));
+  return Array.isArray(found) ? found : [];
+}
+
 function registerProfileHandlers() {
   ipcMain.handle(CHANNELS.PROFILE.GET, async () => {
     try {
@@ -1835,8 +1893,38 @@ function registerProfileHandlers() {
 
   ipcMain.handle(CHANNELS.PROFILE.GET_CURRENT, async () => {
     try {
-      const data = readProfileData();
-      return IPCResponse.success(data.userProfile);
+      const [mePayload, orgPayload] = await Promise.all([
+        desktopGatewayRequest("GET", "/api/v1/auth/me"),
+        desktopGatewayRequest("GET", "/api/v1/org").catch(() => null)
+      ]);
+
+      const user = mePayload?.user && typeof mePayload.user === "object" ? mePayload.user : {};
+      const memberships = Array.isArray(mePayload?.memberships) ? mePayload.memberships : [];
+      const activeOrgId = String(mePayload?.activeOrgId || "").trim();
+
+      const activeMembership =
+        memberships.find((item) => String(item?.org?.id || "") === activeOrgId) ||
+        memberships[0] ||
+        null;
+
+      const profile = {
+        id: String(user?.id || ""),
+        name: String(user?.fullName || user?.name || "").trim(),
+        email: String(user?.email || "").trim(),
+        role: String(activeMembership?.role || "").trim(),
+        bio: "",
+        timezone: String(orgPayload?.org?.timezone || "UTC").trim() || "UTC",
+        githubUsername: "",
+        slack: "",
+        avatarUrl: null,
+        notifications: {
+          emailDailyDigest: true,
+          sprintAlerts: true,
+          standupReminders: true
+        }
+      };
+
+      return IPCResponse.success(profile);
     } catch (error) {
       return IPCResponse.internalError("Failed to load profile", String(error));
     }
@@ -1867,7 +1955,7 @@ function registerProfileHandlers() {
       writeProfileData(data);
       return IPCResponse.success(data.userProfile);
     } catch (error) {
-      return IPCResponse.internalError("Failed to update profile", String(error));
+      return IPCResponse.internalError("Profile update is not available in API yet", String(error));
     }
   });
 
@@ -1896,20 +1984,10 @@ function registerProfileHandlers() {
 
   ipcMain.handle(CHANNELS.PROFILE.CHANGE_PASSWORD, async (_event, payload = {}) => {
     try {
-      const currentPassword = String(payload.currentPassword || "");
-      const newPassword = String(payload.newPassword || "");
-
-      if (!currentPassword) {
-        return IPCResponse.validation("currentPassword", "currentPassword is required");
-      }
-      if (!newPassword || newPassword.length < 6) {
-        return IPCResponse.validation("newPassword", "newPassword must be at least 6 characters");
-      }
-
-      const data = readProfileData();
-      data.passwordHashHint = `changed-${new Date().toISOString()}`;
-      writeProfileData(data);
-      return IPCResponse.success({ success: true });
+      return IPCResponse.validation(
+        "currentPassword",
+        "Password change endpoint is not exposed by API. Use forgot/reset password flow."
+      );
     } catch (error) {
       return IPCResponse.internalError("Failed to change password", String(error));
     }
@@ -1917,16 +1995,7 @@ function registerProfileHandlers() {
 
   ipcMain.handle(CHANNELS.PROFILE.UPLOAD_AVATAR, async (_event, payload = {}) => {
     try {
-      const base64Image = String(payload.base64Image || "").trim();
-      if (!base64Image) {
-        return IPCResponse.validation("base64Image", "base64Image is required");
-      }
-
-      const data = readProfileData();
-      data.userProfile.avatarUrl = base64Image;
-      data.userProfile.updatedAt = new Date().toISOString();
-      writeProfileData(data);
-      return IPCResponse.success({ avatarUrl: base64Image });
+      return IPCResponse.validation("base64Image", "Avatar update endpoint is not exposed by API yet.");
     } catch (error) {
       return IPCResponse.internalError("Failed to upload avatar", String(error));
     }
@@ -1934,8 +2003,24 @@ function registerProfileHandlers() {
 
   ipcMain.handle(CHANNELS.PROFILE.GET_ACTIVITY_STATS, async () => {
     try {
-      const data = readProfileData();
-      return IPCResponse.success(data.activityStats);
+      const [tasksPayload, standupsPayload] = await Promise.all([
+        desktopGatewayRequest("GET", "/api/v1/tasks").catch(() => ({ items: [] })),
+        desktopGatewayRequest("GET", "/api/v1/standup").catch(() => ({ items: [] }))
+      ]);
+
+      const tasks = firstArray(tasksPayload, ["items", "tasks"]);
+      const standups = firstArray(standupsPayload, ["items", "standups"]);
+
+      const tasksCompleted = tasks.filter((task) => {
+        const status = String(task?.status || "").trim().toLowerCase();
+        return status === "done" || status === "completed" || status === "closed";
+      }).length;
+
+      return IPCResponse.success({
+        tasksCompleted,
+        prsReviewed: 0,
+        standupsAttended: standups.length
+      });
     } catch (error) {
       return IPCResponse.internalError("Failed to load profile activity stats", String(error));
     }
@@ -5313,8 +5398,27 @@ function readBillingData() {
 function registerBillingHandlers() {
   ipcMain.handle(CHANNELS.BILLING.GET_PLAN, async () => {
     try {
-      const data = readBillingData();
-      return IPCResponse.success(data.plan);
+      const [billingPayload, membersPayload] = await Promise.all([
+        desktopGatewayRequest("GET", "/api/v1/org/billing"),
+        desktopGatewayRequest("GET", "/api/v1/org/members").catch(() => ({ members: [] }))
+      ]);
+
+      const subscription =
+        billingPayload?.subscription && typeof billingPayload.subscription === "object"
+          ? billingPayload.subscription
+          : null;
+
+      const seatsUsed = Array.isArray(membersPayload?.members) ? membersPayload.members.length : 0;
+      const maxMembers = Number(subscription?.max_members || 0);
+
+      return IPCResponse.success({
+        name: String(subscription?.plan_name || "Free"),
+        slug: String(subscription?.plan_slug || "free"),
+        price: subscription?.billing_cycle === "yearly" ? "Yearly" : "Monthly",
+        renewalDate: String(subscription?.current_period_end || subscription?.trial_end || ""),
+        seatsUsed,
+        seatsAvailable: maxMembers > 0 ? maxMembers : seatsUsed
+      });
     } catch (error) {
       return IPCResponse.internalError("Failed to load billing plan", String(error));
     }
@@ -5322,8 +5426,7 @@ function registerBillingHandlers() {
 
   ipcMain.handle(CHANNELS.BILLING.GET_PAYMENT_METHOD, async () => {
     try {
-      const data = readBillingData();
-      return IPCResponse.success(data.paymentMethod);
+      return IPCResponse.success({});
     } catch (error) {
       return IPCResponse.internalError("Failed to load payment method", String(error));
     }
@@ -5331,8 +5434,7 @@ function registerBillingHandlers() {
 
   ipcMain.handle(CHANNELS.BILLING.GET_INVOICES, async () => {
     try {
-      const data = readBillingData();
-      return IPCResponse.success(data.invoices);
+      return IPCResponse.success([]);
     } catch (error) {
       return IPCResponse.internalError("Failed to load invoices", String(error));
     }
@@ -5340,8 +5442,17 @@ function registerBillingHandlers() {
 
   ipcMain.handle(CHANNELS.BILLING.GET_USAGE, async () => {
     try {
-      const data = readBillingData();
-      return IPCResponse.success(data.usage);
+      const billingPayload = await desktopGatewayRequest("GET", "/api/v1/org/billing");
+      const usage =
+        billingPayload?.usageMonthToDate && typeof billingPayload.usageMonthToDate === "object"
+          ? billingPayload.usageMonthToDate
+          : {};
+
+      return IPCResponse.success({
+        seatsUsed: 0,
+        apiCallsThisMonth: Number(usage.total_requests || 0),
+        storageUsedGb: 0
+      });
     } catch (error) {
       return IPCResponse.internalError("Failed to load usage metrics", String(error));
     }
@@ -5349,8 +5460,8 @@ function registerBillingHandlers() {
 
   ipcMain.handle(CHANNELS.BILLING.GET_BILLING_PORTAL_URL, async () => {
     try {
-      const data = readBillingData();
-      return IPCResponse.success({ url: data.billingPortalUrl });
+      const frontendBase = String(process.env.FRONTEND_URL || "http://localhost:3000").trim().replace(/\/+$/, "");
+      return IPCResponse.success({ url: `${frontendBase}/settings/billing` });
     } catch (error) {
       return IPCResponse.internalError("Failed to get billing portal URL", String(error));
     }
@@ -6677,8 +6788,9 @@ app.whenReady().then(() => {
     app.setAsDefaultProtocolClient(AUTH_PROTOCOL);
   }
 
-  registerAuthIpcHandlers(ipcMain);
+  registerAuthIpcHandlers(ipcMain, { onSessionChanged: notifySessionUpdated });
   registerSystemHandlers();
+  registerDashboardIpcHandlers(ipcMain);
   registerGoalHandlers();
   registerIntegrationHandlers();
   registerGithubRepoHandlers();

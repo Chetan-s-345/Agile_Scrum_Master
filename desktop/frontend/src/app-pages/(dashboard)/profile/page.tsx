@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "@/next-shims/link";
 import { User, Save } from "lucide-react";
 
 type ProfileDraft = {
@@ -286,7 +285,7 @@ export default function ProfilePage() {
                 </label>
                 <div>
                   <p className="text-slate-900 dark:text-white font-medium">{profile?.name || "-"}</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">Role: {profile?.role || "member"}</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Role: {profile?.role || "-"}</p>
                 </div>
               </div>
               <div>
@@ -295,7 +294,7 @@ export default function ProfilePage() {
               </div>
               <div>
                 <p className="text-slate-600 dark:text-slate-400">Role</p>
-                <p className="text-slate-900 dark:text-white font-medium">{profile?.role || "member"}</p>
+                <p className="text-slate-900 dark:text-white font-medium">{profile?.role || "-"}</p>
               </div>
               <div>
                 <p className="text-slate-600 dark:text-slate-400">GitHub</p>
@@ -307,24 +306,6 @@ export default function ProfilePage() {
               </div>
             </div>
           )}
-
-          <div className="mt-5 rounded-lg border border-slate-200 dark:border-zinc-800 p-4">
-            <p className="text-sm text-slate-600 dark:text-slate-300 mb-3">Need to upgrade your workspace plan?</p>
-            <div className="flex flex-wrap gap-3">
-              <Link
-                href="/settings/billing?plan=pro"
-                className="inline-flex items-center rounded-lg bg-slate-900 dark:bg-white px-4 py-2 text-sm font-semibold text-white dark:text-black"
-              >
-                Upgrade to Pro
-              </Link>
-              <Link
-                href="/settings/billing?plan=enterprise"
-                className="inline-flex items-center rounded-lg border border-slate-300 dark:border-zinc-700 px-4 py-2 text-sm font-semibold text-slate-900 dark:text-white"
-              >
-                Upgrade to Enterprise
-              </Link>
-            </div>
-          </div>
         </div>
 
         <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
