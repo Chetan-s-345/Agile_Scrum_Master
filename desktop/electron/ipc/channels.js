@@ -85,7 +85,14 @@ const CHANNELS = {
     GET_TASKS: "sprint:getTasks",
     UPDATE: "sprint:update",
     UPDATE_STATUS: "sprint:updateStatus",
+    DELETE: "sprint:delete",
     GET_EVENTS: "sprint:getEvents"
+  },
+
+  // Sprint listing and creation for /sprints route
+  SPRINTS: {
+    GET_ALL: "sprints:getAll",
+    CREATE: "sprints:create"
   },
 
   // Timeline channels
@@ -264,8 +271,18 @@ const CHANNELS = {
     ASSIGN_TRAINING: "skillGap:assignTraining"
   },
 
+  // Sprint planning workflow (kebab-case route)
+  SPRINT_PLAN: {
+    GET_BACKLOG: "sprintPlan:getBacklog",
+    GET_TEAM_CAPACITY: "sprintPlan:getTeamCapacity",
+    SAVE_PLAN: "sprintPlan:savePlan",
+    AI_SUGGEST: "sprintPlan:aiSuggest"
+  },
+
   // Project detail and management
   PROJECTS: {
+    GET_ALL: "projects:getAll",
+    CREATE: "projects:create",
     GET_BY_ID: "projects:getById",
     GET_SPRINTS: "projects:getSprints",
     GET_MEMBERS: "projects:getMembers",

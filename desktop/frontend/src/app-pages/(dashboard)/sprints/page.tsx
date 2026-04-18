@@ -13,20 +13,28 @@ type Sprint = {
 	endDate?: string;
 	plannedPoints?: number;
 	completedPoints?: number;
+	velocity?: number;
+	completionPct?: number;
+	projectName?: string;
 };
 
-type SprintsResp = { items?: Sprint[]; error?: string };
+function asText(value: unknown): string {
+	return typeof value === "string" ? value : "";
+}
 
-async function fetchJson<T>(url: string): Promise<{ ok: boolean; status: number; data: T | null; text?: string }> {
-	const resp = await fetch(url, { cache: "no-store" });
-	const text = await resp.text().catch(() => "");
-	let data: T | null = null;
-	try {
-		data = text ? (JSON.parse(text) as T) : null;
-	} catch {
-		data = null;
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+	if (!window.desktopApi?.invoke) {
+		throw new Error("Desktop IPC bridge unavailable");
 	}
-	return { ok: resp.ok, status: resp.status, data, text };
+	const response = await window.desktopApi.invoke(channel, payload);
+	if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
+		const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
+		if (!wrapped.ok) {
+			throw new Error(asText(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
+		}
+		return (wrapped.data as T) ?? (null as T);
+	}
+	return response as T;
 }
 
 export default function SprintListPage() {
@@ -35,6 +43,17 @@ export default function SprintListPage() {
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [actionSprintId, setActionSprintId] = useState<string | null>(null);
+	const [projectIdFilter, setProjectIdFilter] = useState<string>("");
+	const [startDateFilter, setStartDateFilter] = useState<string>("");
+	const [endDateFilter, setEndDateFilter] = useState<string>("");
+
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+		const params = new URLSearchParams(window.location.search);
+		setProjectIdFilter(String(params.get("projectId") || "").trim());
+		setStartDateFilter(String(params.get("startDate") || params.get("from") || "").trim());
+		setEndDateFilter(String(params.get("endDate") || params.get("to") || "").trim());
+	}, []);
 
 	const tabs = useMemo(
 		() => [
@@ -49,34 +68,33 @@ export default function SprintListPage() {
 	async function load() {
 		setLoading(true);
 		setError(null);
-
-		const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-		const resp = await fetchJson<SprintsResp>(`/api/sprints${qs}`);
-
-		if (!resp.ok) {
+		try {
+			const rows = await invokeDesktop<Sprint[]>("sprints:getAll", {
+				status: status || undefined,
+				projectId: projectIdFilter || undefined,
+				startDate: startDateFilter || undefined,
+				endDate: endDateFilter || undefined
+			});
+			setItems(Array.isArray(rows) ? rows : []);
+		} catch (e) {
 			setItems([]);
+			setError(e instanceof Error ? e.message : "Failed to load sprints");
+		} finally {
 			setLoading(false);
-			setError(resp.data?.error ? String(resp.data.error) : `Failed to load sprints (${resp.status})`);
-			return;
 		}
-
-		setItems(Array.isArray(resp.data?.items) ? resp.data.items! : []);
-		setLoading(false);
 	}
 
 	useEffect(() => {
 		load();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [status]);
+	}, [status, projectIdFilter, startDateFilter, endDateFilter]);
 
 	async function archiveSprint(sprintId: string) {
 		if (!confirm("Archive this sprint?")) return;
 		setError(null);
 		setActionSprintId(sprintId);
 		try {
-			const resp = await fetch(`/api/sprints/${encodeURIComponent(sprintId)}/archive`, { method: "PATCH" });
-			const data = await resp.json().catch(() => null);
-			if (!resp.ok) throw new Error(String(data?.error || "Failed to archive sprint"));
+			await invokeDesktop("sprint:updateStatus", { sprintId, status: "cancelled" });
 			await load();
 		} catch (e) {
 			setError(e instanceof Error ? e.message : "Failed to archive sprint");
@@ -90,9 +108,7 @@ export default function SprintListPage() {
 		setError(null);
 		setActionSprintId(sprintId);
 		try {
-			const resp = await fetch(`/api/sprints/${encodeURIComponent(sprintId)}`, { method: "DELETE" });
-			const data = await resp.json().catch(() => null);
-			if (!resp.ok) throw new Error(String(data?.error || "Failed to delete sprint"));
+			await invokeDesktop("sprint:delete", { sprintId });
 			await load();
 		} catch (e) {
 			setError(e instanceof Error ? e.message : "Failed to delete sprint");
@@ -151,7 +167,7 @@ export default function SprintListPage() {
 								key={s.id}
 								className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
 							>
-								<Link href={`/sprint/${encodeURIComponent(s.id)}`} className="block">
+								<Link href={`/sprints/${encodeURIComponent(s.id)}`} className="block">
 									<div className="flex items-center justify-between gap-3">
 										<div className="text-lg font-bold text-slate-900 dark:text-white">{s.name}</div>
 										<span className="rounded-full px-3 py-1 text-xs font-semibold bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-slate-200">

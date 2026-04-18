@@ -1880,6 +1880,34 @@ function registerSprintHandlers() {
     }
   });
 
+  ipcMain.handle(CHANNELS.SPRINT.DELETE, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const data = readSprintOverviewData();
+      if (!data.sprints?.[sprintId]) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      delete data.sprints[sprintId];
+      delete data.tasksBySprint[sprintId];
+      delete data.eventsBySprint[sprintId];
+
+      if (String(data.currentSprintId || "") === sprintId) {
+        const remainingIds = Object.keys(data.sprints || {});
+        data.currentSprintId = remainingIds.length ? remainingIds[0] : "";
+      }
+
+      writeSprintOverviewData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete sprint", String(error));
+    }
+  });
+
   ipcMain.handle(CHANNELS.SPRINT.GET_EVENTS, async (_event, payload = {}) => {
     try {
       const data = readSprintOverviewData();
@@ -1893,6 +1921,343 @@ function registerSprintHandlers() {
       return IPCResponse.success(events);
     } catch (error) {
       return IPCResponse.internalError("Failed to load sprint events", String(error));
+    }
+  });
+}
+
+function registerSprintsHandlers() {
+  ipcMain.handle(CHANNELS.SPRINTS.GET_ALL, async (_event, payload = {}) => {
+    try {
+      const statusFilter = String(payload.status || "").trim().toLowerCase();
+      const projectFilter = String(payload.projectId || "").trim();
+      const startFilter = String(payload.startDate || "").trim();
+      const endFilter = String(payload.endDate || "").trim();
+
+      const overview = readSprintOverviewData();
+      const projects = readProjectsData();
+      const projectNameById = new Map((Array.isArray(projects.projects) ? projects.projects : []).map((p) => [String(p.id || ""), String(p.name || "")]))
+      const projectBySprintId = new Map();
+      for (const [projectId, list] of Object.entries(projects.sprintsByProject || {})) {
+        const rows = Array.isArray(list) ? list : [];
+        for (const item of rows) {
+          const sprintId = String(item?.id || "").trim();
+          if (sprintId) {
+            projectBySprintId.set(sprintId, String(projectId || ""));
+          }
+        }
+      }
+
+      const startMs = startFilter ? new Date(startFilter).getTime() : NaN;
+      const endMs = endFilter ? new Date(endFilter).getTime() : NaN;
+
+      const items = Object.values(overview.sprints || {})
+        .map((row) => {
+          const id = String(row?.id || "");
+          const projectId = String(projectBySprintId.get(id) || "");
+          const plannedPoints = Math.max(0, Number(row?.plannedPoints || 0));
+          const completedPoints = Math.max(0, Number(row?.completedPoints || 0));
+          const completionPct = plannedPoints > 0 ? Math.round((completedPoints / plannedPoints) * 100) : 0;
+          return {
+            ...row,
+            projectId,
+            projectName: projectNameById.get(projectId) || "",
+            plannedPoints,
+            completedPoints,
+            velocity: completedPoints,
+            completionPct
+          };
+        })
+        .filter((row) => {
+          if (statusFilter && String(row.status || "").toLowerCase() !== statusFilter) {
+            return false;
+          }
+          if (projectFilter && String(row.projectId || "") !== projectFilter) {
+            return false;
+          }
+
+          const sprintStartMs = row.startDate ? new Date(String(row.startDate)).getTime() : NaN;
+          const sprintEndMs = row.endDate ? new Date(String(row.endDate)).getTime() : NaN;
+          if (Number.isFinite(startMs) && Number.isFinite(sprintEndMs) && sprintEndMs < startMs) {
+            return false;
+          }
+          if (Number.isFinite(endMs) && Number.isFinite(sprintStartMs) && sprintStartMs > endMs) {
+            return false;
+          }
+          return true;
+        })
+        .sort((a, b) => {
+          const priority = { active: 0, planning: 1, completed: 2, cancelled: 3 };
+          const aPriority = priority[String(a.status || "").toLowerCase()] ?? 9;
+          const bPriority = priority[String(b.status || "").toLowerCase()] ?? 9;
+          if (aPriority !== bPriority) {
+            return aPriority - bPriority;
+          }
+          const aStart = new Date(String(a.startDate || 0)).getTime();
+          const bStart = new Date(String(b.startDate || 0)).getTime();
+          return bStart - aStart;
+        });
+
+      return IPCResponse.success(items);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprints", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.CREATE, async (_event, payload = {}) => {
+    try {
+      const name = String(payload.name || "").trim();
+      const goal = String(payload.goal || "").trim();
+      const startDate = String(payload.startDate || "").trim();
+      const endDate = String(payload.endDate || "").trim();
+      const projectId = String(payload.projectId || "").trim();
+
+      if (!name) return IPCResponse.validation("name", "name is required");
+      if (!startDate) return IPCResponse.validation("startDate", "startDate is required");
+      if (!endDate) return IPCResponse.validation("endDate", "endDate is required");
+      if (!projectId) return IPCResponse.validation("projectId", "projectId is required");
+
+      const sprintId = `sprint-${Date.now()}`;
+      const overview = readSprintOverviewData();
+      overview.sprints[sprintId] = {
+        id: sprintId,
+        name,
+        goal,
+        startDate,
+        endDate,
+        status: "planning",
+        plannedPoints: 0,
+        completedPoints: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      overview.tasksBySprint[sprintId] = [];
+      overview.eventsBySprint[sprintId] = [];
+      writeSprintOverviewData(overview);
+
+      const projects = readProjectsData();
+      const rows = Array.isArray(projects.sprintsByProject?.[projectId]) ? projects.sprintsByProject[projectId] : [];
+      projects.sprintsByProject[projectId] = [
+        ...rows,
+        { id: sprintId, name, status: "planning", startDate, endDate }
+      ];
+      writeProjectsData(projects);
+
+      return IPCResponse.success({
+        id: sprintId,
+        name,
+        goal,
+        startDate,
+        endDate,
+        status: "planning",
+        projectId,
+        plannedPoints: 0,
+        completedPoints: 0,
+        velocity: 0,
+        completionPct: 0
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to create sprint", String(error));
+    }
+  });
+}
+
+function sprintPlanDbPath() {
+  return path.join(app.getPath("userData"), "sprint.plan.db.json");
+}
+
+function defaultSprintPlanData() {
+  return {
+    backlog: [
+      { id: "bl-101", title: "Harden auth refresh flow", story_points: 5, priority: "high", tech_tags: ["auth", "backend"], project_id: "agile-scrum-master", status: "ready" },
+      { id: "bl-102", title: "Improve board loading states", story_points: 3, priority: "medium", tech_tags: ["frontend"], project_id: "agile-scrum-master", status: "ready" },
+      { id: "bl-103", title: "Add webhook retry policy", story_points: 8, priority: "high", tech_tags: ["integrations"], project_id: "agile-scrum-master", status: "ready" },
+      { id: "bl-104", title: "Refine sprint report export", story_points: 5, priority: "medium", tech_tags: ["reports"], project_id: "agile-scrum-master", status: "ready" },
+      { id: "bl-105", title: "Stabilize desktop session restore", story_points: 8, priority: "high", tech_tags: ["electron"], project_id: "agile-scrum-master", status: "ready" },
+      { id: "bl-106", title: "Add roadmap filtering", story_points: 2, priority: "low", tech_tags: ["ui"], project_id: "agile-scrum-master", status: "ready" }
+    ]
+  };
+}
+
+function readSprintPlanData() {
+  try {
+    const filePath = sprintPlanDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultSprintPlanData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const defaults = defaultSprintPlanData();
+    return {
+      backlog: Array.isArray(parsed?.backlog) ? parsed.backlog : defaults.backlog
+    };
+  } catch {
+    return defaultSprintPlanData();
+  }
+}
+
+function writeSprintPlanData(data) {
+  fs.writeFileSync(sprintPlanDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function sprintPlanPriorityValue(priority) {
+  const normalized = String(priority || "").trim().toLowerCase();
+  if (normalized === "high") return 3;
+  if (normalized === "medium") return 2;
+  return 1;
+}
+
+function sprintLengthInDays(startDate, endDate) {
+  const startMs = new Date(String(startDate || "")).getTime();
+  const endMs = new Date(String(endDate || "")).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return 10;
+  }
+  return Math.max(1, Math.round((endMs - startMs) / (24 * 60 * 60 * 1000)) + 1);
+}
+
+function registerSprintPlanHandlers() {
+  ipcMain.handle(CHANNELS.SPRINT_PLAN.GET_BACKLOG, async () => {
+    try {
+      const data = readSprintPlanData();
+      const items = Array.isArray(data.backlog) ? data.backlog : [];
+      return IPCResponse.success(items);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint backlog", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT_PLAN.GET_TEAM_CAPACITY, async (_event, payload = {}) => {
+    try {
+      const startDate = String(payload.startDate || "").trim();
+      const endDate = String(payload.endDate || "").trim();
+      const lengthDays = sprintLengthInDays(startDate, endDate);
+      const developers = readDevelopersData();
+      const members = (Array.isArray(developers.members) ? developers.members : [])
+        .filter((member) => String(member.status || "active") === "active")
+        .map((member) => {
+          const maxCapacity = Math.max(2, Math.round(lengthDays * 1.5));
+          return {
+            developerId: String(member.id || ""),
+            name: String(member.name || "Unknown"),
+            availabilityStatus: "available",
+            maxCapacity,
+            currentLoad: 0,
+            availableCapacity: maxCapacity
+          };
+        });
+
+      const totalPoints = members.reduce((sum, member) => sum + Number(member.availableCapacity || 0), 0);
+      return IPCResponse.success({ totalPoints, members });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load team capacity", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT_PLAN.AI_SUGGEST, async (_event, payload = {}) => {
+    try {
+      const capacity = Math.max(1, Number(payload.capacity || 0));
+      const sprintLength = Math.max(1, Number(payload.sprintLength || 10));
+      const data = readSprintPlanData();
+      const readyBacklog = (Array.isArray(data.backlog) ? data.backlog : [])
+        .filter((item) => String(item.status || "ready").toLowerCase() === "ready")
+        .sort((a, b) => {
+          const byPriority = sprintPlanPriorityValue(b.priority) - sprintPlanPriorityValue(a.priority);
+          if (byPriority !== 0) return byPriority;
+          return Number(a.story_points || 0) - Number(b.story_points || 0);
+        });
+
+      const normalizedCapacity = Math.max(capacity, Math.round(sprintLength * 2));
+      const selected = [];
+      let usedPoints = 0;
+      for (const item of readyBacklog) {
+        const points = Math.max(0, Number(item.story_points || 0));
+        if (selected.length > 0 && usedPoints + points > normalizedCapacity) {
+          continue;
+        }
+        selected.push(item);
+        usedPoints += points;
+        if (usedPoints >= normalizedCapacity) {
+          break;
+        }
+      }
+
+      return IPCResponse.success(selected);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to generate AI sprint suggestion", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT_PLAN.SAVE_PLAN, async (_event, payload = {}) => {
+    try {
+      const name = String(payload.name || "").trim();
+      const goal = String(payload.goal || "").trim();
+      const startDate = String(payload.startDate || "").trim();
+      const endDate = String(payload.endDate || "").trim();
+      const taskIds = Array.isArray(payload.taskIds) ? payload.taskIds.map((id) => String(id || "").trim()).filter(Boolean) : [];
+
+      if (!name) return IPCResponse.validation("name", "name is required");
+      if (!startDate) return IPCResponse.validation("startDate", "startDate is required");
+      if (!endDate) return IPCResponse.validation("endDate", "endDate is required");
+
+      const sprintId = `sprint-${Date.now()}`;
+      const sprintData = readSprintOverviewData();
+      const planData = readSprintPlanData();
+
+      const createdSprint = {
+        id: sprintId,
+        name,
+        goal,
+        startDate,
+        endDate,
+        status: "planning",
+        createdAt: new Date().toISOString(),
+        plannedPoints: 0,
+        completedPoints: 0
+      };
+
+      sprintData.sprints[sprintId] = createdSprint;
+      sprintData.currentSprintId = sprintData.currentSprintId || sprintId;
+
+      const selectedBacklog = (Array.isArray(planData.backlog) ? planData.backlog : []).filter((item) => taskIds.includes(String(item.id || "")));
+      sprintData.tasksBySprint[sprintId] = selectedBacklog.map((item) => ({
+        id: String(item.id),
+        title: String(item.title || "Task"),
+        status: "todo",
+        assignee: "Unassigned",
+        story_points: Number(item.story_points || 0),
+        priority: String(item.priority || "medium")
+      }));
+
+      createdSprint.plannedPoints = sprintData.tasksBySprint[sprintId].reduce((sum, task) => sum + Number(task.story_points || 0), 0);
+      sprintData.eventsBySprint[sprintId] = [
+        { id: `${sprintId}-ev-review`, type: "review", title: "Sprint Review", scheduledAt: `${endDate}T14:00:00.000Z` },
+        { id: `${sprintId}-ev-retro`, type: "retro", title: "Sprint Retrospective", scheduledAt: `${endDate}T15:00:00.000Z` }
+      ];
+      writeSprintOverviewData(sprintData);
+
+      const projectsData = readProjectsData();
+      const projectId = String(payload.projectId || projectsData.projects?.[0]?.id || "agile-scrum-master");
+      const existingSprints = Array.isArray(projectsData.sprintsByProject?.[projectId]) ? projectsData.sprintsByProject[projectId] : [];
+      projectsData.sprintsByProject[projectId] = [
+        ...existingSprints,
+        { id: sprintId, name, status: "planning", startDate, endDate }
+      ];
+      writeProjectsData(projectsData);
+
+      const usedTaskIds = new Set(taskIds);
+      const remainingBacklog = (Array.isArray(planData.backlog) ? planData.backlog : []).map((item) => {
+        if (usedTaskIds.has(String(item.id || ""))) {
+          return { ...item, status: "planned", sprint_id: sprintId };
+        }
+        return item;
+      });
+      writeSprintPlanData({ backlog: remainingBacklog });
+
+      return IPCResponse.success(createdSprint);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to save sprint plan", String(error));
     }
   });
 }
@@ -1981,6 +2346,58 @@ function resolveProjectId(data, projectId) {
 }
 
 function registerProjectHandlers() {
+  ipcMain.handle(CHANNELS.PROJECTS.GET_ALL, async () => {
+    try {
+      const data = readProjectsData();
+      return IPCResponse.success(Array.isArray(data.projects) ? data.projects : []);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load projects", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PROJECTS.CREATE, async (_event, payload = {}) => {
+    try {
+      const name = String(payload.name || "").trim();
+      const description = String(payload.description || "").trim();
+      if (!name) {
+        return IPCResponse.validation("name", "name is required");
+      }
+
+      const data = readProjectsData();
+      const slug = name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || `project-${Date.now()}`;
+      const projectId = `project-${Date.now()}`;
+      const project = {
+        id: projectId,
+        name,
+        slug,
+        description,
+        status: "active",
+        owner: "Demo User",
+        startDate: new Date().toISOString().slice(0, 10),
+        endDate: null,
+        linkedRepos: [],
+        github_repo: "",
+        jira_project_key: "",
+        tech_stack: [],
+        stats: { totalTasks: 0, openTasks: 0, completedTasks: 0 },
+        activityFeed: [],
+        archived: false,
+        createdAt: new Date().toISOString()
+      };
+
+      data.projects = [...(Array.isArray(data.projects) ? data.projects : []), project];
+      data.sprintsByProject[projectId] = [];
+      data.membersByProject[projectId] = [];
+      writeProjectsData(data);
+      return IPCResponse.success(project);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to create project", String(error));
+    }
+  });
+
   ipcMain.handle(CHANNELS.PROJECTS.GET_BY_ID, async (_event, payload = {}) => {
     try {
       const data = readProjectsData();
@@ -4810,6 +5227,8 @@ app.whenReady().then(() => {
   registerOnboardingHandlers();
   registerProfileHandlers();
   registerSprintHandlers();
+  registerSprintsHandlers();
+  registerSprintPlanHandlers();
   registerProjectHandlers();
   registerReportsHandlers();
   registerScrumMasterHandlers();

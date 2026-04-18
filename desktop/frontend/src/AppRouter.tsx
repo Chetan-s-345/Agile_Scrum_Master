@@ -141,6 +141,8 @@ export function AppRouter() {
   return (
     <RootLayout>
       <Routes>
+        <Route path="/sprint_plan" element={<Navigate to="/sprint-plan" replace />} />
+
         {pageEntries.map((entry) => {
           const Page = lazy(entry.loader as () => Promise<PageModule>);
 
