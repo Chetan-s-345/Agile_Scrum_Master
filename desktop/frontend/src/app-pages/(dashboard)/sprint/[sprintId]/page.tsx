@@ -2,7 +2,7 @@
 
 import Link from "@/next-shims/link";
 import { useParams } from "@/next-shims/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
 type Sprint = {
@@ -16,39 +16,7 @@ type Sprint = {
   completedPoints?: number;
 };
 
-type SprintTask = {
-  id: string;
-  title: string;
-  status: string;
-  assignee?: string;
-};
-
-type SprintEvent = {
-  id: string;
-  type: string;
-  title: string;
-  scheduledAt?: string;
-};
-
-type SprintSummary = {
-  sprintId: string;
-  totalTasks: number;
-  completedTasks: number;
-  blockedTasks: number;
-  plannedPoints: number;
-  completedPoints: number;
-  velocity: number;
-  completionPct: number;
-  upcomingEvents?: SprintEvent[];
-};
-
-type MemberContribution = {
-  memberId: string;
-  name: string;
-  tasksCompleted: number;
-  totalTasks: number;
-  pointsCompleted: number;
-};
+type SprintGetResp = { sprint?: Sprint; error?: string } | (Sprint & { error?: never });
 
 type Velocity = {
   currentVelocity: number;
@@ -64,8 +32,6 @@ type Risk = Record<string, unknown>;
 
 type BurndownPoint = { day: number; date: string; idealRemaining: number; actualRemaining: number };
 
-type AlertItem = { id: string; severity: string; title: string; message: string; createdAt: string; acknowledged: boolean };
-
 function safe(value: unknown): string {
   if (typeof value === "string") return value;
   if (value == null) return "";
@@ -80,24 +46,37 @@ function fmtDate(value: unknown): string {
   return dt.toLocaleDateString();
 }
 
-function asText(value: unknown): string {
-  return typeof value === "string" ? value : "";
+function normalizeSprint(data: SprintGetResp | null): Sprint | null {
+  if (!data) return null;
+  if (typeof data === "object" && data && "sprint" in data) {
+    const maybe = (data as { sprint?: Sprint }).sprint;
+    return maybe ?? null;
+  }
+  if (typeof data === "object" && data && "id" in data && "name" in data && "status" in data) {
+    return data as Sprint;
+  }
+  return null;
 }
 
-async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
-  if (!window.desktopApi?.invoke) {
-    throw new Error("Desktop IPC bridge unavailable");
+function extractError(data: SprintGetResp | null): string | null {
+  if (!data || typeof data !== "object") return null;
+  if ("error" in data) {
+    const err = (data as { error?: unknown }).error;
+    return typeof err === "string" && err ? err : null;
   }
+  return null;
+}
 
-  const response = await window.desktopApi.invoke(channel, payload);
-  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
-    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
-    if (!wrapped.ok) {
-      throw new Error(asText(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
-    }
-    return (wrapped.data as T) ?? (null as T);
+async function fetchJson<T>(url: string): Promise<{ ok: boolean; status: number; data: T | null; text?: string }> {
+  const resp = await fetch(url, { cache: "no-store" });
+  const text = await resp.text().catch(() => "");
+  let data: T | null = null;
+  try {
+    data = text ? (JSON.parse(text) as T) : null;
+  } catch {
+    data = null;
   }
-  return response as T;
+  return { ok: resp.ok, status: resp.status, data, text };
 }
 
 export default function SprintDetailPage() {
@@ -108,147 +87,63 @@ export default function SprintDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [sprint, setSprint] = useState<Sprint | null>(null);
-  const [tasks, setTasks] = useState<SprintTask[]>([]);
-  const [events, setEvents] = useState<SprintEvent[]>([]);
   const [velocity, setVelocity] = useState<Velocity | null>(null);
   const [alerts, setAlerts] = useState<AlertsResp | null>(null);
   const [risk, setRisk] = useState<Risk | null>(null);
   const [burndown, setBurndown] = useState<BurndownPoint[]>([]);
-  const [contributions, setContributions] = useState<MemberContribution[]>([]);
+
+  const hasId = useMemo(() => typeof sprintId === "string" && sprintId.length > 0, [sprintId]);
 
   async function load() {
+    if (!hasId) return;
     setLoading(true);
     setError(null);
 
-    try {
-      const [nextSprint, nextTasks, nextSummary, nextContributions] = await Promise.all([
-        invokeDesktop<Sprint>("sprints:getById", { sprintId }),
-        invokeDesktop<SprintTask[]>("sprints:getTasks", { sprintId }),
-        invokeDesktop<SprintSummary>("sprints:getSummary", { sprintId }),
-        invokeDesktop<MemberContribution[]>("sprints:getContributions", { sprintId }),
-      ]);
+    const [sResp, vResp, aResp, rResp, bResp] = await Promise.all([
+      fetchJson<SprintGetResp>(`/api/sprints/${encodeURIComponent(sprintId)}`),
+      fetchJson<Velocity>(`/api/monitoring/sprint/${encodeURIComponent(sprintId)}/velocity`),
+      fetchJson<AlertsResp>(`/api/monitoring/sprint/${encodeURIComponent(sprintId)}/alerts?acknowledged=false`),
+      fetchJson<Risk>(`/api/sprints/${encodeURIComponent(sprintId)}/risk`),
+      fetchJson<{ items: BurndownPoint[] }>(`/api/sprints/${encodeURIComponent(sprintId)}/burndown`),
+    ]);
 
-      const taskRows = Array.isArray(nextTasks) ? nextTasks : [];
-      const summary = nextSummary && typeof nextSummary === "object" ? nextSummary : null;
-      const eventRows = Array.isArray(summary?.upcomingEvents) ? summary!.upcomingEvents! : [];
-      const doneCount = Number(summary?.completedTasks ?? taskRows.filter((task) => {
-        const normalized = String(task.status || "").toLowerCase();
-        return normalized === "done" || normalized === "completed";
-      }).length);
-      const totalTaskCount = Math.max(1, Number(summary?.totalTasks || taskRows.length || 1));
-
-      const endDate = new Date(String(nextSprint?.endDate || ""));
-      const today = new Date();
-      const daysRemaining = Number.isNaN(endDate.getTime())
-        ? 0
-        : Math.max(0, Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
-      const totalTasks = totalTaskCount;
-
-      const blockedTasks = Number(summary?.blockedTasks ?? taskRows.filter(
-        (task) => String(task.status || "").toLowerCase() === "blocked"
-      ).length);
-
-      const alertItems: AlertItem[] = [
-        ...(blockedTasks > 0
-          ? [{
-          id: `blocked-${String(nextSprint?.id || sprintId || "unknown")}`,
-          severity: "high",
-          title: `${blockedTasks} blocked task${blockedTasks === 1 ? "" : "s"}`,
-          message: "Sprint contains blocked work that may impact completion.",
-          createdAt: new Date().toISOString(),
-          acknowledged: false,
-        }]
-          : []),
-        ...eventRows.map((event) => ({
-          id: `event-${event.id}`,
-          severity: "info",
-          title: event.title,
-          message: `${event.type} scheduled for ${fmtDate(event.scheduledAt)}`,
-          createdAt: String(event.scheduledAt || new Date().toISOString()),
-          acknowledged: false,
-        })),
-      ];
-
-      const spanDays = Math.max(1, Math.min(10, daysRemaining || 7));
-      const burndownRows: BurndownPoint[] = Array.from({ length: spanDays }, (_item, index) => {
-        const day = index + 1;
-        const idealRemaining = Math.max(0, Math.round(totalTasks - (totalTasks / spanDays) * day));
-        const actualRemaining = Math.max(0, totalTasks - doneCount - Math.max(0, day - Math.ceil(doneCount / 2)));
-        const baseDate = Number.isNaN(endDate.getTime())
-          ? new Date(today.getTime() + day * 24 * 60 * 60 * 1000)
-          : new Date(endDate.getTime() - (spanDays - day) * 24 * 60 * 60 * 1000);
-        return {
-          day,
-          date: baseDate.toISOString(),
-          idealRemaining,
-          actualRemaining,
-        };
-      });
-
-      setSprint(nextSprint || null);
-      setTasks(taskRows);
-      setEvents(eventRows);
-      setContributions(Array.isArray(nextContributions) ? nextContributions : []);
-      setVelocity({
-        currentVelocity: Number((Number(summary?.velocity ?? ((doneCount / totalTasks) * 10))).toFixed(1)),
-        requiredVelocity: Number((((totalTasks - doneCount) / Math.max(daysRemaining, 1))).toFixed(1)),
-        gapPct: Number((((totalTasks - doneCount) / totalTasks) * 100).toFixed(1)),
-        onTrack: blockedTasks === 0,
-        daysRemaining,
-      });
-      setAlerts({ items: alertItems });
-      setRisk({
-        totalTasks: Number(summary?.totalTasks ?? taskRows.length),
-        completed: doneCount,
-        inProgress: taskRows.filter((task) => String(task.status || "").toLowerCase() === "in_progress").length,
-        blocked: blockedTasks,
-        upcomingEvents: eventRows.length,
-        contributors: Array.isArray(nextContributions) ? nextContributions.length : 0,
-      });
-      setBurndown(burndownRows);
-    } catch (err) {
+    if (!sResp.ok) {
       setSprint(null);
-      setTasks([]);
-      setEvents([]);
-      setVelocity(null);
-      setAlerts(null);
-      setRisk(null);
-      setBurndown([]);
-      setContributions([]);
-      setError(err instanceof Error ? err.message : "Failed to load sprint");
-    } finally {
+      setError(extractError(sResp.data) || `Failed to load sprint (${sResp.status})`);
       setLoading(false);
+      return;
     }
+
+    setSprint(normalizeSprint(sResp.data));
+
+    setVelocity(vResp.ok ? vResp.data : null);
+    setAlerts(aResp.ok ? aResp.data : null);
+    setRisk(rResp.ok ? rResp.data : null);
+    setBurndown(bResp.ok && Array.isArray(bResp.data?.items) ? bResp.data!.items : []);
+
+    setLoading(false);
   }
 
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sprintId]);
+  }, [hasId, sprintId]);
 
   async function startSprint() {
-    const resolvedSprintId = String(sprint?.id || sprintId || "").trim();
-    if (!resolvedSprintId) return;
-    await invokeDesktop<Sprint>("sprints:update", {
-      sprintId: resolvedSprintId,
-      changes: { status: "active" },
-    });
+    if (!hasId) return;
+    await fetch(`/api/sprints/${encodeURIComponent(sprintId)}/start`, { method: "PATCH" });
     await load();
   }
 
   async function completeSprint() {
-    const resolvedSprintId = String(sprint?.id || sprintId || "").trim();
-    if (!resolvedSprintId) return;
-    await invokeDesktop<Sprint>("sprints:update", {
-      sprintId: resolvedSprintId,
-      changes: { status: "completed" },
-    });
+    if (!hasId) return;
+    await fetch(`/api/sprints/${encodeURIComponent(sprintId)}/complete`, { method: "PATCH" });
     await load();
   }
 
-  void tasks;
-  void events;
-  void contributions;
+  if (!hasId) {
+    return <div className="min-h-screen bg-white dark:bg-black px-4 py-8">Missing sprint id.</div>;
+  }
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
@@ -256,7 +151,7 @@ export default function SprintDetailPage() {
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
             <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{sprint?.name || "Sprint"}</h1>
-            <div className="mt-1 text-slate-600 dark:text-slate-300">ID: {sprint?.id || sprintId || "-"}</div>
+            <div className="mt-1 text-slate-600 dark:text-slate-300">ID: {sprintId}</div>
           </div>
           <div className="flex flex-wrap gap-2">
             <button

@@ -9,13 +9,11 @@ type AutoTaskRules = {
   labelMappings: Record<string, string>;
 };
 
-type AutoTaskRule = {
-  id: string;
-  category: "toggle" | "setting" | "labelMapping";
-  enabled?: boolean;
-  value?: string;
-  label?: string;
-  taskType?: string;
+type RulesResponse = {
+  success?: boolean;
+  data?: AutoTaskRules;
+  error?: string;
+  detail?: string;
 };
 
 const TASK_TYPES = ["task", "story", "bug"] as const;
@@ -41,79 +39,6 @@ function extractErrorText(data: unknown): string {
   return detail ? `${error}: ${detail}` : error;
 }
 
-function rulesFromArray(input: AutoTaskRule[] | null | undefined): AutoTaskRules {
-  const fallback = fallbackRules();
-  if (!Array.isArray(input)) return fallback;
-
-  const next: AutoTaskRules = {
-    ...fallback,
-    labelMappings: {},
-  };
-
-  for (const item of input) {
-    if (!item || typeof item !== "object") continue;
-    if (item.category === "toggle") {
-      if (item.id === "createFromIssues") next.createFromIssues = Boolean(item.enabled);
-      if (item.id === "createFromUnlinkedPrs") next.createFromUnlinkedPrs = Boolean(item.enabled);
-      continue;
-    }
-    if (item.category === "setting" && item.id === "sprintReadyLabel") {
-      next.sprintReadyLabel = String(item.value || fallback.sprintReadyLabel);
-      continue;
-    }
-    if (item.category === "labelMapping") {
-      const label = String(item.label || "").trim().toLowerCase();
-      const taskType = String(item.taskType || "").trim().toLowerCase();
-      if (label && taskType) {
-        next.labelMappings[label] = taskType;
-      }
-    }
-  }
-
-  if (!Object.keys(next.labelMappings).length) {
-    next.labelMappings = { ...fallback.labelMappings };
-  }
-
-  return next;
-}
-
-function rulesToArray(input: AutoTaskRules): AutoTaskRule[] {
-  const mappings = Object.entries(input.labelMappings)
-    .map(([label, taskType]) => ({
-      id: `label:${label}`,
-      category: "labelMapping" as const,
-      label,
-      taskType,
-    }))
-    .filter((item) => Boolean(item.label));
-
-  return [
-    { id: "createFromIssues", category: "toggle", enabled: Boolean(input.createFromIssues) },
-    { id: "createFromUnlinkedPrs", category: "toggle", enabled: Boolean(input.createFromUnlinkedPrs) },
-    {
-      id: "sprintReadyLabel",
-      category: "setting",
-      value: String(input.sprintReadyLabel || "sprint-ready").trim().toLowerCase(),
-    },
-    ...mappings,
-  ];
-}
-
-async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
-  if (!window.desktopApi?.invoke) {
-    throw new Error("Desktop IPC bridge unavailable");
-  }
-  const response = await window.desktopApi.invoke(channel, payload);
-  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
-    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
-    if (!wrapped.ok) {
-      throw new Error(wrapped.error?.message || wrapped.error?.detail || "IPC request failed");
-    }
-    return (wrapped.data as T) ?? (null as T);
-  }
-  return response as T;
-}
-
 export function AutoTaskRulesPanel() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -130,18 +55,19 @@ export function AutoTaskRulesPanel() {
       setLoading(true);
       setError(null);
 
+      const resp = await fetch("/api/integrations/github/auto-task-rules", { cache: "no-store" });
+      const data = (await resp.json().catch(() => null)) as RulesResponse | null;
+
       if (cancelled) return;
 
-      try {
-        const data = await invokeDesktop<AutoTaskRule[]>("preferences:getAutoTaskRules");
-        if (cancelled) return;
-        setRules(rulesFromArray(data));
+      if (!resp.ok) {
+        setError(extractErrorText(data));
         setLoading(false);
-      } catch (loadError) {
-        if (cancelled) return;
-        setError(loadError instanceof Error ? loadError.message : "Failed to load rules");
-        setLoading(false);
+        return;
       }
+
+      setRules(data?.data || fallbackRules());
+      setLoading(false);
     }
 
     void load();
@@ -213,17 +139,22 @@ export function AutoTaskRulesPanel() {
       ),
     };
 
-    try {
-      const savedRules = await invokeDesktop<AutoTaskRule[]>("preferences:saveAutoTaskRules", {
-        rules: rulesToArray(payload),
-      });
-      setSaving(false);
-      setRules(rulesFromArray(savedRules));
-      setSavedAt(Date.now());
-    } catch (saveError) {
-      setSaving(false);
-      setError(saveError instanceof Error ? saveError.message : "Failed to save rules");
+    const resp = await fetch("/api/integrations/github/auto-task-rules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const data = (await resp.json().catch(() => null)) as RulesResponse | null;
+
+    setSaving(false);
+    if (!resp.ok) {
+      setError(extractErrorText(data));
+      return;
     }
+
+    setRules(data?.data || payload);
+    setSavedAt(Date.now());
   }
 
   return (

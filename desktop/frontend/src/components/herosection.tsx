@@ -113,7 +113,7 @@ export const HeroSection = () => {
                     </div>
                 </section>
 
-                <style>{`
+                <style jsx>{`
                     .hero-logo-marquee {
                         animation: heroLogoSlide 24s linear infinite;
                     }

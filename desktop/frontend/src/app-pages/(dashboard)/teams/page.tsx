@@ -6,13 +6,8 @@ type Team = {
   id: string;
   name: string;
   description?: string | null;
-  leadId?: string;
-  lead?: { id: string; fullName?: string; email?: string } | null;
   membersCount: number;
-  projectsCount?: number;
   pendingRequests: number;
-  members?: Array<{ id: string; fullName?: string; email?: string; role?: string }>;
-  projectIds?: string[];
   myTeamRole?: "admin" | "developer" | null;
 };
 
@@ -44,38 +39,22 @@ type ScoreItem = {
 
 type OrgMember = { id: string; fullName?: string; email?: string; role?: string };
 
-type TeamDetailResponse = {
-  team: Team;
-  members: Array<{ id?: string; fullName?: string; email?: string; role?: string }>;
-  currentTasks: Array<{ id?: string; assignee?: { id?: string }; assigneeId?: string }>;
-  velocity: Array<{ sprint?: string; velocity?: number; completedTasks?: number }>;
-};
-
 type MeResponse = {
   user?: { id?: string; email?: string; fullName?: string };
   activeOrgId?: string | null;
   memberships?: Array<{ org: { id: string }; role: string }>;
 };
 
-function asText(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
-  if (!window.desktopApi?.invoke) {
-    throw new Error("Desktop IPC bridge unavailable");
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
+  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
+  const text = await resp.text().catch(() => "");
+  let data: T | null = null;
+  try {
+    data = text ? (JSON.parse(text) as T) : null;
+  } catch {
+    data = null;
   }
-
-  const response = await window.desktopApi.invoke(channel, payload);
-  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
-    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
-    if (!wrapped.ok) {
-      throw new Error(asText(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
-    }
-    return (wrapped.data as T) ?? (null as T);
-  }
-
-  return response as T;
+  return { ok: resp.ok, status: resp.status, data };
 }
 
 function roleCanAdmin(role: string | null | undefined) {
@@ -139,51 +118,45 @@ export default function TeamsPage() {
   const loadBase = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      const [teamsResp, membersResp] = await Promise.all([
-        invokeDesktop<Team[]>("teams:getAll"),
-        invokeDesktop<Array<{ id?: string; fullName?: string; name?: string; email?: string; role?: string }>>(
-          "developers:getOrgMembers"
-        ).catch(() => []),
-      ]);
 
-      const nextTeams = Array.isArray(teamsResp)
-        ? teamsResp.map((team) => ({
-            ...team,
-            pendingRequests: Number(team.pendingRequests || 0),
-            myTeamRole: "admin" as const,
-          }))
-        : [];
+    const [meResp, teamResp, memberResp] = await Promise.all([
+      fetchJson<MeResponse>("/api/auth/me"),
+      fetchJson<{ items?: Team[] }>("/api/teams"),
+      fetchJson<{ members?: OrgMember[] }>("/api/org/members?page=1&limit=200"),
+    ]);
 
-      const nextMembers = Array.isArray(membersResp)
-        ? membersResp.map((member) => ({
-            id: String(member.id || ""),
-            fullName: asText(member.fullName || member.name),
-            email: asText(member.email),
-            role: asText(member.role || "developer"),
-          }))
-        : [];
-
-      setMe({
-        user: {
-          id: nextMembers[0]?.id,
-          email: nextMembers[0]?.email,
-          fullName: nextMembers[0]?.fullName,
-        },
-        activeOrgId: "org-default",
-        memberships: [{ org: { id: "org-default" }, role: "owner" }],
-      });
-
-      setTeams(nextTeams);
-      setOrgMembers(nextMembers);
-      if (!activeTeamId && nextTeams[0]?.id) setActiveTeamId(nextTeams[0].id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load teams workspace data");
+    if (!teamResp.ok) {
+      const detail =
+        (teamResp.data && typeof teamResp.data === "object" && "detail" in teamResp.data
+          ? String((teamResp.data as { detail?: unknown }).detail || "")
+          : "") ||
+        (teamResp.data && typeof teamResp.data === "object" && "error" in teamResp.data
+          ? String((teamResp.data as { error?: unknown }).error || "")
+          : "");
+      const suffix = detail ? `: ${detail}` : "";
+      setError(`Failed to load teams workspace data (${teamResp.status})${suffix}`);
       setTeams([]);
       setOrgMembers([]);
-    } finally {
       setLoading(false);
+      return;
     }
+
+    const nextTeams = Array.isArray(teamResp.data?.items) ? teamResp.data.items : [];
+    if (meResp.ok) setMe(meResp.data || null);
+    if (!meResp.ok && meResp.status !== 401) {
+      setError(`Profile endpoint unavailable (${meResp.status}). Team role actions may be limited.`);
+    }
+    setTeams(nextTeams);
+    if (memberResp.ok) {
+      setOrgMembers(Array.isArray(memberResp.data?.members) ? memberResp.data.members : []);
+    } else {
+      setOrgMembers([]);
+      if (memberResp.status !== 403 && memberResp.status !== 401) {
+        setError(`Team member directory unavailable (${memberResp.status}).`);
+      }
+    }
+    if (!activeTeamId && nextTeams[0]?.id) setActiveTeamId(nextTeams[0].id);
+    setLoading(false);
   }, [activeTeamId]);
 
   const loadTeamDetails = useCallback(async () => {
@@ -194,40 +167,15 @@ export default function TeamsPage() {
       return;
     }
 
-    try {
-      const detail = await invokeDesktop<TeamDetailResponse>("teams:getDetail", { teamId: activeTeamId });
-      const team = detail?.team;
-      if (team?.id) {
-        setTeams((prev) => prev.map((item) => (item.id === team.id ? { ...item, ...team } : item)));
-      }
+    const [membersResp, requestsResp, scoresResp] = await Promise.all([
+      fetchJson<{ items?: TeamMember[] }>(`/api/teams/${encodeURIComponent(activeTeamId)}/members`),
+      fetchJson<{ items?: JoinRequest[] }>(`/api/teams/${encodeURIComponent(activeTeamId)}/join-requests`),
+      fetchJson<{ items?: ScoreItem[] }>(`/api/teams/${encodeURIComponent(activeTeamId)}/scores`),
+    ]);
 
-      const detailMembers = Array.isArray(detail?.members) ? detail.members : [];
-      const detailedMembers: TeamMember[] = detailMembers.map((member, index) => ({
-        memberId: String(member.id || ""),
-        fullName: asText(member.fullName),
-        email: asText(member.email),
-        orgRole: asText(member.role || "developer"),
-        teamRole: String(member.id || "") === String(team?.leadId || "") ? "admin" : "developer",
-        score: Math.max(60, 100 - index * 5),
-      }));
-
-      const scoreRows: ScoreItem[] = detailedMembers.map((member, index) => ({
-        rank: index + 1,
-        memberId: member.memberId,
-        fullName: member.fullName,
-        email: member.email,
-        score: member.score,
-        metric: "performance",
-      }));
-
-      setMembers(detailedMembers);
-      setJoinRequests([]);
-      setScores(scoreRows);
-    } catch {
-      setMembers([]);
-      setJoinRequests([]);
-      setScores([]);
-    }
+    if (membersResp.ok) setMembers(Array.isArray(membersResp.data?.items) ? membersResp.data.items : []);
+    if (requestsResp.ok) setJoinRequests(Array.isArray(requestsResp.data?.items) ? requestsResp.data.items : []);
+    if (scoresResp.ok) setScores(Array.isArray(scoresResp.data?.items) ? scoresResp.data.items : []);
   }, [activeTeamId]);
 
   useEffect(() => {
@@ -248,31 +196,29 @@ export default function TeamsPage() {
     const name = newTeamName.trim();
     if (!name) return;
 
-    try {
-      const leadId = orgMembers[0]?.id || "";
-      const created = await invokeDesktop<Team>("teams:create", {
-        name,
-        description: newTeamDescription.trim() || undefined,
-        leadId,
-      });
+    const resp = await fetchJson<{ item?: Team }>("/api/teams", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, description: newTeamDescription.trim() || undefined }),
+    });
 
-      setNewTeamName("");
-      setNewTeamDescription("");
-      await loadBase();
-      if (created?.id) setActiveTeamId(created.id);
-    } catch {
+    if (!resp.ok) {
       setError("Create team failed");
       return;
     }
+
+    setNewTeamName("");
+    setNewTeamDescription("");
+    await loadBase();
+    if (resp.data?.item?.id) setActiveTeamId(resp.data.item.id);
   }
 
   async function deleteTeam() {
     if (!activeTeamId) return;
     if (!window.confirm("Delete this team?")) return;
 
-    try {
-      await invokeDesktop<{ success: boolean }>("teams:delete", { teamId: activeTeamId });
-    } catch {
+    const resp = await fetchJson<{ ok?: boolean }>(`/api/teams/${encodeURIComponent(activeTeamId)}`, { method: "DELETE" });
+    if (!resp.ok) {
       setError("Delete team failed");
       return;
     }
@@ -283,21 +229,13 @@ export default function TeamsPage() {
 
   async function addMemberToTeam() {
     if (!activeTeamId || !selectedMemberId) return;
+    const resp = await fetchJson<{ ok?: boolean }>(`/api/teams/${encodeURIComponent(activeTeamId)}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ memberId: selectedMemberId, role: selectedTeamRole }),
+    });
 
-    try {
-      const updated = await invokeDesktop<Team>("teams:addMember", {
-        teamId: activeTeamId,
-        userId: selectedMemberId,
-      });
-      if (selectedTeamRole === "admin") {
-        await invokeDesktop<Team>("teams:update", {
-          teamId: activeTeamId,
-          changes: { leadId: selectedMemberId },
-        });
-      }
-
-      setTeams((prev) => prev.map((team) => (team.id === activeTeamId ? { ...team, ...updated } : team)));
-    } catch {
+    if (!resp.ok) {
       setError("Add developer failed");
       return;
     }
@@ -312,13 +250,11 @@ export default function TeamsPage() {
     const confirmed = window.confirm("Remove this developer from team?");
     if (!confirmed) return;
 
-    try {
-      const updated = await invokeDesktop<Team>("teams:removeMember", {
-        teamId: activeTeamId,
-        userId: memberId,
-      });
-      setTeams((prev) => prev.map((team) => (team.id === activeTeamId ? { ...team, ...updated } : team)));
-    } catch {
+    const resp = await fetchJson<{ ok?: boolean }>(`/api/teams/${encodeURIComponent(activeTeamId)}/members/${encodeURIComponent(memberId)}`, {
+      method: "DELETE",
+    });
+
+    if (!resp.ok) {
       setError("Remove developer failed");
       return;
     }
@@ -329,23 +265,36 @@ export default function TeamsPage() {
 
   async function sendJoinRequest() {
     if (!activeTeamId) return;
-    const request: JoinRequest = {
-      id: `${activeTeamId}-${Date.now()}`,
-      memberId: "local-user",
-      status: "pending",
-      requestedAt: new Date().toISOString(),
-      member: {
-        fullName: myMember?.fullName || "Member",
-        email: myMember?.email || "",
-        orgRole: myMember?.role || "developer",
-      },
-    };
-    setJoinRequests((prev) => [request, ...prev]);
+    const resp = await fetchJson<{ item?: unknown }>(`/api/teams/${encodeURIComponent(activeTeamId)}/join-requests`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: joinNote.trim() || undefined }),
+    });
+
+    if (!resp.ok) {
+      setError("Join request failed");
+      return;
+    }
+
     setJoinNote("");
+    await loadTeamDetails();
+    await loadBase();
   }
 
   async function reviewRequest(requestId: string, status: "accepted" | "rejected") {
-    setJoinRequests((prev) => prev.map((item) => (item.id === requestId ? { ...item, status } : item)));
+    const resp = await fetchJson<{ ok?: boolean }>(`/api/teams/join-requests/${encodeURIComponent(requestId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+
+    if (!resp.ok) {
+      setError(`Failed to ${status === "accepted" ? "accept" : "reject"} request`);
+      return;
+    }
+
+    await loadTeamDetails();
+    await loadBase();
   }
 
   async function updateScore(memberId: string) {
@@ -353,8 +302,19 @@ export default function TeamsPage() {
     const value = Number(scoreDraft[memberId]);
     if (!Number.isFinite(value)) return;
 
-    setScores((prev) => prev.map((item) => (item.memberId === memberId ? { ...item, score: value } : item)));
-    setMembers((prev) => prev.map((item) => (item.memberId === memberId ? { ...item, score: value } : item)));
+    const resp = await fetchJson<{ item?: unknown }>(`/api/teams/${encodeURIComponent(activeTeamId)}/scores/${encodeURIComponent(memberId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ score: value, metric: "performance" }),
+    });
+
+    if (!resp.ok) {
+      setError("Update score failed");
+      return;
+    }
+
+    await loadTeamDetails();
+    await loadBase();
   }
 
   return (
@@ -607,4 +567,3 @@ export default function TeamsPage() {
     </div>
   );
 }
-

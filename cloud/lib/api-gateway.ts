@@ -16,7 +16,12 @@ type ProxySseOptions = {
 };
 
 export function getApiGatewayBaseUrl() {
-  const raw = process.env.API_GATEWAY_URL || "http://localhost:4000";
+  const raw =
+    process.env.API_GATEWAY_URL ||
+    process.env.SERVER_API_GATEWAY_URL ||
+    process.env.NEXT_PUBLIC_API_GATEWAY_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    "http://localhost:4000";
   const normalized = raw.replace(/\/+$/, "");
   return normalized.replace(/\/api(?:\/v1)?$/i, "");
 }

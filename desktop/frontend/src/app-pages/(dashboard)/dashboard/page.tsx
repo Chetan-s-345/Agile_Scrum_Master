@@ -3,32 +3,19 @@
 import Link from "@/next-shims/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "@/next-shims/navigation";
+import { BlockLoadingOverlay } from "@/components/block-loading-overlay";
 import {
+  Bell,
   Bookmark,
+  ChartColumn,
   CheckSquare,
+  ChevronDown,
   CircleUserRound,
   Ellipsis,
-  Flame,
-  LayoutDashboard,
-  ListChecks,
-  PlayCircle,
-  Rocket,
   Search,
+  Settings2,
   Users,
-  AlertTriangle,
-  Gauge,
-  CalendarClock,
 } from "lucide-react";
-import {
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 
 type SprintListItem = {
   id: string;
@@ -53,33 +40,6 @@ type BoardData = {
   in_review: BoardTask[];
   blocked: BoardTask[];
   done: BoardTask[];
-};
-
-type DashboardSummary = {
-  activeSprint: {
-    id?: string;
-    projectId?: string;
-    name?: string;
-    progress?: number;
-  } | null;
-  openTasks: number;
-  blockers: number;
-  velocity: number;
-  upcomingStandups: number;
-};
-
-type ActivityEvent = {
-  id: string;
-  type: string;
-  message: string;
-  timestamp: string;
-  userId: string;
-};
-
-type BurndownData = {
-  dates: string[];
-  ideal: number[];
-  actual: number[];
 };
 
 type BoardColumnData = {
@@ -121,98 +81,6 @@ function normalizeTask(task: BoardTask): BoardTask {
     dueDate: String(raw.dueDate || raw.due_date || "").trim() || undefined,
     assignee: task.assignee || (raw.assignee_name ? { id: "", name: raw.assignee_name } : null),
   };
-}
-
-function toFiniteNumber(value: unknown, fallback = 0) {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : fallback;
-}
-
-async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
-  if (typeof window === "undefined" || !window.desktopApi?.invoke) {
-    throw new Error("Desktop IPC bridge is unavailable");
-  }
-  return window.desktopApi.invoke<T>(channel, payload);
-}
-
-function normalizeSummary(summary: unknown): DashboardSummary {
-  const raw = summary && typeof summary === "object" ? (summary as Record<string, unknown>) : {};
-  const activeRaw = raw.activeSprint && typeof raw.activeSprint === "object" ? (raw.activeSprint as Record<string, unknown>) : null;
-
-  return {
-    activeSprint: activeRaw
-      ? {
-          id: String(activeRaw.id || "").trim() || undefined,
-          projectId: String(activeRaw.projectId || "").trim() || undefined,
-          name: String(activeRaw.name || "").trim() || "Active Sprint",
-          progress: toFiniteNumber(activeRaw.progress, 0),
-        }
-      : null,
-    openTasks: Math.max(0, Math.round(toFiniteNumber(raw.openTasks, 0))),
-    blockers: Math.max(0, Math.round(toFiniteNumber(raw.blockers, 0))),
-    velocity: Math.max(0, Math.round(toFiniteNumber(raw.velocity, 0))),
-    upcomingStandups: Math.max(0, Math.round(toFiniteNumber(raw.upcomingStandups, 0))),
-  };
-}
-
-function normalizeRecentActivity(payload: unknown): ActivityEvent[] {
-  if (!Array.isArray(payload)) return [];
-  return payload
-    .map((item, index) => {
-      const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
-      const id = String(raw.id || `activity-${index + 1}`).trim() || `activity-${index + 1}`;
-      return {
-        id,
-        type: String(raw.type || "task.updated").trim() || "task.updated",
-        message: String(raw.message || "Task updated").trim() || "Task updated",
-        timestamp: String(raw.timestamp || new Date().toISOString()),
-        userId: String(raw.userId || "system"),
-      };
-    })
-    .slice(0, 10);
-}
-
-function normalizeBurndownData(payload: unknown): BurndownData {
-  const raw = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
-  const datesRaw = Array.isArray(raw.dates) ? raw.dates : [];
-  const idealRaw = Array.isArray(raw.ideal) ? raw.ideal : [];
-  const actualRaw = Array.isArray(raw.actual) ? raw.actual : [];
-
-  return {
-    dates: datesRaw.map((v) => String(v || "")),
-    ideal: idealRaw.map((v) => Math.max(0, toFiniteNumber(v, 0))),
-    actual: actualRaw.map((v) => Math.max(0, toFiniteNumber(v, 0))),
-  };
-}
-
-function mapActivityTypeToColumn(type: string): keyof BoardData {
-  const normalized = type.toLowerCase();
-  if (normalized.includes("block")) return "blocked";
-  if (normalized.includes("review")) return "in_review";
-  if (normalized.includes("done") || normalized.includes("close") || normalized.includes("complete")) return "done";
-  if (normalized.includes("progress") || normalized.includes("start") || normalized.includes("move")) return "in_progress";
-  return "todo";
-}
-
-function toBoardTask(event: ActivityEvent): BoardTask {
-  const date = new Date(event.timestamp);
-  return {
-    id: String(event.id),
-    title: event.message,
-    taskKey: event.type,
-    dueDate: Number.isNaN(date.getTime()) ? undefined : date.toISOString(),
-    storyPoints: 0,
-    assignee: event.userId ? { id: event.userId } : null,
-  };
-}
-
-function buildBoardFromActivity(events: ActivityEvent[]): BoardData {
-  const next: BoardData = { todo: [], in_progress: [], in_review: [], blocked: [], done: [] };
-  for (const event of events) {
-    const column = mapActivityTypeToColumn(event.type);
-    next[column].push(normalizeTask(toBoardTask(event)));
-  }
-  return next;
 }
 
 function TaskCard({ task }: { task: BoardTask }) {
@@ -287,17 +155,6 @@ function BoardColumn({ column, tasks }: { column: BoardColumnData; tasks: BoardT
   );
 }
 
-function formatActivityTime(timestamp: string) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return "Unknown time";
-  return date.toLocaleString("en-US", {
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function DashboardPageContent() {
   const router = useRouter();
   const pathname = usePathname();
@@ -305,12 +162,10 @@ function DashboardPageContent() {
   const [sprints, setSprints] = useState<SprintListItem[]>([]);
   const [selectedSprintId, setSelectedSprintId] = useState("");
   const [board, setBoard] = useState<BoardData>({ todo: [], in_progress: [], in_review: [], blocked: [], done: [] });
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [recentActivity, setRecentActivity] = useState<ActivityEvent[]>([]);
-  const [burndownData, setBurndownData] = useState<BurndownData>({ dates: [], ideal: [], actual: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [sendingNotification, setSendingNotification] = useState(false);
   const preferredSprintId = String(searchParams?.get("sprintId") || "").trim();
   const preferredProjectId = String(searchParams?.get("projectId") || "").trim();
 
@@ -332,74 +187,49 @@ function DashboardPageContent() {
 
   useEffect(() => {
     let cancelled = false;
-    async function loadDashboardData() {
-      setLoading(true);
-      setError(null);
-
+    async function loadSprints(background = false) {
       try {
-        const payload = {
-          sprintId: selectedSprintId || preferredSprintId || undefined,
-          projectId: preferredProjectId || undefined,
-        };
+        if (!background) {
+          setLoading(true);
+        }
+        const queryParams = new URLSearchParams({ status: "active" });
+        if (preferredProjectId) queryParams.set("projectId", preferredProjectId);
+        const respActive = await fetch(`/api/sprints?${queryParams.toString()}`, { cache: "no-store" });
+        const dataActive = await respActive.json().catch(() => null);
+        if (!respActive.ok) throw new Error(String(dataActive?.error || "Failed to load sprints"));
 
-        const [summaryRaw, activityRaw, burndownRaw] = await Promise.all([
-          invokeDesktop<unknown>("dashboard:getSummary", payload),
-          invokeDesktop<unknown>("dashboard:getRecentActivity", payload),
-          invokeDesktop<unknown>("dashboard:getBurndownData", payload),
-        ]);
-
+        let items = Array.isArray(dataActive?.items) ? (dataActive.items as SprintListItem[]) : [];
+        if (!items.length) {
+          const planningParams = new URLSearchParams({ status: "planning" });
+          if (preferredProjectId) planningParams.set("projectId", preferredProjectId);
+          const respPlanning = await fetch(`/api/sprints?${planningParams.toString()}`, { cache: "no-store" });
+          const dataPlanning = await respPlanning.json().catch(() => null);
+          if (respPlanning.ok) items = Array.isArray(dataPlanning?.items) ? (dataPlanning.items as SprintListItem[]) : [];
+        }
         if (cancelled) return;
-
-        const normalizedSummary = normalizeSummary(summaryRaw);
-        const normalizedActivity = normalizeRecentActivity(activityRaw);
-        const normalizedBurndown = normalizeBurndownData(burndownRaw);
-        const nextBoard = buildBoardFromActivity(normalizedActivity);
-
-        const activeSprintId = String(normalizedSummary.activeSprint?.id || "").trim();
-        const activeProjectId = String(normalizedSummary.activeSprint?.projectId || preferredProjectId || "").trim();
-        const activeSprintName = String(normalizedSummary.activeSprint?.name || "Active Sprint").trim() || "Active Sprint";
-
-        setSummary(normalizedSummary);
-        setRecentActivity(normalizedActivity);
-        setBurndownData(normalizedBurndown);
-        setBoard(nextBoard);
-        setSprints(
-          activeSprintId
-            ? [
-                {
-                  id: activeSprintId,
-                  projectId: activeProjectId,
-                  name: activeSprintName,
-                },
-              ]
-            : []
-        );
-
-        if (activeSprintId && activeSprintId !== selectedSprintId) {
-          setSelectedSprintId(activeSprintId);
+        setSprints(items);
+        if (preferredSprintId && items.some((x) => String(x.id) === preferredSprintId)) {
+          setSelectedSprintId(preferredSprintId);
         } else {
-          if (!activeSprintId && selectedSprintId) setSelectedSprintId("");
+          setSelectedSprintId(items[0]?.id ? String(items[0].id) : "");
         }
       } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load dashboard");
-          setSummary(null);
-          setRecentActivity([]);
-          setBurndownData({ dates: [], ideal: [], actual: [] });
-          setBoard({ todo: [], in_progress: [], in_review: [], blocked: [], done: [] });
-          setSprints([]);
-        }
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load sprints");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && !background) {
+          setLoading(false);
+        }
       }
     }
-
-    void loadDashboardData();
-
+    void loadSprints();
+    const id = window.setInterval(() => {
+      void loadSprints(true);
+    }, 90_000);
     return () => {
       cancelled = true;
+      window.clearInterval(id);
     };
-  }, [preferredProjectId, preferredSprintId, selectedSprintId]);
+  }, [preferredProjectId, preferredSprintId]);
 
   useEffect(() => {
     if (!selectedSprintId) return;
@@ -412,6 +242,42 @@ function DashboardPageContent() {
     if (nextQuery === currentQuery) return;
     router.replace(`${pathname}?${nextQuery}`, { scroll: false });
   }, [pathname, router, searchParams, selectedSprintId, sprints]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadBoard(background = false) {
+      if (!selectedSprintId) return;
+      if (!background) {
+        setLoading(true);
+      }
+      setError(null);
+      try {
+        const resp = await fetch(`/api/tasks/board/${encodeURIComponent(selectedSprintId)}`, { cache: "no-store" });
+        const data = await resp.json().catch(() => null);
+        if (!resp.ok) throw new Error(String(data?.error || "Failed to load board"));
+        if (cancelled) return;
+        setBoard({
+          todo: Array.isArray(data?.todo) ? (data.todo as BoardTask[]).map(normalizeTask) : [],
+          in_progress: Array.isArray(data?.in_progress) ? (data.in_progress as BoardTask[]).map(normalizeTask) : [],
+          in_review: Array.isArray(data?.in_review) ? (data.in_review as BoardTask[]).map(normalizeTask) : [],
+          blocked: Array.isArray(data?.blocked) ? (data.blocked as BoardTask[]).map(normalizeTask) : [],
+          done: Array.isArray(data?.done) ? (data.done as BoardTask[]).map(normalizeTask) : [],
+        });
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load board");
+      } finally {
+        if (!cancelled && !background) setLoading(false);
+      }
+    }
+    void loadBoard();
+    const id = window.setInterval(() => {
+      void loadBoard(true);
+    }, 12_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [selectedSprintId]);
 
   const inReviewPlusBlocked = useMemo(
     () => [...filteredBoard.in_review, ...filteredBoard.blocked],
@@ -427,27 +293,26 @@ function DashboardPageContent() {
   const completedTasks = filteredBoard.done.length;
   const completionPct = totalTasks ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
-  const sprintProgress = Math.max(0, Math.min(100, Math.round(toFiniteNumber(summary?.activeSprint?.progress, completionPct))));
-  const summaryOpenTasks = summary?.openTasks ?? totalTasks;
-  const summaryBlockers = summary?.blockers ?? filteredBoard.blocked.length;
-  const summaryVelocity = summary?.velocity ?? 0;
-  const summaryStandups = summary?.upcomingStandups ?? 0;
-
-  const burndownSeries = useMemo(() => {
-    const maxLength = Math.max(burndownData.dates.length, burndownData.ideal.length, burndownData.actual.length);
-    return Array.from({ length: maxLength }).map((_, index) => ({
-      date: burndownData.dates[index] || `Day ${index + 1}`,
-      ideal: Math.max(0, toFiniteNumber(burndownData.ideal[index], 0)),
-      actual: Math.max(0, toFiniteNumber(burndownData.actual[index], 0)),
-    }));
-  }, [burndownData]);
-
-  const showSummarySkeleton = loading && !summary;
-  const showActivitySkeleton = loading && !recentActivity.length;
-  const showBurndownSkeleton = loading && !burndownSeries.length;
+  async function sendNotificationEmail() {
+    setSendingNotification(true);
+    try {
+      await fetch("/api/notifications/brevo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trigger: "board-toolbar",
+          subject: `Sprint Board Notification: ${sprintLabel}`,
+          message: `Board notification triggered for ${sprintLabel}.`,
+        }),
+      });
+    } finally {
+      setSendingNotification(false);
+    }
+  }
 
   return (
     <div>
+        <BlockLoadingOverlay active={loading} label="Loading board data..." fullScreen={true} delayMs={420} />
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative">
@@ -484,85 +349,39 @@ function DashboardPageContent() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => router.push("/standup")}
               className="inline-flex h-9 items-center rounded-md border border-[var(--border-strong)] bg-[var(--bg-card)] px-3 text-sm font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
             >
-              <PlayCircle className="mr-1.5 h-4 w-4" />
-              Start Standup
+              Complete sprint
             </button>
             <button
               type="button"
-              onClick={() => router.push("/board")}
-              className="inline-flex h-9 items-center rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm hover:bg-[#2a2a2a]"
+              disabled={sendingNotification}
+              onClick={() => void sendNotificationEmail()}
+              className="rounded-md border border-[var(--border)] p-2 hover:bg-[#2a2a2a] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <LayoutDashboard className="mr-1.5 h-4 w-4" />
-              View Board
+              <Bell className="h-4 w-4" />
             </button>
             <button
               type="button"
-              onClick={() => router.push("/sprint/plan")}
               className="inline-flex h-9 items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm hover:bg-[#2a2a2a]"
             >
-              <Rocket className="mr-1.5 h-4 w-4" />
-              Plan Sprint
+              Group
+              <ChevronDown className="h-4 w-4" />
+            </button>
+            <button type="button" className="rounded-md border border-[var(--border)] p-2 hover:bg-[#2a2a2a]">
+              <ChartColumn className="h-4 w-4" />
+            </button>
+            <button type="button" className="rounded-md border border-[var(--border)] p-2 hover:bg-[#2a2a2a]">
+              <Settings2 className="h-4 w-4" />
+            </button>
+            <button type="button" className="rounded-md border border-[var(--border)] p-2 hover:bg-[#2a2a2a]">
+              <Ellipsis className="h-4 w-4" />
             </button>
           </div>
         </div>
 
         {error ? <div className="mb-3 rounded-md border border-[#5a1f1f] bg-[#2a1616] px-3 py-2 text-sm text-[#f3b6b6]">{error}</div> : null}
-
-        <section className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          {showSummarySkeleton ? (
-            Array.from({ length: 5 }).map((_, index) => (
-              <div key={`summary-skeleton-${index}`} className="h-24 animate-pulse rounded-md border border-[var(--border)] bg-[var(--bg-card)]" />
-            ))
-          ) : (
-            <>
-              <div className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3">
-                <div className="mb-2 inline-flex items-center gap-1 text-xs text-[var(--text-secondary)]">
-                  <Flame className="h-3.5 w-3.5" />
-                  Active Sprint Progress
-                </div>
-                <div className="text-2xl font-semibold text-[var(--text-primary)]">{sprintProgress}%</div>
-                <div className="mt-2 h-1.5 w-full overflow-hidden rounded bg-[#1f1f1f]">
-                  <div className="h-full bg-[var(--accent-blue)]" style={{ width: `${sprintProgress}%` }} />
-                </div>
-              </div>
-
-              <div className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3">
-                <div className="mb-2 inline-flex items-center gap-1 text-xs text-[var(--text-secondary)]">
-                  <ListChecks className="h-3.5 w-3.5" />
-                  Total Open Tasks
-                </div>
-                <div className="text-2xl font-semibold text-[var(--text-primary)]">{summaryOpenTasks}</div>
-              </div>
-
-              <div className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3">
-                <div className="mb-2 inline-flex items-center gap-1 text-xs text-[var(--text-secondary)]">
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  Blockers Count
-                </div>
-                <div className="text-2xl font-semibold text-[var(--text-primary)]">{summaryBlockers}</div>
-              </div>
-
-              <div className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3">
-                <div className="mb-2 inline-flex items-center gap-1 text-xs text-[var(--text-secondary)]">
-                  <Gauge className="h-3.5 w-3.5" />
-                  Team Velocity
-                </div>
-                <div className="text-2xl font-semibold text-[var(--text-primary)]">{summaryVelocity}</div>
-              </div>
-
-              <div className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3">
-                <div className="mb-2 inline-flex items-center gap-1 text-xs text-[var(--text-secondary)]">
-                  <CalendarClock className="h-3.5 w-3.5" />
-                  Upcoming Standups
-                </div>
-                <div className="text-2xl font-semibold text-[var(--text-primary)]">{summaryStandups}</div>
-              </div>
-            </>
-          )}
-        </section>
+        {loading ? <div className="mb-3 rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-sm text-[#b0b0b0]">Loading board...</div> : null}
 
         <div className="mb-3 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2">
           <div className="mb-2 flex items-center justify-between text-xs text-[var(--text-secondary)]">
@@ -573,72 +392,6 @@ function DashboardPageContent() {
             <div className="h-full bg-[var(--accent-blue)]" style={{ width: `${completionPct}%` }} />
           </div>
         </div>
-
-        <section className="mb-4 grid grid-cols-1 gap-3 xl:grid-cols-3">
-          <div className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3 xl:col-span-2">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[var(--text-primary)]">Active Sprint Burndown</h2>
-              <span className="text-xs text-[var(--text-secondary)]">{sprintLabel}</span>
-            </div>
-
-            {showBurndownSkeleton ? (
-              <div className="h-[260px] animate-pulse rounded border border-[var(--border)] bg-[var(--bg-surface)]" />
-            ) : burndownSeries.length ? (
-              <div className="h-[260px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={burndownSeries}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="date" stroke="var(--text-secondary)" tick={{ fill: "var(--text-secondary)", fontSize: 11 }} />
-                    <YAxis stroke="var(--text-secondary)" tick={{ fill: "var(--text-secondary)", fontSize: 11 }} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "var(--bg-card)",
-                        borderColor: "var(--border)",
-                        color: "var(--text-primary)",
-                      }}
-                    />
-                    <Legend wrapperStyle={{ color: "var(--text-secondary)" }} />
-                    <Line type="monotone" dataKey="ideal" stroke="var(--text-secondary)" strokeDasharray="6 4" dot={false} name="Ideal" />
-                    <Line type="monotone" dataKey="actual" stroke="var(--accent-blue)" strokeWidth={2} dot={{ r: 2 }} name="Actual" />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            ) : (
-              <div className="flex h-[260px] items-center justify-center rounded border border-dashed border-[var(--border)] text-sm text-[var(--text-secondary)]">
-                No burndown data available.
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[var(--text-primary)]">Recent Activity</h2>
-              <span className="text-xs text-[var(--text-secondary)]">Last 10</span>
-            </div>
-
-            {showActivitySkeleton ? (
-              <div className="space-y-2">
-                {Array.from({ length: 10 }).map((_, index) => (
-                  <div key={`activity-skeleton-${index}`} className="h-10 animate-pulse rounded border border-[var(--border)] bg-[var(--bg-surface)]" />
-                ))}
-              </div>
-            ) : recentActivity.length ? (
-              <div className="space-y-2">
-                {recentActivity.map((event) => (
-                  <div key={event.id} className="rounded border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-2">
-                    <div className="text-sm text-[var(--text-primary)]">{event.message}</div>
-                    <div className="mt-1 flex items-center justify-between text-xs text-[var(--text-secondary)]">
-                      <span>{event.type}</span>
-                      <span>{formatActivityTime(event.timestamp)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded border border-dashed border-[var(--border)] p-3 text-sm text-[var(--text-secondary)]">No recent updates.</div>
-            )}
-          </div>
-        </section>
 
         <div className="show-scrollbar flex gap-3 overflow-x-auto pb-3">
           {boardColumns.map((column) => (

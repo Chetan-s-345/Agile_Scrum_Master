@@ -15,10 +15,9 @@ type Goal = {
   category?: string | null;
   dueDate?: string | null;
   progress: number;
-  timeframe?: string | null;
   projectId?: string | null;
   projectName?: string | null;
-  keyResults?: Array<{ id: string; title: string; progress: number }>;
+  keyResults?: string[];
   activityLog?: Array<{ at?: string; action?: string; by?: string | null; detail?: string }>;
   assignees?: Array<{ id: string; name?: string; email?: string }>;
   sprints?: Array<{ id: string; name?: string }>;
@@ -67,85 +66,16 @@ function toPercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(Number(value || 0))));
 }
 
-function toTimeframeLabel(value: unknown): string {
-  const raw = asText(value).trim();
-  if (!raw) return "";
-  if (raw.startsWith("quarterly:")) return raw.slice("quarterly:".length);
-  if (raw.startsWith("monthly:")) return raw.slice("monthly:".length);
-  return raw;
-}
-
-function timeframeWeight(value: unknown): number {
-  const raw = asText(value).toLowerCase();
-  if (raw.startsWith("quarterly:")) return 0;
-  if (raw.startsWith("monthly:")) return 1;
-  return 2;
-}
-
-function normalizeGoal(raw: unknown): Goal {
-  const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  const keyResultsRaw = Array.isArray(source.keyResults) ? source.keyResults : [];
-  const keyResults = keyResultsRaw
-    .map((item) => {
-      if (typeof item === "string") {
-        const title = item.trim();
-        if (!title) return null;
-        return { id: `${title}-${Math.random().toString(36).slice(2)}`, title, progress: 0 };
-      }
-      if (!item || typeof item !== "object") return null;
-      const entry = item as Record<string, unknown>;
-      const title = asText(entry.title || entry.name).trim();
-      if (!title) return null;
-      return {
-        id: asText(entry.id).trim() || `${title}-${Math.random().toString(36).slice(2)}`,
-        title,
-        progress: toPercent(Number(entry.progress || 0)),
-      };
-    })
-    .filter((item): item is { id: string; title: string; progress: number } => Boolean(item));
-
-  const statusRaw = asText(source.status);
-  const status: GoalStatus = statusRaw === "planned" || statusRaw === "in_progress" || statusRaw === "completed" ? statusRaw : "planned";
-  const priorityRaw = asText(source.priority);
-  const priority: Priority = priorityRaw === "high" || priorityRaw === "medium" || priorityRaw === "low" ? priorityRaw : "medium";
-  const timeframe = asText(source.timeframe) || undefined;
-  const quarter = asText(source.quarter) || toTimeframeLabel(timeframe) || undefined;
-
-  return {
-    id: asText(source.id) || crypto.randomUUID(),
-    title: asText(source.title) || "Untitled goal",
-    description: asText(source.description) || "",
-    status,
-    priority,
-    quarter,
-    timeframe,
-    category: asText(source.category) || "Goal",
-    dueDate: asText(source.dueDate) || undefined,
-    progress: toPercent(Number(source.progress || 0)),
-    projectId: asText(source.projectId) || undefined,
-    projectName: asText(source.projectName) || undefined,
-    keyResults,
-    activityLog: Array.isArray(source.activityLog) ? (source.activityLog as Goal["activityLog"]) : [],
-    assignees: Array.isArray(source.assignees) ? (source.assignees as Goal["assignees"]) : [],
-    sprints: Array.isArray(source.sprints) ? (source.sprints as Goal["sprints"]) : [],
-    repos: Array.isArray(source.repos) ? (source.repos as Goal["repos"]) : [],
-    taskProgress: source.taskProgress && typeof source.taskProgress === "object" ? (source.taskProgress as Goal["taskProgress"]) : undefined,
-  };
-}
-
-async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
-  if (!window.desktopApi?.invoke) {
-    throw new Error("Desktop IPC bridge unavailable");
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
+  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
+  const text = await resp.text().catch(() => "");
+  let data: T | null = null;
+  try {
+    data = text ? (JSON.parse(text) as T) : null;
+  } catch {
+    data = null;
   }
-  const response = await window.desktopApi.invoke(channel, payload);
-  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
-    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
-    if (!wrapped.ok) {
-      throw new Error(asText(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
-    }
-    return (wrapped.data as T) ?? (null as T);
-  }
-  return response as T;
+  return { ok: resp.ok, status: resp.status, data };
 }
 
 function SkeletonCards() {
@@ -203,25 +133,29 @@ export default function GoalsPage() {
     setLoading(true);
     setError(null);
 
-    try {
-      const query = tab === "quarter" ? { timeframe: `quarterly:${qFromDate()}` } : undefined;
-      const data = await invokeDesktop<unknown[]>("goals:getAll", query);
-      const items = Array.isArray(data) ? data.map((entry) => normalizeGoal(entry)) : [];
-      setGoals(items);
-      setMembers(
-        items
-          .flatMap((goal) => goal.assignees || [])
-          .filter((value, index, self) => self.findIndex((member) => member.id === value.id) === index)
-          .map((member) => ({ id: member.id, fullName: member.name, email: member.email }))
-      );
-      setProjects([]);
-      setSprints([]);
-      setRepos([]);
-      setGithubConnected(false);
-    } catch (loadError) {
-      setError(asText(loadError instanceof Error ? loadError.message : loadError) || "Failed to load goals");
+    const goalsQs = tab === "mine" ? "?mine=true" : tab === "quarter" ? `?quarter=${encodeURIComponent(qFromDate())}` : "";
+
+    const [gResp, mResp, pResp, sResp, rResp, gsResp] = await Promise.all([
+      fetchJson<{ items?: Goal[] }>(`/api/goals${goalsQs}`),
+      fetchJson<{ members?: Member[] }>("/api/org/members?page=1&limit=200"),
+      fetchJson<{ items?: Project[] }>("/api/projects"),
+      fetchJson<{ items?: Sprint[] }>("/api/sprints"),
+      fetchJson<Repo[]>("/api/integrations/github/repos?all=1"),
+      fetchJson<{ connected?: boolean }>("/api/integrations/github/status"),
+    ]);
+
+    if (!gResp.ok) {
+      setError(asText((gResp.data as { error?: string } | null)?.error) || `Failed to load goals (${gResp.status})`);
       setGoals([]);
+    } else {
+      setGoals(Array.isArray(gResp.data?.items) ? gResp.data!.items : []);
     }
+
+    setMembers(Array.isArray(mResp.data?.members) ? mResp.data!.members : []);
+    setProjects(Array.isArray(pResp.data?.items) ? pResp.data!.items : []);
+    setSprints(Array.isArray(sResp.data?.items) ? sResp.data!.items : []);
+    setRepos(Array.isArray(rResp.data) ? rResp.data : []);
+    setGithubConnected(Boolean(gsResp.data?.connected));
 
     setLoading(false);
   }, [tab]);
@@ -241,11 +175,6 @@ export default function GoalsPage() {
     if (tab === "team") {
       items = items.filter((g) => (g.assignees || []).length > 1);
     }
-    items.sort((a, b) => {
-      const tf = timeframeWeight(a.timeframe) - timeframeWeight(b.timeframe);
-      if (tf !== 0) return tf;
-      return String(a.quarter || "").localeCompare(String(b.quarter || ""));
-    });
     if (sortBy === "due") {
       items.sort((a, b) => new Date(a.dueDate || "2999-12-31").getTime() - new Date(b.dueDate || "2999-12-31").getTime());
     }
@@ -300,86 +229,78 @@ export default function GoalsPage() {
     setSaving(true);
     setError(null);
 
+    const selectedRepos = repos
+      .filter((r) => newGoal.selectedRepoFullNames.includes(String(r.fullName || "")))
+      .map((r) => ({
+        fullName: String(r.fullName || ""),
+        name: String(r.name || ""),
+        language: String(r.language || "") || undefined,
+        private: Boolean(r.private),
+      }));
+
     const payload = {
       title: newGoal.title.trim(),
-      description: newGoal.description.trim(),
-      ownerId: newGoal.assigneeIds[0] || "",
-      timeframe: newGoal.dueDate ? `monthly:${newGoal.dueDate.slice(0, 7)}` : `quarterly:${newGoal.quarter}`,
+      description: newGoal.description.trim() || undefined,
+      status: newGoal.status,
+      priority: newGoal.priority,
+      quarter: newGoal.quarter,
+      category: newGoal.category,
+      dueDate: newGoal.dueDate || undefined,
+      projectId: newGoal.projectId || undefined,
+      assigneeIds: newGoal.assigneeIds,
+      sprintIds: newGoal.sprintIds,
+      repos: selectedRepos,
       keyResults: [],
     };
 
-    try {
-      await invokeDesktop("goals:create", payload);
-      setNewGoalOpen(false);
-      resetNewGoal();
-      await loadAll();
-    } catch (createError) {
-      setError(asText(createError instanceof Error ? createError.message : createError) || "Create failed");
-    } finally {
-      setSaving(false);
+    const resp = await fetchJson<{ goal?: Goal; error?: string }>("/api/goals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    setSaving(false);
+
+    if (!resp.ok) {
+      setError(asText(resp.data?.error) || `Create failed (${resp.status})`);
+      return;
     }
+
+    setNewGoalOpen(false);
+    resetNewGoal();
+    await loadAll();
   }
 
   async function moveGoal(goalId: string, status: GoalStatus) {
     setGoals((prev) => prev.map((g) => (g.id === goalId ? { ...g, status } : g)));
-    try {
-      await invokeDesktop("goals:update", { goalId, changes: { status } });
-    } catch (moveError) {
-      setError(asText(moveError instanceof Error ? moveError.message : moveError) || "Status update failed");
+    const resp = await fetchJson<{ item?: Goal; error?: string }>(`/api/goals/${encodeURIComponent(goalId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    if (!resp.ok) {
+      setError(asText(resp.data?.error) || `Status update failed (${resp.status})`);
       await loadAll();
     }
   }
 
   async function updateDrawerGoal(patch: Record<string, unknown>) {
     if (!drawerGoalId) return;
-    try {
-      await invokeDesktop("goals:update", { goalId: drawerGoalId, changes: patch });
-    } catch (updateError) {
-      setError(asText(updateError instanceof Error ? updateError.message : updateError) || "Update failed");
+    const resp = await fetchJson<{ item?: Goal; error?: string }>(`/api/goals/${encodeURIComponent(drawerGoalId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!resp.ok) {
+      setError(asText(resp.data?.error) || `Update failed (${resp.status})`);
       return;
     }
     await loadAll();
   }
 
-  async function updateOverallProgress(goalId: string, progress: number) {
-    try {
-      await invokeDesktop("goals:updateProgress", { goalId, keyResultId: "__overall__", progress });
-    } catch (updateError) {
-      setError(asText(updateError instanceof Error ? updateError.message : updateError) || "Progress update failed");
-      await loadAll();
-    }
-  }
-
-  async function deleteGoal(goalId: string) {
-    try {
-      const result = await invokeDesktop<{ success?: boolean }>("goals:delete", { goalId });
-      if (!result?.success) {
-        throw new Error("Delete failed");
-      }
-      if (drawerGoalId === goalId) {
-        setDrawerGoalId(null);
-      }
-      await loadAll();
-    } catch (deleteError) {
-      setError(asText(deleteError instanceof Error ? deleteError.message : deleteError) || "Delete failed");
-    }
-  }
-
-  useEffect(() => {
-    if (!drawerGoalId) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Delete" && !newGoalOpen) {
-        event.preventDefault();
-        void deleteGoal(drawerGoalId);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [drawerGoalId, newGoalOpen]);
-
   async function addKr() {
     if (!drawerGoal || !krInput.trim()) return;
-    const next = [...(drawerGoal.keyResults || []), { id: crypto.randomUUID(), title: krInput.trim(), progress: 0 }];
+    const next = [...(drawerGoal.keyResults || []), krInput.trim()];
     setKrInput("");
     await updateDrawerGoal({ keyResults: next });
   }
@@ -678,7 +599,7 @@ export default function GoalsPage() {
                     const next = Number(e.target.value);
                     setGoals((prev) => prev.map((g) => (g.id === drawerGoal.id ? { ...g, progress: next } : g)));
                   }}
-                  onMouseUp={(e) => void updateOverallProgress(drawerGoal.id, Number((e.target as HTMLInputElement).value))}
+                  onMouseUp={(e) => void updateDrawerGoal({ progress: Number((e.target as HTMLInputElement).value) })}
                   className="w-full"
                 />
               )}
@@ -688,8 +609,8 @@ export default function GoalsPage() {
               <div className="mb-1 text-xs text-[var(--text-secondary)]">Key results</div>
               <div className="space-y-2">
                 {(drawerGoal.keyResults || []).map((kr, idx) => (
-                  <div key={`${kr.id}-${idx}`} className="flex items-center justify-between rounded border border-[var(--border)] bg-[var(--bg-card)] px-2 py-1 text-sm">
-                    <span>{kr.title}</span>
+                  <div key={`${kr}-${idx}`} className="flex items-center justify-between rounded border border-[var(--border)] bg-[var(--bg-card)] px-2 py-1 text-sm">
+                    <span>{kr}</span>
                     <button className="text-xs text-red-400" onClick={() => void removeKr(idx)}>
                       Remove
                     </button>
@@ -860,5 +781,4 @@ function AssigneeDots({ assignees }: { assignees: Array<{ id: string; name?: str
     </>
   );
 }
-
 

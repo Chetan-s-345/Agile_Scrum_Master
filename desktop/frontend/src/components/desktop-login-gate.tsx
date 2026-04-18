@@ -5,8 +5,12 @@ type DesktopLoginGateProps = {
   onRefreshSession?: () => Promise<void>;
 };
 
-const CONFIGURED_AUTH_BASE_URL = String(import.meta.env.VITE_DESKTOP_AUTH_BASE_URL || "").trim();
-const DEPLOYED_WEB_URL = (CONFIGURED_AUTH_BASE_URL || "https://agile-scrum-master.vercel.app").replace(/\/+$/, "");
+const CONFIGURED_AUTH_BASE_URL =
+  String(import.meta.env.VITE_DESKTOP_AUTH_BASE_URL || "").trim() ||
+  String(import.meta.env.VITE_CLOUD_APP_URL || "").trim() ||
+  String(import.meta.env.VITE_WEB_APP_URL || "").trim();
+const FALLBACK_DEPLOYED_WEB_URL = "https://agile-scrum-master.vercel.app";
+const DEPLOYED_WEB_URL = (CONFIGURED_AUTH_BASE_URL || FALLBACK_DEPLOYED_WEB_URL).replace(/\/+$/, "");
 const LOCAL_WEB_URL = "http://localhost:3000";
 const DESKTOP_CALLBACK_URI = "asmdesktop://auth-callback";
 
@@ -54,7 +58,13 @@ export function DesktopLoginGate({ onRefreshSession }: DesktopLoginGateProps) {
         : signInUrl;
 
       await openExternal(target);
-      setMessage("Browser opened. After sign in, desktop will continue automatically.");
+      if (!localReachable && !CONFIGURED_AUTH_BASE_URL) {
+        setMessage(
+          `Browser opened via fallback URL (${FALLBACK_DEPLOYED_WEB_URL}). Set VITE_DESKTOP_AUTH_BASE_URL to your deployed cloud app URL.`
+        );
+      } else {
+        setMessage("Browser opened. After sign in, desktop will continue automatically.");
+      }
       if (typeof onRefreshSession === "function") {
         void onRefreshSession();
       }
@@ -75,7 +85,13 @@ export function DesktopLoginGate({ onRefreshSession }: DesktopLoginGateProps) {
         : signUpUrl;
 
       await openExternal(target);
-      setMessage("Browser opened for registration. Finish signup, then sign in to continue in desktop.");
+      if (!localReachable && !CONFIGURED_AUTH_BASE_URL) {
+        setMessage(
+          `Browser opened via fallback URL (${FALLBACK_DEPLOYED_WEB_URL}). Set VITE_DESKTOP_AUTH_BASE_URL to your deployed cloud app URL.`
+        );
+      } else {
+        setMessage("Browser opened for registration. Finish signup, then sign in to continue in desktop.");
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Failed to open browser sign up");
     } finally {

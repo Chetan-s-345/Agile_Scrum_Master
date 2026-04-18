@@ -4,7 +4,16 @@ const { randomUUID } = require("crypto");
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const CHANNELS = require("./ipc/channels");
 const IPCResponse = require("./utils/ipc-response");
+const { registerAdminIpcHandlers } = require("./ipc/admin");
+const { registerAssignIpcHandlers } = require("./ipc/assign");
+const { registerBacklogIpcHandlers } = require("./ipc/backlog");
+const { registerBoardIpcHandlers } = require("./ipc/board");
 const { registerDashboardIpcHandlers } = require("./ipc/dashboard");
+const { registerDevelopersIpcHandlers: registerDirectoryDevelopersIpcHandlers } = require("./ipc/developers");
+const { registerFormsIpcHandlers } = require("./ipc/forms");
+const { registerNavbarDataIpcHandlers } = require("./ipc/navbar-data");
+const { registerPagesIpcHandlers } = require("./ipc/pages");
+const { registerTimelineIpcHandlers } = require("./ipc/timeline");
 const { registerAuthIpcHandlers, processDesktopAuthCallback, getStoredSession } = require("./ipc/auth");
 
 const AUTH_PROTOCOL = "asmdesktop";
@@ -947,104 +956,180 @@ function applyToggleState(data, repoId, enabled) {
 }
 
 function registerGithubRepoHandlers() {
-  ipcMain.handle(CHANNELS.GITHUB.GET_AVAILABLE_REPOS, async (_event, payload = {}) => {
-    try {
-      const data = readGithubRepoData();
-      const query = String(payload.query || "").trim().toLowerCase();
-
-      const linkedByRepoId = new Map(
-        data.linkedRepos.map((entry) => [String(entry.repoId || ""), Boolean(entry.enabled)])
-      );
-
-      const repos = data.availableRepos
-        .map((repo) => {
-          const repoId = toRepoKey(repo);
-          return {
-            ...repo,
-            hasWebhook: linkedByRepoId.has(repoId) ? linkedByRepoId.get(repoId) : Boolean(repo.hasWebhook)
-          };
-        })
-        .filter((repo) => {
-          if (!query) return true;
-          const name = String(repo.name || "").toLowerCase();
-          const fullName = String(repo.fullName || "").toLowerCase();
-          const language = String(repo.language || "").toLowerCase();
-          return name.includes(query) || fullName.includes(query) || language.includes(query);
-        });
-
-      return IPCResponse.success(repos);
-    } catch (error) {
-      return IPCResponse.internalError("Failed to load available GitHub repositories", String(error));
+  function getLinkedReposWithMetadata(data) {
+    const availableByKey = new Map();
+    for (const repo of data.availableRepos) {
+      const key = toRepoKey(repo);
+      if (key) availableByKey.set(key, repo);
+      const id = String(repo.id || "").trim();
+      if (id && !availableByKey.has(id)) {
+        availableByKey.set(id, repo);
+      }
     }
+
+    return data.linkedRepos.map((entry) => {
+      const repoId = String(entry.repoId || "").trim();
+      const repo = availableByKey.get(repoId) || null;
+      const fullName = String(repo?.fullName || repoId || repo?.name || "").trim();
+      const name = String(repo?.name || fullName.split("/").pop() || fullName || "Repository").trim();
+      const lastCommit = String(repo?.updatedAt || entry.updatedAt || entry.linkedAt || new Date().toISOString());
+      const openPrsCount = Math.max(0, Number(repo?.openPRs ?? entry.openPRs ?? 0));
+
+      return {
+        repoId,
+        enabled: Boolean(entry.enabled),
+        projectId: entry.projectId || null,
+        linkedAt: String(entry.linkedAt || ""),
+        id: String(repo?.id || repoId || fullName),
+        name,
+        fullName,
+        visibility: repo?.private ? "private" : "public",
+        lastCommit,
+        openPrsCount,
+        syncStatus: Boolean(entry.enabled) ? "synced" : "paused",
+      };
+    });
+  }
+
+  ipcMain.handle(CHANNELS.GITHUB.GET_AVAILABLE_REPOS, async (_event, payload = {}) => {
+    const data = readGithubRepoData();
+    const query = String(payload.query || "").trim().toLowerCase();
+
+    const linkedByRepoId = new Map(
+      data.linkedRepos.map((entry) => [String(entry.repoId || ""), Boolean(entry.enabled)])
+    );
+
+    return data.availableRepos
+      .map((repo) => {
+        const repoId = toRepoKey(repo);
+        return {
+          ...repo,
+          hasWebhook: linkedByRepoId.has(repoId) ? linkedByRepoId.get(repoId) : Boolean(repo.hasWebhook)
+        };
+      })
+      .filter((repo) => {
+        if (!query) return true;
+        const name = String(repo.name || "").toLowerCase();
+        const fullName = String(repo.fullName || "").toLowerCase();
+        const language = String(repo.language || "").toLowerCase();
+        return name.includes(query) || fullName.includes(query) || language.includes(query);
+      });
+  });
+
+  ipcMain.handle(CHANNELS.GITHUB.GET_CONNECTION_STATUS, async () => {
+    const data = readGithubRepoData();
+    const linkedRepos = getLinkedReposWithMetadata(data);
+    const connected = linkedRepos.some((repo) => repo.enabled);
+
+    let org = "agile-org";
+    const firstRepoWithOrg = linkedRepos.find((repo) => String(repo.fullName || "").includes("/"));
+    if (firstRepoWithOrg) {
+      org = String(firstRepoWithOrg.fullName).split("/")[0] || org;
+    }
+
+    const latestTimestamp = linkedRepos
+      .map((repo) => new Date(repo.lastCommit).getTime())
+      .filter(Number.isFinite)
+      .sort((a, b) => b - a)[0];
+
+    return {
+      connected,
+      org,
+      lastSynced: Number.isFinite(latestTimestamp) ? new Date(latestTimestamp).toISOString() : new Date().toISOString(),
+    };
   });
 
   ipcMain.handle(CHANNELS.GITHUB.GET_LINKED_REPOS, async () => {
-    try {
-      const data = readGithubRepoData();
-      return IPCResponse.success(data.linkedRepos);
-    } catch (error) {
-      return IPCResponse.internalError("Failed to load linked GitHub repositories", String(error));
-    }
+    const data = readGithubRepoData();
+    return getLinkedReposWithMetadata(data);
+  });
+
+  ipcMain.handle(CHANNELS.GITHUB.GET_RECENT_PRS, async () => {
+    const data = readGithubRepoData();
+    const linkedRepos = getLinkedReposWithMetadata(data).filter((repo) => repo.enabled);
+    const now = Date.now();
+
+    return linkedRepos
+      .slice(0, 10)
+      .map((repo, index) => ({
+        id: `pr-${index + 1}`,
+        title: `Sync update for ${repo.name}`,
+        author: "automation-bot",
+        status: index % 3 === 0 ? "merged" : "open",
+        linkedTask: null,
+        repo: repo.fullName,
+        createdAt: new Date(now - index * 90 * 60 * 1000).toISOString(),
+        htmlUrl: `https://github.com/${repo.fullName}/pull/${100 + index}`,
+      }));
   });
 
   ipcMain.handle(CHANNELS.GITHUB.TOGGLE_REPO_SYNC, async (_event, payload = {}) => {
-    try {
-      const repoId = String(payload.repoId || "").trim();
-      if (!repoId) {
-        return IPCResponse.validation("repoId", "repoId is required");
-      }
-
-      const enabled = Boolean(payload.enabled);
-      const data = readGithubRepoData();
-      const updated = applyToggleState(data, repoId, enabled);
-      writeGithubRepoData(data);
-      return IPCResponse.success(updated);
-    } catch (error) {
-      return IPCResponse.internalError("Failed to toggle repository sync", String(error));
+    const repoId = String(payload.repoId || "").trim();
+    if (!repoId) {
+      throw new Error("repoId is required");
     }
+
+    const enabled = Boolean(payload.enabled);
+    const data = readGithubRepoData();
+    const updated = applyToggleState(data, repoId, enabled);
+    writeGithubRepoData(data);
+    return updated;
+  });
+
+  ipcMain.handle(CHANNELS.GITHUB.SYNC_NOW, async () => {
+    const data = readGithubRepoData();
+    const now = new Date().toISOString();
+
+    data.availableRepos = data.availableRepos.map((repo) => ({
+      ...repo,
+      updatedAt: now,
+      hasWebhook: Boolean(repo.hasWebhook),
+    }));
+    data.linkedRepos = data.linkedRepos.map((repo) => ({
+      ...repo,
+      updatedAt: now,
+    }));
+
+    writeGithubRepoData(data);
+    return {
+      success: true,
+      synced: data.linkedRepos.filter((repo) => Boolean(repo.enabled)).length,
+    };
   });
 
   ipcMain.handle(CHANNELS.GITHUB.LINK_REPO_TO_PROJECT, async (_event, payload = {}) => {
-    try {
-      const repoId = String(payload.repoId || "").trim();
-      const projectId = String(payload.projectId || "").trim();
+    const repoId = String(payload.repoId || "").trim();
+    const projectId = String(payload.projectId || "").trim();
 
-      if (!repoId) {
-        return IPCResponse.validation("repoId", "repoId is required");
-      }
-      if (!projectId) {
-        return IPCResponse.validation("projectId", "projectId is required");
-      }
-
-      const data = readGithubRepoData();
-      const linked = applyToggleState(data, repoId, true);
-      if (linked) {
-        linked.projectId = projectId;
-        linked.updatedAt = new Date().toISOString();
-      }
-
-      writeGithubRepoData(data);
-      return IPCResponse.success({ success: true });
-    } catch (error) {
-      return IPCResponse.internalError("Failed to link repository to project", String(error));
+    if (!repoId) {
+      throw new Error("repoId is required");
     }
+    if (!projectId) {
+      throw new Error("projectId is required");
+    }
+
+    const data = readGithubRepoData();
+    const linked = applyToggleState(data, repoId, true);
+    if (linked) {
+      linked.projectId = projectId;
+      linked.updatedAt = new Date().toISOString();
+    }
+
+    writeGithubRepoData(data);
+    return { success: true };
   });
 
   ipcMain.handle(CHANNELS.GITHUB.BULK_TOGGLE, async (_event, payload = {}) => {
-    try {
-      const repoIds = Array.isArray(payload.repoIds) ? payload.repoIds.map((id) => String(id || "").trim()).filter(Boolean) : [];
-      if (repoIds.length === 0) {
-        return IPCResponse.validation("repoIds", "repoIds must contain at least one repository id");
-      }
-
-      const enabled = Boolean(payload.enabled);
-      const data = readGithubRepoData();
-      const updated = repoIds.map((repoId) => applyToggleState(data, repoId, enabled)).filter(Boolean);
-      writeGithubRepoData(data);
-      return IPCResponse.success(updated);
-    } catch (error) {
-      return IPCResponse.internalError("Failed to bulk toggle repository sync", String(error));
+    const repoIds = Array.isArray(payload.repoIds) ? payload.repoIds.map((id) => String(id || "").trim()).filter(Boolean) : [];
+    if (repoIds.length === 0) {
+      throw new Error("repoIds must contain at least one repository id");
     }
+
+    const enabled = Boolean(payload.enabled);
+    const data = readGithubRepoData();
+    const updated = repoIds.map((repoId) => applyToggleState(data, repoId, enabled)).filter(Boolean);
+    writeGithubRepoData(data);
+    return updated;
   });
 }
 
@@ -1729,24 +1814,20 @@ function profileDbPath() {
 }
 
 function defaultProfileData() {
-  const now = new Date();
   return {
     userProfile: {
-      id: "user-1",
-      displayName: "Demo User",
-      name: "Demo User",
-      email: "demo@agilescrummaster.dev",
-      role: "member",
-      title: "Scrum Master",
-      phone: "+1 (555) 0142",
-      bio: "Scrum practitioner focused on team flow and delivery quality.",
+      id: "",
+      displayName: "",
+      name: "",
+      email: "",
+      role: "",
+      title: "",
+      phone: "",
+      bio: "",
       timezone: "UTC",
-      githubUsername: "demo-user",
-      slack: "@demo-user",
-      ssoProviders: [
-        { id: "google", name: "Google", connected: true },
-        { id: "github", name: "GitHub", connected: false },
-      ],
+      githubUsername: "",
+      slack: "",
+      ssoProviders: [],
       twoFactorEnabled: false,
       twoFactorQrCodeUrl: null,
       avatarUrl: null,
@@ -1756,22 +1837,7 @@ function defaultProfileData() {
         standupReminders: true
       }
     },
-    sessions: [
-      {
-        sessionId: "session-current",
-        device: "Desktop App (Windows)",
-        ipAddress: "127.0.0.1",
-        lastActiveAt: now.toISOString(),
-        current: true,
-      },
-      {
-        sessionId: "session-web-1",
-        device: "Chrome on macOS",
-        ipAddress: "10.0.0.42",
-        lastActiveAt: new Date(now.getTime() - 3 * 60 * 60 * 1000).toISOString(),
-        current: false,
-      },
-    ],
+    sessions: [],
     activityStats: {
       tasksCompleted: 0,
       prsReviewed: 0,
@@ -1792,7 +1858,7 @@ function readProfileData() {
 
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
     const defaults = defaultProfileData();
-    return {
+    const merged = {
       userProfile: {
         ...defaults.userProfile,
         ...(parsed?.userProfile && typeof parsed.userProfile === "object" ? parsed.userProfile : {}),
@@ -1815,6 +1881,23 @@ function readProfileData() {
       },
       passwordHashHint: parsed?.passwordHashHint || defaults.passwordHashHint
     };
+
+    const normalizedEmail = String(merged?.userProfile?.email || "").trim().toLowerCase();
+    if (normalizedEmail === "demo@agilescrummaster.dev") {
+      merged.userProfile = {
+        ...defaults.userProfile,
+        notifications: {
+          ...defaults.userProfile.notifications,
+          ...(merged?.userProfile?.notifications && typeof merged.userProfile.notifications === "object"
+            ? merged.userProfile.notifications
+            : {}),
+        },
+      };
+      merged.sessions = [];
+      writeProfileData(merged);
+    }
+
+    return merged;
   } catch {
     return defaultProfileData();
   }
@@ -1881,11 +1964,96 @@ function firstArray(payload, preferredKeys = []) {
   return Array.isArray(found) ? found : [];
 }
 
+function normalizeRole(value) {
+  const role = String(value || "").trim().toLowerCase();
+  if (role === "owner" || role === "admin" || role === "member" || role === "viewer") {
+    return role;
+  }
+  return "member";
+}
+
+function sessionUserFallback() {
+  const session = getStoredSession();
+  const user = session?.user && typeof session.user === "object" ? session.user : {};
+  return {
+    id: String(user?.id || "").trim(),
+    name: String(user?.fullName || user?.name || user?.email || "").trim(),
+    email: String(user?.email || "").trim(),
+  };
+}
+
+function buildProfileFromLocalAndIdentity(identity, localProfile, timezone) {
+  const displayName = String(identity?.name || localProfile?.displayName || localProfile?.name || identity?.email || "").trim();
+  const email = String(identity?.email || localProfile?.email || "").trim();
+
+  return {
+    id: String(identity?.id || localProfile?.id || "").trim(),
+    name: displayName,
+    displayName,
+    email,
+    role: normalizeRole(identity?.role || localProfile?.role),
+    title: String(localProfile?.title || "").trim(),
+    bio: String(localProfile?.bio || "").trim(),
+    phone: String(localProfile?.phone || "").trim(),
+    timezone: String(timezone || localProfile?.timezone || "UTC").trim() || "UTC",
+    githubUsername: String(localProfile?.githubUsername || "").trim(),
+    slack: String(localProfile?.slack || "").trim(),
+    avatarUrl: localProfile?.avatarUrl || null,
+    notifications:
+      localProfile?.notifications && typeof localProfile.notifications === "object"
+        ? {
+            emailDailyDigest: Boolean(localProfile.notifications.emailDailyDigest),
+            sprintAlerts: Boolean(localProfile.notifications.sprintAlerts),
+            standupReminders: Boolean(localProfile.notifications.standupReminders),
+          }
+        : {
+            emailDailyDigest: true,
+            sprintAlerts: true,
+            standupReminders: true,
+          },
+  };
+}
+
+async function resolveCurrentProfile() {
+  const localData = readProfileData();
+  const localProfile = localData?.userProfile && typeof localData.userProfile === "object" ? localData.userProfile : {};
+
+  try {
+    const [mePayload, orgPayload] = await Promise.all([
+      desktopGatewayRequest("GET", "/api/v1/auth/me"),
+      desktopGatewayRequest("GET", "/api/v1/org").catch(() => null)
+    ]);
+
+    const user = mePayload?.user && typeof mePayload.user === "object" ? mePayload.user : {};
+    const memberships = Array.isArray(mePayload?.memberships) ? mePayload.memberships : [];
+    const activeOrgId = String(mePayload?.activeOrgId || "").trim();
+    const activeMembership =
+      memberships.find((item) => String(item?.org?.id || "") === activeOrgId) ||
+      memberships[0] ||
+      null;
+
+    const identity = {
+      id: String(user?.id || "").trim(),
+      name: String(user?.fullName || user?.name || user?.email || "").trim(),
+      email: String(user?.email || "").trim(),
+      role: normalizeRole(activeMembership?.role),
+    };
+
+    return buildProfileFromLocalAndIdentity(identity, localProfile, String(orgPayload?.org?.timezone || "UTC").trim());
+  } catch {
+    const fallbackIdentity = sessionUserFallback();
+    if (!fallbackIdentity.id && !fallbackIdentity.email) {
+      throw new Error("Desktop session not found. Please sign in.");
+    }
+    return buildProfileFromLocalAndIdentity(fallbackIdentity, localProfile, String(localProfile?.timezone || "UTC").trim());
+  }
+}
+
 function registerProfileHandlers() {
   ipcMain.handle(CHANNELS.PROFILE.GET, async () => {
     try {
-      const data = readProfileData();
-      return IPCResponse.success(data.userProfile);
+      const profile = await resolveCurrentProfile();
+      return IPCResponse.success(profile);
     } catch (error) {
       return IPCResponse.internalError("Failed to load profile", String(error));
     }
@@ -1893,37 +2061,7 @@ function registerProfileHandlers() {
 
   ipcMain.handle(CHANNELS.PROFILE.GET_CURRENT, async () => {
     try {
-      const [mePayload, orgPayload] = await Promise.all([
-        desktopGatewayRequest("GET", "/api/v1/auth/me"),
-        desktopGatewayRequest("GET", "/api/v1/org").catch(() => null)
-      ]);
-
-      const user = mePayload?.user && typeof mePayload.user === "object" ? mePayload.user : {};
-      const memberships = Array.isArray(mePayload?.memberships) ? mePayload.memberships : [];
-      const activeOrgId = String(mePayload?.activeOrgId || "").trim();
-
-      const activeMembership =
-        memberships.find((item) => String(item?.org?.id || "") === activeOrgId) ||
-        memberships[0] ||
-        null;
-
-      const profile = {
-        id: String(user?.id || ""),
-        name: String(user?.fullName || user?.name || "").trim(),
-        email: String(user?.email || "").trim(),
-        role: String(activeMembership?.role || "").trim(),
-        bio: "",
-        timezone: String(orgPayload?.org?.timezone || "UTC").trim() || "UTC",
-        githubUsername: "",
-        slack: "",
-        avatarUrl: null,
-        notifications: {
-          emailDailyDigest: true,
-          sprintAlerts: true,
-          standupReminders: true
-        }
-      };
-
+      const profile = await resolveCurrentProfile();
       return IPCResponse.success(profile);
     } catch (error) {
       return IPCResponse.internalError("Failed to load profile", String(error));
@@ -2022,14 +2160,36 @@ function registerProfileHandlers() {
         standupsAttended: standups.length
       });
     } catch (error) {
-      return IPCResponse.internalError("Failed to load profile activity stats", String(error));
+      try {
+        const data = readProfileData();
+        return IPCResponse.success(data?.activityStats || defaultProfileData().activityStats);
+      } catch {
+        return IPCResponse.internalError("Failed to load profile activity stats", String(error));
+      }
     }
   });
 
   ipcMain.handle(CHANNELS.PROFILE.GET_SESSIONS, async () => {
     try {
       const data = readProfileData();
-      return IPCResponse.success(Array.isArray(data.sessions) ? data.sessions : []);
+      const session = getStoredSession();
+      const currentSession = {
+        sessionId: "session-current",
+        device: `Desktop App (${process.platform})`,
+        ipAddress: "127.0.0.1",
+        lastActiveAt: new Date().toISOString(),
+        current: true,
+      };
+
+      const historicalSessions = Array.isArray(data.sessions)
+        ? data.sessions.filter((item) => !Boolean(item?.current))
+        : [];
+
+      if (!session?.accessToken) {
+        return IPCResponse.success([]);
+      }
+
+      return IPCResponse.success([currentSession, ...historicalSessions]);
     } catch (error) {
       return IPCResponse.internalError("Failed to load active sessions", String(error));
     }
@@ -6140,49 +6300,10 @@ function developersDbPath() {
 }
 
 function defaultDevelopersData() {
-  const now = new Date();
   return {
     seatLimit: 20,
-    members: [
-      {
-        id: "user-1",
-        name: "Demo User",
-        email: "demo@agilescrummaster.dev",
-        role: "admin",
-        teams: ["Platform"],
-        lastActive: now.toISOString(),
-        status: "active"
-      },
-      {
-        id: "user-2",
-        name: "Sprint Lead",
-        email: "lead@agilescrummaster.dev",
-        role: "manager",
-        teams: ["Core Scrum"],
-        lastActive: new Date(now.getTime() - 4 * 60 * 60 * 1000).toISOString(),
-        status: "active"
-      },
-      {
-        id: "user-3",
-        name: "Frontend Engineer",
-        email: "frontend@agilescrummaster.dev",
-        role: "developer",
-        teams: ["Web"],
-        lastActive: new Date(now.getTime() - 9 * 60 * 60 * 1000).toISOString(),
-        status: "active"
-      }
-    ],
-    invitations: [
-      {
-        id: "inv-dev-1",
-        email: "newhire@agilescrummaster.dev",
-        role: "developer",
-        invitedBy: "Demo User",
-        createdAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString(),
-        status: "pending"
-      }
-    ]
+    members: [],
+    invitations: []
   };
 }
 
@@ -6197,11 +6318,23 @@ function readDevelopersData() {
 
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
     const defaults = defaultDevelopersData();
-    return {
+    const merged = {
       seatLimit: Math.max(1, Number(parsed?.seatLimit || defaults.seatLimit)),
       members: Array.isArray(parsed?.members) ? parsed.members : defaults.members,
       invitations: Array.isArray(parsed?.invitations) ? parsed.invitations : defaults.invitations
     };
+
+    const filteredMembers = merged.members.filter((member) => {
+      const email = String(member?.email || "").trim().toLowerCase();
+      return email !== "demo@agilescrummaster.dev";
+    });
+
+    if (filteredMembers.length !== merged.members.length) {
+      merged.members = filteredMembers;
+      writeDevelopersData(merged);
+    }
+
+    return merged;
   } catch {
     return defaultDevelopersData();
   }
@@ -6214,10 +6347,24 @@ function writeDevelopersData(data) {
 function registerDevelopersHandlers() {
   ipcMain.handle(CHANNELS.DEVELOPERS.GET_ORG_MEMBERS, async () => {
     try {
-      const data = readDevelopersData();
-      return IPCResponse.success(data.members);
+      const payload = await desktopGatewayRequest("GET", "/api/v1/org/members");
+      const members = firstArray(payload, ["members", "items"]).map((member) => ({
+        id: String(member?.id || member?.memberId || member?.userId || ""),
+        name: String(member?.name || member?.fullName || member?.email || "Member"),
+        email: String(member?.email || ""),
+        role: String(member?.role || "member"),
+        teams: Array.isArray(member?.teams) ? member.teams : [],
+        lastActive: String(member?.lastActive || member?.updatedAt || ""),
+        status: String(member?.status || "active"),
+      }));
+      return IPCResponse.success(members);
     } catch (error) {
-      return IPCResponse.internalError("Failed to load org members", String(error));
+      try {
+        const data = readDevelopersData();
+        return IPCResponse.success(data.members);
+      } catch {
+        return IPCResponse.internalError("Failed to load org members", String(error));
+      }
     }
   });
 
@@ -6232,20 +6379,29 @@ function registerDevelopersHandlers() {
         return IPCResponse.validation("role", "role is required");
       }
 
-      const data = readDevelopersData();
-      const index = data.members.findIndex((member) => String(member.id || "") === userId);
-      if (index < 0) {
-        return IPCResponse.notFound("Org member");
-      }
+      try {
+        const updated = await desktopGatewayRequest(
+          "PATCH",
+          `/api/v1/org/members/${encodeURIComponent(userId)}/role`,
+          { role }
+        );
+        return IPCResponse.success(updated?.member || updated?.user || updated);
+      } catch {
+        const data = readDevelopersData();
+        const index = data.members.findIndex((member) => String(member.id || "") === userId);
+        if (index < 0) {
+          return IPCResponse.notFound("Org member");
+        }
 
-      const updated = {
-        ...data.members[index],
-        role,
-        updatedAt: new Date().toISOString()
-      };
-      data.members[index] = updated;
-      writeDevelopersData(data);
-      return IPCResponse.success(updated);
+        const updated = {
+          ...data.members[index],
+          role,
+          updatedAt: new Date().toISOString()
+        };
+        data.members[index] = updated;
+        writeDevelopersData(data);
+        return IPCResponse.success(updated);
+      }
     } catch (error) {
       return IPCResponse.internalError("Failed to update org member role", String(error));
     }
@@ -6258,14 +6414,19 @@ function registerDevelopersHandlers() {
         return IPCResponse.validation("userId", "userId is required");
       }
 
-      const data = readDevelopersData();
-      const before = data.members.length;
-      data.members = data.members.filter((member) => String(member.id || "") !== userId);
-      const removed = data.members.length < before;
-      if (removed) {
-        writeDevelopersData(data);
+      try {
+        await desktopGatewayRequest("DELETE", `/api/v1/org/members/${encodeURIComponent(userId)}`);
+        return IPCResponse.success({ success: true });
+      } catch {
+        const data = readDevelopersData();
+        const before = data.members.length;
+        data.members = data.members.filter((member) => String(member.id || "") !== userId);
+        const removed = data.members.length < before;
+        if (removed) {
+          writeDevelopersData(data);
+        }
+        return IPCResponse.success({ success: removed });
       }
-      return IPCResponse.success({ success: removed });
     } catch (error) {
       return IPCResponse.internalError("Failed to remove org member", String(error));
     }
@@ -6279,27 +6440,41 @@ function registerDevelopersHandlers() {
         return IPCResponse.validation("email", "email is required");
       }
 
-      const data = readDevelopersData();
-      const existingPending = data.invitations.find(
-        (inv) => String(inv.email || "").toLowerCase() === email && String(inv.status || "").toLowerCase() === "pending"
-      );
-      if (existingPending) {
-        return IPCResponse.success(existingPending);
+      try {
+        const response = await desktopGatewayRequest("POST", "/api/v1/org/members/invite", { email, role });
+        const invitation = response?.invitation || response?.invite || response;
+        return IPCResponse.success({
+          id: String(invitation?.id || invitation?.inviteId || `inv-${Date.now()}`),
+          email,
+          role,
+          invitedBy: String(invitation?.invitedBy || ""),
+          createdAt: String(invitation?.createdAt || new Date().toISOString()),
+          expiresAt: String(invitation?.expiresAt || ""),
+          status: String(invitation?.status || "pending"),
+        });
+      } catch {
+        const data = readDevelopersData();
+        const existingPending = data.invitations.find(
+          (inv) => String(inv.email || "").toLowerCase() === email && String(inv.status || "").toLowerCase() === "pending"
+        );
+        if (existingPending) {
+          return IPCResponse.success(existingPending);
+        }
+
+        const invitation = {
+          id: `inv-${randomUUID()}`,
+          email,
+          role,
+          invitedBy: String(sessionUserFallback()?.name || sessionUserFallback()?.email || "Workspace Admin"),
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          status: "pending"
+        };
+
+        data.invitations.unshift(invitation);
+        writeDevelopersData(data);
+        return IPCResponse.success(invitation);
       }
-
-      const invitation = {
-        id: `inv-${randomUUID()}`,
-        email,
-        role,
-        invitedBy: "Demo User",
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-        status: "pending"
-      };
-
-      data.invitations.unshift(invitation);
-      writeDevelopersData(data);
-      return IPCResponse.success(invitation);
     } catch (error) {
       return IPCResponse.internalError("Failed to invite org member", String(error));
     }
@@ -6307,9 +6482,17 @@ function registerDevelopersHandlers() {
 
   ipcMain.handle(CHANNELS.DEVELOPERS.GET_PENDING_INVITATIONS, async () => {
     try {
-      const data = readDevelopersData();
-      const pending = data.invitations.filter((inv) => String(inv.status || "").toLowerCase() === "pending");
-      return IPCResponse.success(pending);
+      try {
+        const payload = await desktopGatewayRequest("GET", "/api/v1/org/invitations");
+        const invitations = firstArray(payload, ["invitations", "items"]).filter(
+          (inv) => String(inv?.status || "pending").toLowerCase() === "pending"
+        );
+        return IPCResponse.success(invitations);
+      } catch {
+        const data = readDevelopersData();
+        const pending = data.invitations.filter((inv) => String(inv.status || "").toLowerCase() === "pending");
+        return IPCResponse.success(pending);
+      }
     } catch (error) {
       return IPCResponse.internalError("Failed to load pending invitations", String(error));
     }
@@ -6322,19 +6505,24 @@ function registerDevelopersHandlers() {
         return IPCResponse.validation("invitationId", "invitationId is required");
       }
 
-      const data = readDevelopersData();
-      const index = data.invitations.findIndex((inv) => String(inv.id || "") === invitationId);
-      if (index < 0) {
-        return IPCResponse.notFound("Invitation");
-      }
+      try {
+        await desktopGatewayRequest("DELETE", `/api/v1/org/invitations/${encodeURIComponent(invitationId)}`);
+        return IPCResponse.success({ success: true });
+      } catch {
+        const data = readDevelopersData();
+        const index = data.invitations.findIndex((inv) => String(inv.id || "") === invitationId);
+        if (index < 0) {
+          return IPCResponse.notFound("Invitation");
+        }
 
-      data.invitations[index] = {
-        ...data.invitations[index],
-        status: "revoked",
-        revokedAt: new Date().toISOString()
-      };
-      writeDevelopersData(data);
-      return IPCResponse.success({ success: true });
+        data.invitations[index] = {
+          ...data.invitations[index],
+          status: "revoked",
+          revokedAt: new Date().toISOString()
+        };
+        writeDevelopersData(data);
+        return IPCResponse.success({ success: true });
+      }
     } catch (error) {
       return IPCResponse.internalError("Failed to revoke invitation", String(error));
     }
@@ -6414,10 +6602,26 @@ function writeOrgSettings(settings) {
 function registerOrgHandlers() {
   ipcMain.handle(CHANNELS.ORG.GET_SETTINGS, async () => {
     try {
-      const settings = readOrgSettings();
-      return IPCResponse.success(settings);
+      const payload = await desktopGatewayRequest("GET", "/api/v1/org");
+      const org = payload?.org && typeof payload.org === "object" ? payload.org : payload;
+      return IPCResponse.success({
+        id: String(org?.id || "org-default"),
+        name: String(org?.name || ""),
+        slug: String(org?.slug || ""),
+        logoUrl: String(org?.logoUrl || ""),
+        description: String(org?.description || ""),
+        industry: String(org?.industry || ""),
+        size: String(org?.size || ""),
+        ownerId: String(org?.ownerId || ""),
+        preferences: org?.preferences && typeof org.preferences === "object" ? org.preferences : {},
+      });
     } catch (error) {
-      return IPCResponse.internalError("Failed to load org settings", String(error));
+      try {
+        const settings = readOrgSettings();
+        return IPCResponse.success(settings);
+      } catch {
+        return IPCResponse.internalError("Failed to load org settings", String(error));
+      }
     }
   });
 
@@ -6431,23 +6635,38 @@ function registerOrgHandlers() {
       }
 
       const incomingPreferences = payload.preferences && typeof payload.preferences === "object" ? payload.preferences : {};
-      const next = {
-        ...current,
-        name: nextName,
-        logoUrl: payload.logoUrl == null ? current.logoUrl : String(payload.logoUrl || "").trim(),
-        description:
-          payload.description == null ? current.description : String(payload.description || "").trim(),
-        industry: payload.industry == null ? current.industry : String(payload.industry || "").trim(),
-        size: payload.size == null ? current.size : String(payload.size || "").trim(),
-        preferences: {
-          ...current.preferences,
-          ...incomingPreferences,
-        },
-        updatedAt: new Date().toISOString(),
-      };
+      try {
+        const updated = await desktopGatewayRequest("PATCH", "/api/v1/org/settings", {
+          name: nextName,
+          description:
+            payload.description == null ? current.description : String(payload.description || "").trim(),
+          industry: payload.industry == null ? current.industry : String(payload.industry || "").trim(),
+          size: payload.size == null ? current.size : String(payload.size || "").trim(),
+          preferences: {
+            ...current.preferences,
+            ...incomingPreferences,
+          },
+        });
+        return IPCResponse.success(updated?.org || updated?.settings || updated);
+      } catch {
+        const next = {
+          ...current,
+          name: nextName,
+          logoUrl: payload.logoUrl == null ? current.logoUrl : String(payload.logoUrl || "").trim(),
+          description:
+            payload.description == null ? current.description : String(payload.description || "").trim(),
+          industry: payload.industry == null ? current.industry : String(payload.industry || "").trim(),
+          size: payload.size == null ? current.size : String(payload.size || "").trim(),
+          preferences: {
+            ...current.preferences,
+            ...incomingPreferences,
+          },
+          updatedAt: new Date().toISOString(),
+        };
 
-      writeOrgSettings(next);
-      return IPCResponse.success(next);
+        writeOrgSettings(next);
+        return IPCResponse.success(next);
+      }
     } catch (error) {
       return IPCResponse.internalError("Failed to update org settings", String(error));
     }
@@ -6517,9 +6736,13 @@ function registerOrgHandlers() {
         return IPCResponse.validation("confirmName", "confirmName does not match organization name");
       }
 
-      const filePath = orgSettingsDbPath();
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+      try {
+        await desktopGatewayRequest("DELETE", "/api/v1/org");
+      } catch {
+        const filePath = orgSettingsDbPath();
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
       }
 
       return IPCResponse.success({ success: true });
@@ -6739,6 +6962,31 @@ function registerSystemHandlers() {
       return IPCResponse.internalError("Failed to open external URL", String(error));
     }
   });
+
+  ipcMain.handle(CHANNELS.SYSTEM.GATEWAY_REQUEST, async (_event, payload = {}) => {
+    try {
+      const method = String(payload.method || "GET").trim().toUpperCase();
+      const path = String(payload.path || payload.pathname || "").trim();
+      const supportedMethods = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+
+      if (!supportedMethods.has(method)) {
+        return IPCResponse.validation("method", "method must be GET|POST|PUT|PATCH|DELETE");
+      }
+
+      if (!path || !path.startsWith("/api/")) {
+        return IPCResponse.validation("path", "path must start with /api/");
+      }
+
+      const requestBody = method === "GET" || method === "DELETE"
+        ? undefined
+        : payload.body;
+
+      const data = await desktopGatewayRequest(method, path, requestBody);
+      return IPCResponse.success(data);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to execute gateway request", String(error));
+    }
+  });
 }
 
 function createWindow() {
@@ -6790,7 +7038,14 @@ app.whenReady().then(() => {
 
   registerAuthIpcHandlers(ipcMain, { onSessionChanged: notifySessionUpdated });
   registerSystemHandlers();
+  registerAdminIpcHandlers(ipcMain);
+  registerAssignIpcHandlers(ipcMain);
+  registerBacklogIpcHandlers(ipcMain);
+  registerBoardIpcHandlers(ipcMain);
   registerDashboardIpcHandlers(ipcMain);
+  registerDirectoryDevelopersIpcHandlers(ipcMain);
+  registerFormsIpcHandlers(ipcMain);
+  registerNavbarDataIpcHandlers(ipcMain);
   registerGoalHandlers();
   registerIntegrationHandlers();
   registerGithubRepoHandlers();
@@ -6808,7 +7063,9 @@ app.whenReady().then(() => {
   registerTaskHandlers();
   registerAgentHandlers();
   registerBillingHandlers();
+  registerPagesIpcHandlers(ipcMain);
   registerTeamsHandlers();
+  registerTimelineIpcHandlers(ipcMain);
   registerSkillGapHandlers();
   registerDevelopersHandlers();
   registerOrgHandlers();

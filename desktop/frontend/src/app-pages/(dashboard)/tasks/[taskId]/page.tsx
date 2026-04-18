@@ -6,6 +6,8 @@ import { useEffect, useMemo, useState } from "react";
 type Task = Record<string, unknown>;
 type TaskComment = Record<string, unknown>;
 
+type TaskResp = { task?: Task; error?: string } | (Task & { error?: never });
+
 type CommentsResp = { items: TaskComment[] };
 
 function safe(value: unknown): string {
@@ -38,21 +40,34 @@ function priorityTone(priority: string): string {
   return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200";
 }
 
-async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
-  if (!window.desktopApi?.invoke) {
-    throw new Error("Desktop IPC bridge unavailable");
+function normalizeTask(data: TaskResp | null): Task | null {
+  if (!data) return null;
+  if (typeof data === "object" && data && "task" in data) {
+    const maybe = (data as { task?: Task }).task;
+    return maybe ?? null;
   }
+  return data;
+}
 
-  const response = await window.desktopApi.invoke(channel, payload);
-  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
-    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
-    if (!wrapped.ok) {
-      throw new Error(safe(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
-    }
-    return (wrapped.data as T) ?? (null as T);
+function extractError(data: TaskResp | null): string | null {
+  if (!data || typeof data !== "object") return null;
+  if ("error" in data) {
+    const err = (data as { error?: unknown }).error;
+    return typeof err === "string" && err ? err : null;
   }
+  return null;
+}
 
-  return response as T;
+async function fetchJson<T>(url: string): Promise<{ ok: boolean; status: number; data: T | null; text?: string }> {
+  const resp = await fetch(url, { cache: "no-store" });
+  const text = await resp.text().catch(() => "");
+  let data: T | null = null;
+  try {
+    data = text ? (JSON.parse(text) as T) : null;
+  } catch {
+    data = null;
+  }
+  return { ok: resp.ok, status: resp.status, data, text };
 }
 
 export default function TaskDetailPage() {
@@ -92,22 +107,23 @@ export default function TaskDetailPage() {
     (async () => {
       setLoading(true);
       setError(null);
-      try {
-        const taskData = await invokeDesktop<Task>("tasks:getById", { taskId });
-        const rawComments =
-          taskData && Array.isArray((taskData as { comments?: unknown }).comments)
-            ? ((taskData as { comments?: TaskComment[] }).comments as TaskComment[])
-            : [];
 
-        setTask(taskData || null);
-        setComments({ items: rawComments });
-      } catch (err) {
+      const [tResp, cResp] = await Promise.all([
+        fetchJson<TaskResp>(`/api/tasks/${encodeURIComponent(taskId)}`),
+        fetchJson<CommentsResp>(`/api/tasks/${encodeURIComponent(taskId)}/comments`),
+      ]);
+
+      if (!tResp.ok) {
         setTask(null);
         setComments(null);
-        setError(err instanceof Error ? err.message : "Failed to load task");
-      } finally {
+        setError(extractError(tResp.data) || `Failed to load task (${tResp.status})`);
         setLoading(false);
+        return;
       }
+
+      setTask(normalizeTask(tResp.data));
+      setComments(cResp.ok ? cResp.data : null);
+      setLoading(false);
     })();
   }, [hasId, taskId]);
 

@@ -4,6 +4,7 @@ import Link from "@/next-shims/link";
 import { useEffect, useMemo, useState } from "react";
 import { Bot, Check, Circle, CircleX, Sparkles, X } from "lucide-react";
 import { useAgentStore } from "@/store/agentStore";
+import { desktopGatewayRequest } from "@/lib/desktop-gateway";
 
 function safe(v) {
   return typeof v === "string" ? v : v == null ? "" : String(v);
@@ -44,8 +45,7 @@ export default function AgentBubble() {
       }
 
       setLoadingProject(true);
-      const resp = await fetch("/api/projects", { cache: "no-store" });
-      const data = await resp.json().catch(() => ({}));
+      const data = await desktopGatewayRequest("GET", "/api/v1/projects").catch(() => ({}));
       const firstId = String(data?.items?.[0]?.id || "").trim();
       if (mounted && firstId) {
         setProjectId(firstId);
