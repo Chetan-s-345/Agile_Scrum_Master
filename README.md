@@ -1,15 +1,28 @@
 <div align="center">
 
-```
+<table>
+      <tr>
+            <td valign="middle" style="padding-right:18px;">
+                  <img src="desktop/frontend/public/sprint-grid-logo.svg" alt="Sprint Logo" width="96" />
+            </td>
+            <td valign="middle">
+                  <pre style="font-size:20px; line-height:1.04; margin:0; text-align:left;">
 ███████╗██████╗ ██████╗ ██╗███╗   ██╗████████╗
 ██╔════╝██╔══██╗██╔══██╗██║████╗  ██║╚══██╔══╝
 ███████╗██████╔╝██████╔╝██║██╔██╗ ██║   ██║
 ╚════██║██╔═══╝ ██╔══██╗██║██║╚██╗██║   ██║
 ███████║██║     ██║  ██║██║██║ ╚████║   ██║
 ╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝   ╚═╝
-```
+                  </pre>
+            </td>
+      </tr>
+</table>
 
 ### **Agentic Scrum Manager** — AI-powered sprint automation for engineering teams
+
+<br/>
+
+<img src="./sprint.gif" alt="Sprint Desktop Demo" width="1200" />
 
 <br/>
 
@@ -19,6 +32,12 @@
 [![Python](https://img.shields.io/badge/python-3.11+-a78bfa?style=for-the-badge&logo=python&logoColor=white)](.)
 [![Next.js](https://img.shields.io/badge/next.js-16-f8fafc?style=for-the-badge&logo=nextdotjs&logoColor=black)](.)
 [![PostgreSQL](https://img.shields.io/badge/postgres-14+-34d399?style=for-the-badge&logo=postgresql&logoColor=white)](.)
+
+<br/>
+
+### Windows Installer
+
+[Download Agile Scrum Master Setup (.exe)](./release/AgileScrumMaster-Setup-latest.exe)
 
 <br/>
 

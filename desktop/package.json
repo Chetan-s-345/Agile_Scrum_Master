@@ -43,11 +43,15 @@
           ]
         }
       ],
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "icon": "electron/assets/sprint.ico"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "electron/assets/sprint.ico",
+      "uninstallerIcon": "electron/assets/sprint.ico",
+      "installerHeaderIcon": "electron/assets/sprint.ico"
     }
   },
   "devDependencies": {

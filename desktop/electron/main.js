@@ -6990,6 +6990,7 @@ function registerSystemHandlers() {
 }
 
 function createWindow() {
+  const windowIconPath = path.join(__dirname, "assets", "sprint.ico");
   const win = new BrowserWindow({
     title: "Agile Scrum Master Desktop",
     width: 1400,
@@ -6997,6 +6998,7 @@ function createWindow() {
     minWidth: 1000,
     minHeight: 700,
     autoHideMenuBar: true,
+    icon: windowIconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
