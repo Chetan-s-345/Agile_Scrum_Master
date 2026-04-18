@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 import { useThemeStore } from "@/lib/theme-store";
+import { AutoTaskRulesPanel } from "@/components/auto-task-rules-panel";
 
 type OrgResponse = {
   org?: {
@@ -20,6 +21,29 @@ type MeResponse = {
   };
 };
 
+type UserPreferences = {
+  theme?: "dark" | "light" | "system";
+  language?: string;
+  notifications?: {
+    email?: NotificationSettings;
+    inApp?: NotificationSettings;
+  };
+};
+
+type ProfileResponse = {
+  fullName?: string;
+  email?: string;
+};
+
+type OrgSettingsResponse = {
+  id?: string;
+  name?: string;
+  slug?: string;
+  preferences?: {
+    timezone?: string;
+  };
+};
+
 type NotificationSettings = {
   sprintAlerts: boolean;
   digestEmail: boolean;
@@ -30,13 +54,30 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+  if (!window.desktopApi?.invoke) {
+    throw new Error("Desktop IPC bridge unavailable");
+  }
+  const response = await window.desktopApi.invoke(channel, payload);
+  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
+    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
+    if (!wrapped.ok) {
+      throw new Error(wrapped.error?.message || wrapped.error?.detail || "IPC request failed");
+    }
+    return (wrapped.data as T) ?? (null as T);
+  }
+  return response as T;
+}
+
 export default function PreferencesPage() {
   const theme = useThemeStore((state) => state.theme);
   const toggleTheme = useThemeStore((state) => state.toggleTheme);
+  const setTheme = useThemeStore((state) => state.setTheme);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [language, setLanguage] = useState("en");
 
   const [orgName, setOrgName] = useState("");
   const [orgSlug, setOrgSlug] = useState("");
@@ -64,58 +105,84 @@ export default function PreferencesPage() {
       setLoading(true);
       setError(null);
 
-      const [orgResp, meResp] = await Promise.all([
-        fetch("/api/org", { cache: "no-store" }),
-        fetch("/api/auth/me", { cache: "no-store" }),
-      ]);
+      try {
+        const [orgData, meData, preferenceData] = await Promise.all([
+          invokeDesktop<OrgSettingsResponse>("org:getSettings"),
+          invokeDesktop<ProfileResponse>("profile:getCurrent"),
+          invokeDesktop<UserPreferences>("preferences:get"),
+        ]);
 
-      const orgData = (await orgResp.json().catch(() => null)) as OrgResponse | null;
-      const meData = (await meResp.json().catch(() => null)) as MeResponse | null;
+        if (cancelled) return;
 
-      if (cancelled) return;
-      if (!orgResp.ok) {
-        setError(asText(orgData?.error) || `Failed to load org settings (${orgResp.status})`);
+        setOrgName(asText(orgData?.name));
+        setOrgSlug(asText(orgData?.slug));
+        setTimezone(asText(orgData?.preferences?.timezone) || "UTC");
+        setUserEmail(asText(meData?.email));
+        setUserName(asText(meData?.fullName));
+        setLanguage(asText(preferenceData?.language) || "en");
+
+        const nextTheme = asText(preferenceData?.theme);
+        if (nextTheme === "dark" || nextTheme === "light" || nextTheme === "system") {
+          setTheme(nextTheme);
+        }
+
+        const emailPrefs = preferenceData?.notifications?.email;
+        if (emailPrefs && typeof emailPrefs === "object") {
+          setNotifications({
+            sprintAlerts: Boolean(emailPrefs.sprintAlerts),
+            digestEmail: Boolean(emailPrefs.digestEmail),
+            assignmentAlerts: Boolean(emailPrefs.assignmentAlerts),
+          });
+        }
+      } catch (loadError) {
+        if (cancelled) return;
+        setError(loadError instanceof Error ? loadError.message : "Failed to load preferences");
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
-
-      setOrgName(asText(orgData?.org?.name));
-      setOrgSlug(asText(orgData?.org?.slug));
-      setTimezone(asText(orgData?.org?.timezone) || "UTC");
-      setUserEmail(asText(meData?.user?.email));
-      setUserName(asText(meData?.user?.fullName));
-      setLoading(false);
     }
 
     void load();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [setTheme]);
 
   async function save() {
     setSaving(true);
     setSaved(false);
     setError(null);
 
-    const resp = await fetch("/api/org/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: orgName.trim() || undefined,
-        timezone: timezone.trim() || undefined,
-        notification_settings: notificationPayload,
-      }),
-    });
+    try {
+      await Promise.all([
+        invokeDesktop<UserPreferences>("preferences:update", {
+          theme,
+          language,
+          notifications: {
+            email: notificationPayload,
+            inApp: notificationPayload,
+          },
+        }),
+        invokeDesktop<OrgSettingsResponse>("org:update", {
+          name: orgName.trim() || undefined,
+          description: undefined,
+          industry: undefined,
+          size: undefined,
+          preferences: {
+            timezone: timezone.trim() || undefined,
+          },
+        }),
+      ]);
 
-    const data = (await resp.json().catch(() => null)) as { error?: string } | null;
-    setSaving(false);
-
-    if (!resp.ok) {
-      setError(asText(data?.error) || `Failed to save preferences (${resp.status})`);
-      return;
+      setSaving(false);
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1800);
+    } catch (saveError) {
+      setSaving(false);
+      setError(saveError instanceof Error ? saveError.message : "Failed to save preferences");
     }
-
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1800);
   }
 
   return (
@@ -188,6 +255,8 @@ export default function PreferencesPage() {
           <div className="text-sm text-slate-600 dark:text-slate-300">{userName || "User"}</div>
           <div className="text-sm text-slate-600 dark:text-slate-300">{userEmail || "—"}</div>
         </div>
+
+        <AutoTaskRulesPanel />
 
         <div className="flex items-center gap-3">
           <button

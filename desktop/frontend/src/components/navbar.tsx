@@ -39,6 +39,25 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function asErrorText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+  if (!window.desktopApi?.invoke) {
+    throw new Error("Desktop IPC bridge unavailable");
+  }
+  const response = await window.desktopApi.invoke(channel, payload);
+  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
+    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
+    if (!wrapped.ok) {
+      throw new Error(asErrorText(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
+    }
+    return (wrapped.data as T) ?? (null as T);
+  }
+  return response as T;
+}
+
 function relTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "just now";
@@ -295,18 +314,13 @@ export function Navbar() {
       }
 
       if (createTab === "sprint") {
-        const resp = await fetch("/api/sprints", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: sprintName,
-            goal: sprintGoal,
-            startDate: sprintStartDate,
-            endDate: sprintEndDate,
-            projectId: currentProjectId,
-          }),
+        await invokeDesktop("sprints:create", {
+          name: sprintName,
+          goal: sprintGoal,
+          startDate: sprintStartDate,
+          endDate: sprintEndDate,
+          projectId: currentProjectId,
         });
-        if (!resp.ok) throw new Error("Failed to create sprint");
         setToast({ text: "Sprint created", type: "success" });
       }
 

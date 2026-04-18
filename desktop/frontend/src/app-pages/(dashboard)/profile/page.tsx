@@ -17,15 +17,29 @@ type ProfileDraft = {
 
 type UserProfile = {
   id: string;
+  displayName?: string;
   name: string;
   email: string;
   role?: string;
+  title?: string;
   bio?: string;
+  phone?: string;
   timezone?: string;
   githubUsername?: string;
   slack?: string;
+  ssoProviders?: Array<{ id: string; name: string; connected: boolean }>;
+  twoFactorEnabled?: boolean;
+  twoFactorQrCodeUrl?: string | null;
   avatarUrl?: string | null;
   notifications?: ProfileDraft["notifications"];
+};
+
+type Session = {
+  sessionId: string;
+  device?: string;
+  ipAddress?: string;
+  lastActiveAt?: string;
+  current?: boolean;
 };
 
 type ActivityStats = {
@@ -61,6 +75,7 @@ export default function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [activityStats, setActivityStats] = useState<ActivityStats | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
   const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [draft, setDraft] = useState<ProfileDraft>({
     name: "",
@@ -77,16 +92,18 @@ export default function ProfilePage() {
     let cancelled = false;
     (async () => {
       try {
-        const [profileData, statsData] = await Promise.all([
-          invokeDesktop<UserProfile>("profile:getCurrent"),
+        const [profileData, statsData, sessionsData] = await Promise.all([
+          invokeDesktop<UserProfile>("profile:get"),
           invokeDesktop<ActivityStats>("profile:getActivityStats"),
+          invokeDesktop<Session[]>("profile:getSessions"),
         ]);
         if (cancelled) return;
 
         setProfile(profileData);
         setActivityStats(statsData);
+        setSessions(Array.isArray(sessionsData) ? sessionsData : []);
         setDraft({
-          name: asText(profileData?.name),
+          name: asText(profileData?.displayName || profileData?.name),
           bio: asText(profileData?.bio),
           timezone: asText(profileData?.timezone),
           notifications: {
@@ -113,8 +130,10 @@ export default function ProfilePage() {
     setError(null);
     try {
       const updated = await invokeDesktop<UserProfile>("profile:update", {
-        name: draft.name,
+        displayName: draft.name,
+        title: asText(profile?.title),
         bio: draft.bio,
+        phone: asText(profile?.phone),
         timezone: draft.timezone,
         notifications: draft.notifications,
       });
@@ -125,6 +144,67 @@ export default function ProfilePage() {
       setError(err instanceof Error ? err.message : "Failed to save profile");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function changeEmail(newEmail: string, password: string) {
+    setError(null);
+    try {
+      const result = await invokeDesktop<{ success: boolean }>("profile:changeEmail", {
+        newEmail,
+        password,
+      });
+      if (!result?.success) {
+        throw new Error("Failed to change email");
+      }
+      setProfile((prev) => (prev ? { ...prev, email: newEmail } : prev));
+      setSaved("Email updated");
+      window.setTimeout(() => setSaved(""), 1800);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to change email");
+    }
+  }
+
+  async function revokeSession(sessionId: string) {
+    setError(null);
+    try {
+      const result = await invokeDesktop<{ success: boolean }>("profile:revokeSession", {
+        sessionId,
+      });
+      if (!result?.success) {
+        throw new Error("Failed to revoke session");
+      }
+      const nextSessions = sessions.filter((item) => item.sessionId !== sessionId);
+      setSessions(nextSessions);
+      setSaved("Session revoked");
+      window.setTimeout(() => setSaved(""), 1800);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to revoke session");
+    }
+  }
+
+  async function toggleTwoFactor(enabled: boolean) {
+    setError(null);
+    try {
+      const result = await invokeDesktop<{ qrCodeUrl?: string; success: boolean }>("profile:toggle2FA", {
+        enabled,
+      });
+      if (!result?.success) {
+        throw new Error("Failed to toggle 2FA");
+      }
+      setProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              twoFactorEnabled: enabled,
+              twoFactorQrCodeUrl: result.qrCodeUrl || (enabled ? prev.twoFactorQrCodeUrl || null : null),
+            }
+          : prev
+      );
+      setSaved(enabled ? "2FA enabled" : "2FA disabled");
+      window.setTimeout(() => setSaved(""), 1800);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to toggle 2FA");
     }
   }
 

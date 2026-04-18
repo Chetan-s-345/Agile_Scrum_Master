@@ -34,6 +34,26 @@ type DbStatusResp = {
   error?: string;
 };
 
+type OrgSettings = {
+  id: string;
+  name: string;
+  slug: string;
+  logoUrl?: string | null;
+  description?: string | null;
+  industry?: string | null;
+  size?: string | null;
+  ownerId?: string | null;
+  plan?: { slug: string; name: string } | null;
+  subscription?: Record<string, unknown> | null;
+  preferences?: {
+    timezone?: string | null;
+    notificationSettings?: Record<string, unknown> | null;
+    defaultSprintLengthDays?: number;
+    workingDays?: string[];
+    dbStatus?: DbStatusResp | null;
+  } | null;
+};
+
 function extractError(data: unknown): string | null {
   if (!data || typeof data !== "object") return null;
   if ("error" in data) {
@@ -43,16 +63,185 @@ function extractError(data: unknown): string | null {
   return null;
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+  if (!window.desktopApi?.invoke) {
+    throw new Error("Desktop IPC bridge unavailable");
   }
-  return { ok: resp.ok, status: resp.status, data };
+
+  const response = await window.desktopApi.invoke(channel, payload);
+  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
+    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
+    if (!wrapped.ok) {
+      throw new Error(wrapped.error?.message || wrapped.error?.detail || "IPC request failed");
+    }
+    return (wrapped.data as T) ?? (null as T);
+  }
+
+  return response as T;
+}
+
+function parseBody(init?: RequestInit): Record<string, unknown> {
+  if (!init?.body || typeof init.body !== "string") {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(init.body);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function maskConnectionString(value: string): string {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const atIndex = trimmed.indexOf("@");
+  const schemeIndex = trimmed.indexOf("://");
+  if (atIndex > 0 && schemeIndex >= 0 && atIndex > schemeIndex + 3) {
+    return `${trimmed.slice(0, schemeIndex + 3)}***${trimmed.slice(atIndex)}`;
+  }
+  return `${trimmed.slice(0, 16)}...`;
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
+  const method = String(init?.method || "GET").toUpperCase();
+  const body = parseBody(init);
+
+  try {
+    if (url === "/api/org") {
+      const [settings, members] = await Promise.all([
+        invokeDesktop<OrgSettings>("org:getSettings"),
+        invokeDesktop<Array<Record<string, unknown>>>("developers:getOrgMembers").catch(() => []),
+      ]);
+
+      const response: CurrentOrgResp = {
+        org: {
+          id: String(settings?.id || "org-default"),
+          name: String(settings?.name || ""),
+          slug: String(settings?.slug || ""),
+          timezone: String(settings?.preferences?.timezone || "UTC"),
+          logoUrl: settings?.logoUrl || null,
+          status: settings?.preferences?.dbStatus?.status || null,
+          dbProvisioned: Boolean(settings?.preferences?.dbStatus?.provisioned || settings?.preferences?.dbStatus?.connected),
+        },
+        plan: settings?.plan || null,
+        subscription: settings?.subscription || null,
+        memberCount: Array.isArray(members) ? members.length : 0,
+      };
+      return { ok: true, status: 200, data: (response as unknown) as T };
+    }
+
+    if (url === "/api/org/db-status") {
+      const settings = await invokeDesktop<OrgSettings>("org:getSettings");
+      const db = settings?.preferences?.dbStatus || {
+        provider: "postgres",
+        connectionMode: "manual",
+        status: "not_provisioned",
+        provisioned: false,
+        connected: false,
+        projectId: null,
+        connectionStringMasked: null,
+      };
+      return { ok: true, status: 200, data: (db as unknown) as T };
+    }
+
+    if (url === "/api/org/settings" && method === "PATCH") {
+      const current = await invokeDesktop<OrgSettings>("org:getSettings");
+      let nextLogoUrl = String(body.logo_url || "").trim();
+
+      if (nextLogoUrl && nextLogoUrl.startsWith("data:image/")) {
+        const uploaded = await invokeDesktop<{ logoUrl: string }>("org:uploadLogo", { base64Image: nextLogoUrl });
+        nextLogoUrl = String(uploaded?.logoUrl || "").trim();
+      }
+
+      const updated = await invokeDesktop<OrgSettings>("org:update", {
+        name: body.name == null ? current?.name : String(body.name || "").trim(),
+        description: body.description == null ? current?.description : String(body.description || "").trim(),
+        industry: body.industry == null ? current?.industry : String(body.industry || "").trim(),
+        size: body.size == null ? current?.size : String(body.size || "").trim(),
+        logoUrl: nextLogoUrl || current?.logoUrl || "",
+        preferences: {
+          ...(current?.preferences || {}),
+          timezone:
+            body.timezone == null
+              ? String(current?.preferences?.timezone || "UTC")
+              : String(body.timezone || "UTC").trim(),
+          notificationSettings:
+            body.notification_settings && typeof body.notification_settings === "object"
+              ? body.notification_settings
+              : current?.preferences?.notificationSettings || {},
+        },
+      });
+
+      return { ok: true, status: 200, data: (updated as unknown) as T };
+    }
+
+    if (url === "/api/org/provision-db" && method === "POST") {
+      const current = await invokeDesktop<OrgSettings>("org:getSettings");
+      const autoProvision = Boolean(body.autoProvision);
+      const connection = String(body.tenantDbConnectionString || "").trim();
+      const dbStatus: DbStatusResp = autoProvision
+        ? {
+            provider: "neon",
+            connectionMode: "auto",
+            status: "connected",
+            provisioned: true,
+            connected: true,
+            projectId: `neon-${Date.now()}`,
+            connectionStringMasked: "postgres://***@ep-neon/project",
+          }
+        : {
+            provider: "postgres",
+            connectionMode: "manual",
+            status: connection ? "connected" : "not_provisioned",
+            provisioned: Boolean(connection),
+            connected: Boolean(connection),
+            projectId: null,
+            connectionStringMasked: connection ? maskConnectionString(connection) : null,
+          };
+
+      const updated = await invokeDesktop<OrgSettings>("org:update", {
+        name: current?.name || "Agile Scrum Master",
+        description: current?.description || "",
+        industry: current?.industry || "",
+        size: current?.size || "",
+        logoUrl: current?.logoUrl || "",
+        preferences: {
+          ...(current?.preferences || {}),
+          dbStatus,
+        },
+      });
+      return { ok: true, status: 200, data: (updated as unknown) as T };
+    }
+
+    if (url === "/api/org/logo" && method === "POST") {
+      const base64Image = String(body.base64Image || "").trim();
+      const uploaded = await invokeDesktop<{ logoUrl: string }>("org:uploadLogo", { base64Image });
+      return { ok: true, status: 200, data: (uploaded as unknown) as T };
+    }
+
+    if (url === "/api/org/transfer-ownership" && method === "POST") {
+      const result = await invokeDesktop<{ success: boolean }>("org:transferOwnership", {
+        newOwnerId: String(body.newOwnerId || "").trim(),
+      });
+      return { ok: true, status: 200, data: (result as unknown) as T };
+    }
+
+    if (url === "/api/org/delete" && method === "POST") {
+      const result = await invokeDesktop<{ success: boolean }>("org:delete", {
+        confirmName: String(body.confirmName || "").trim(),
+      });
+      return { ok: true, status: 200, data: (result as unknown) as T };
+    }
+
+    return { ok: false, status: 404, data: ({ error: `Unsupported IPC route: ${url}` } as unknown) as T };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 500,
+      data: ({ error: error instanceof Error ? error.message : "IPC request failed" } as unknown) as T,
+    };
+  }
 }
 
 export default function OrgSettingsPage() {

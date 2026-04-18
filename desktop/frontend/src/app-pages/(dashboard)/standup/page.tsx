@@ -1,14 +1,112 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+type StandupEntry = {
+  id: string;
+  date: string;
+  userId: string;
+  userName?: string;
+  yesterday: string;
+  today: string;
+  blockers: string;
+  submittedAt?: string;
+};
+
+function asText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function buildStandupText(entry: Partial<StandupEntry> | null): string {
+  if (!entry) return "";
+  const yesterday = asText(entry.yesterday).trim();
+  const today = asText(entry.today).trim();
+  const blockers = asText(entry.blockers).trim();
+  return `Yesterday: ${yesterday}\nToday: ${today}\nBlockers: ${blockers}`.trim();
+}
+
+function parseStandupText(input: string): { yesterday: string; today: string; blockers: string } {
+  const lines = String(input || "").split(/\r?\n/);
+  const parts = { yesterday: "", today: "", blockers: "" };
+
+  for (const line of lines) {
+    const raw = line.trim();
+    if (!raw) continue;
+    const normalized = raw.toLowerCase();
+    if (normalized.startsWith("yesterday:")) {
+      parts.yesterday = raw.slice("yesterday:".length).trim();
+      continue;
+    }
+    if (normalized.startsWith("today:")) {
+      parts.today = raw.slice("today:".length).trim();
+      continue;
+    }
+    if (normalized.startsWith("blockers:")) {
+      parts.blockers = raw.slice("blockers:".length).trim();
+      continue;
+    }
+  }
+
+  if (!parts.yesterday && !parts.today && !parts.blockers) {
+    parts.today = String(input || "").trim();
+  }
+  return parts;
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+  if (!window.desktopApi?.invoke) {
+    throw new Error("Desktop IPC bridge unavailable");
+  }
+  const response = await window.desktopApi.invoke(channel, payload);
+  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
+    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
+    if (!wrapped.ok) {
+      throw new Error(asText(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
+    }
+    return (wrapped.data as T) ?? (null as T);
+  }
+  return response as T;
+}
 
 export default function StandupPage() {
   const [text, setText] = useState("");
+  const [activeUserId, setActiveUserId] = useState("user-1");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const maxChars = 2000;
   const remaining = useMemo(() => maxChars - text.length, [text.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadToday() {
+      try {
+        const [me, entries] = await Promise.all([
+          invokeDesktop<{ id?: string; displayName?: string }>("profile:getCurrent"),
+          invokeDesktop<StandupEntry[]>("standup:getToday")
+        ]);
+
+        if (cancelled) return;
+        const userId = String(me?.id || "user-1").trim() || "user-1";
+        setActiveUserId(userId);
+
+        const rows = Array.isArray(entries) ? entries : [];
+        const mine = rows.find((entry) => String(entry.userId || "") === userId) || rows[0] || null;
+        if (mine) {
+          setText(buildStandupText(mine));
+        }
+      } catch {
+        if (!cancelled) {
+          setActiveUserId("user-1");
+        }
+      }
+    }
+
+    void loadToday();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function submitStandup() {
     if (!text.trim()) return;
@@ -17,24 +115,15 @@ export default function StandupPage() {
     setSuccess(null);
 
     try {
-      const resp = await fetch("/api/standup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rawInput: text,
-          inputChannel: "web",
-        }),
+      const parsed = parseStandupText(text);
+      await invokeDesktop<StandupEntry>("standup:submit", {
+        userId: activeUserId,
+        yesterday: parsed.yesterday,
+        today: parsed.today,
+        blockers: parsed.blockers,
       });
 
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to submit standup"));
-
-      const blockers = Array.isArray(data?.item?.blockerTaskIds) ? data.item.blockerTaskIds.length : 0;
-      setSuccess(
-        blockers
-          ? `Standup submitted. ${blockers} blocker task${blockers > 1 ? "s" : ""} created automatically.`
-          : "Standup submitted successfully."
-      );
+      setSuccess("Standup submitted successfully.");
       setText("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to submit standup");

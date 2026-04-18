@@ -143,7 +143,7 @@ export function WebhookDLQPanel() {
     setError(null);
 
     try {
-      await invokeDesktop<{ success: boolean }>("monitoring:retryWebhook", { webhookId: eventId });
+      await invokeDesktop<{ success: boolean }>("webhooks:retryDelivery", { deliveryId: eventId });
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Retry failed");
@@ -157,7 +157,9 @@ export function WebhookDLQPanel() {
     setError(null);
 
     try {
-      await Promise.all(items.map((item) => invokeDesktop<{ success: boolean }>("monitoring:retryWebhook", { webhookId: item.id })));
+      await Promise.all(
+        items.map((item) => invokeDesktop<{ success: boolean }>("webhooks:retryDelivery", { deliveryId: item.id }))
+      );
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Retry all failed");

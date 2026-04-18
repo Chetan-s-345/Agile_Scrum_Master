@@ -79,7 +79,34 @@ const CHANNELS = {
     GET_SUMMARY: "sprint:getSummary",
     GET_BURNDOWN: "sprint:getBurndown",
     GET_VELOCITY_HISTORY: "sprint:getVelocityHistory",
-    GET_CONTRIBUTORS: "sprint:getContributors"
+    GET_CONTRIBUTORS: "sprint:getContributors",
+    GET_BY_ID: "sprint:getById",
+    GET_CURRENT: "sprint:getCurrent",
+    GET_TASKS: "sprint:getTasks",
+    UPDATE: "sprint:update",
+    UPDATE_STATUS: "sprint:updateStatus",
+    DELETE: "sprint:delete",
+    GET_EVENTS: "sprint:getEvents"
+  },
+
+  // Sprint listing and creation for /sprints route
+  SPRINTS: {
+    GET_ALL: "sprints:getAll",
+    CREATE: "sprints:create",
+    GET_BY_ID: "sprints:getById",
+    GET_TASKS: "sprints:getTasks",
+    UPDATE: "sprints:update",
+    DELETE: "sprints:delete",
+    GET_SUMMARY: "sprints:getSummary",
+    GET_CONTRIBUTIONS: "sprints:getContributions"
+  },
+
+  // Daily standup workflow
+  STANDUP: {
+    GET_TODAY: "standup:getToday",
+    SUBMIT: "standup:submit",
+    GET_HISTORY: "standup:getHistory",
+    GENERATE_SUMMARY: "standup:generateSummary"
   },
 
   // Timeline channels
@@ -184,7 +211,12 @@ const CHANNELS = {
     GET_ALL: "integrations:getAll",
     CONNECT: "integrations:connect",
     DISCONNECT: "integrations:disconnect",
-    SYNC_NOW: "integrations:syncNow"
+    SYNC_NOW: "integrations:syncNow",
+    GET_CONFIG: "integrations:getConfig",
+    UPDATE_CONFIG: "integrations:updateConfig",
+    REGENERATE_WEBHOOK_SECRET: "integrations:regenerateWebhookSecret",
+    GET_JIRA_PROJECT_MAPPINGS: "integrations:getJiraProjectMappings",
+    SAVE_JIRA_MAPPING: "integrations:saveJiraMapping"
   },
 
   // GitHub repository management
@@ -205,6 +237,17 @@ const CHANNELS = {
     GET_JIRA_SYNC_LOGS: "monitoring:getJiraSyncLogs"
   },
 
+  // Webhook management and delivery diagnostics
+  WEBHOOKS: {
+    GET_ALL: "webhooks:getAll",
+    CREATE: "webhooks:create",
+    UPDATE: "webhooks:update",
+    DELETE: "webhooks:delete",
+    TEST: "webhooks:test",
+    GET_DELIVERY_LOG: "webhooks:getDeliveryLog",
+    RETRY_DELIVERY: "webhooks:retryDelivery"
+  },
+
   // Onboarding workflow
   ONBOARDING: {
     GET_STATUS: "onboarding:getStatus",
@@ -215,15 +258,57 @@ const CHANNELS = {
 
   // User profile management
   PROFILE: {
+    GET: "profile:get",
     GET_CURRENT: "profile:getCurrent",
     UPDATE: "profile:update",
     CHANGE_PASSWORD: "profile:changePassword",
+    CHANGE_EMAIL: "profile:changeEmail",
     UPLOAD_AVATAR: "profile:uploadAvatar",
-    GET_ACTIVITY_STATS: "profile:getActivityStats"
+    GET_ACTIVITY_STATS: "profile:getActivityStats",
+    GET_SESSIONS: "profile:getSessions",
+    REVOKE_SESSION: "profile:revokeSession",
+    TOGGLE_2FA: "profile:toggle2FA"
+  },
+
+  // User preferences and personal defaults
+  PREFERENCES: {
+    GET: "preferences:get",
+    UPDATE: "preferences:update",
+    GET_AUTO_TASK_RULES: "preferences:getAutoTaskRules",
+    SAVE_AUTO_TASK_RULES: "preferences:saveAutoTaskRules"
+  },
+
+  // Team management settings
+  TEAMS: {
+    GET_ALL: "teams:getAll",
+    GET_DETAIL: "teams:getDetail",
+    CREATE: "teams:create",
+    UPDATE: "teams:update",
+    DELETE: "teams:delete",
+    ADD_MEMBER: "teams:addMember",
+    REMOVE_MEMBER: "teams:removeMember"
+  },
+
+  // Skill gap analysis and training assignment
+  SKILL_GAP: {
+    GET_MATRIX: "skillGap:getMatrix",
+    UPDATE_SKILL_LEVEL: "skillGap:updateSkillLevel",
+    GET_REQUIRED_SKILLS: "skillGap:getRequiredSkills",
+    ASSIGN_TRAINING: "skillGap:assignTraining"
+  },
+
+  // Sprint planning workflow (kebab-case route)
+  SPRINT_PLAN: {
+    GET_BACKLOG: "sprintPlan:getBacklog",
+    GET_TEAM_CAPACITY: "sprintPlan:getTeamCapacity",
+    SAVE_PLAN: "sprintPlan:savePlan",
+    AI_SUGGEST: "sprintPlan:aiSuggest"
   },
 
   // Project detail and management
   PROJECTS: {
+    GET_ALL: "projects:getAll",
+    CREATE: "projects:create",
     GET_BY_ID: "projects:getById",
     GET_SPRINTS: "projects:getSprints",
     GET_MEMBERS: "projects:getMembers",
@@ -254,11 +339,20 @@ const CHANNELS = {
 
   // Task detail and task-level collaboration
   TASKS: {
+    GET_ALL: "tasks:getAll",
+    CREATE: "tasks:create",
+    BULK_UPDATE: "tasks:bulkUpdate",
+    BULK_DELETE: "tasks:bulkDelete",
     GET_BY_ID: "tasks:getById",
+    UPDATE: "tasks:update",
     GET_ACTIVITY_LOG: "tasks:getActivityLog",
     ADD_BLOCKER: "tasks:addBlocker",
     REMOVE_BLOCKER: "tasks:removeBlocker",
-    ADD_COMMENT: "tasks:addComment"
+    ADD_COMMENT: "tasks:addComment",
+    DELETE_COMMENT: "tasks:deleteComment",
+    ADD_ATTACHMENT: "tasks:addAttachment",
+    LINK_TASK: "tasks:linkTask",
+    DELETE: "tasks:delete"
   },
 
   // Agent detail, chat, and runtime controls
@@ -289,6 +383,15 @@ const CHANNELS = {
     INVITE_TO_ORG: "developers:inviteToOrg",
     GET_PENDING_INVITATIONS: "developers:getPendingInvitations",
     REVOKE_INVITATION: "developers:revokeInvitation"
+  },
+
+  // Organization settings and ownership controls
+  ORG: {
+    GET_SETTINGS: "org:getSettings",
+    UPDATE: "org:update",
+    UPLOAD_LOGO: "org:uploadLogo",
+    TRANSFER_OWNERSHIP: "org:transferOwnership",
+    DELETE: "org:delete"
   },
 
   // Events (one-way from main to renderer)
