@@ -176,6 +176,7 @@ const CHANNELS = {
     SYNC_PROGRESS: "sync:progress",
     SYNC_CONFLICT: "sync:conflict",
     CONNECTIVITY: "system:connectivity",
+    SESSION_UPDATED: "auth:sessionUpdated",
     SESSION_EXPIRED: "auth:sessionExpired",
     LOG_EVENT: "app:logEvent"
   }
