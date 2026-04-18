@@ -1,6 +1,11 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const allowedInvokeChannels = new Set([
+  "auth:saveSession",
+  "auth:getSession",
+  "auth:clearSession",
+  "auth:checkSession",
+  "auth:validateToken",
   "dashboard:getSummary",
   "dashboard:getRecentActivity",
   "dashboard:getBurndownData",
@@ -60,12 +65,32 @@ const allowedInvokeChannels = new Set([
   "system:openExternal",
 ]);
 
+const allowedEventChannels = new Set([
+  "auth:sessionUpdated",
+  "auth:sessionExpired",
+]);
+
 contextBridge.exposeInMainWorld("desktopApi", {
   invoke(channel, payload) {
     if (!allowedInvokeChannels.has(channel)) {
       return Promise.reject(new Error(`IPC channel is not allowed: ${String(channel)}`));
     }
     return ipcRenderer.invoke(channel, payload);
+  },
+  on(channel, listener) {
+    if (!allowedEventChannels.has(channel)) {
+      throw new Error(`IPC event channel is not allowed: ${String(channel)}`);
+    }
+    if (typeof listener !== "function") {
+      throw new Error("listener must be a function");
+    }
+
+    const wrapped = (_event, payload) => listener(payload);
+    ipcRenderer.on(channel, wrapped);
+
+    return () => {
+      ipcRenderer.removeListener(channel, wrapped);
+    };
   },
 });
 

@@ -1,8 +1,9 @@
-import { lazy, Suspense, useMemo, type ComponentType } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import RootLayout from "@/app-pages/layout";
 import DashboardLayout from "@/app-pages/(dashboard)/layout";
 import BoardTabsLayout from "@/app-pages/(dashboard)/board/layout";
+import { DesktopLoginGate } from "@/components/desktop-login-gate";
 
 type PageModule = { default: ComponentType };
 
@@ -38,6 +39,61 @@ function RouteDiscoveryFallback() {
 }
 
 export function AppRouter() {
+  const [authState, setAuthState] = useState<"checking" | "guest" | "authed">("checking");
+
+  const refreshAuth = useCallback(async (silent = false) => {
+    if (typeof window === "undefined" || !window.desktopApi?.invoke) {
+      setAuthState("authed");
+      return;
+    }
+
+    if (!silent) {
+      setAuthState("checking");
+    }
+
+    try {
+      const result = await window.desktopApi.invoke<{ authenticated?: boolean }>("auth:checkSession");
+      setAuthState(result?.authenticated ? "authed" : "guest");
+    } catch {
+      setAuthState("guest");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAuth();
+
+    if (typeof window === "undefined") return;
+
+    const onFocus = () => {
+      void refreshAuth(true);
+    };
+    window.addEventListener("focus", onFocus);
+
+    let dispose = null;
+    if (window.desktopApi?.on) {
+      dispose = window.desktopApi.on("auth:sessionUpdated", () => {
+        void refreshAuth(true);
+      });
+    }
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      if (typeof dispose === "function") dispose();
+    };
+  }, [refreshAuth]);
+
+  useEffect(() => {
+    if (authState !== "guest") return;
+
+    const intervalId = window.setInterval(() => {
+      void refreshAuth(true);
+    }, 3000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [authState, refreshAuth]);
+
   const pageEntries = useMemo(
     () =>
       Object.entries(pageModules)
@@ -63,6 +119,24 @@ export function AppRouter() {
     }
     return pageEntries[0]?.routePath || null;
   }, [pageEntries]);
+
+  if (authState === "checking") {
+    return (
+      <RootLayout>
+        <div className="flex min-h-screen items-center justify-center bg-[var(--bg-primary)] px-5 py-10 text-sm text-[var(--text-secondary)]">
+          Checking session...
+        </div>
+      </RootLayout>
+    );
+  }
+
+  if (authState === "guest") {
+    return (
+      <RootLayout>
+        <DesktopLoginGate onRefreshSession={refreshAuth} />
+      </RootLayout>
+    );
+  }
 
   return (
     <RootLayout>

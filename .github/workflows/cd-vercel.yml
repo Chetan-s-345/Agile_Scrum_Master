@@ -1,0 +1,107 @@
+name: GitHub CD
+
+on:
+  workflow_run:
+    workflows:
+      - GitHub CI
+    types:
+      - completed
+    branches:
+      - production
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - vercel
+          - render
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+jobs:
+  vercel-deploy:
+    if: >
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'vercel')) ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'production')
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Resolve Vercel environment
+        id: vercel-env
+        shell: bash
+        run: |
+          echo "environment=production" >> "$GITHUB_OUTPUT"
+          echo "flags=--prod" >> "$GITHUB_OUTPUT"
+
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=${{ steps.vercel-env.outputs.environment }} --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build Vercel output
+        run: vercel build ${{ steps.vercel-env.outputs.flags }} --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to Vercel
+        run: vercel deploy --prebuilt ${{ steps.vercel-env.outputs.flags }} --token=${{ secrets.VERCEL_TOKEN }}
+
+  render-deploy:
+    if: >
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'render')) ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'production')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render API Gateway deploy
+        shell: bash
+        env:
+          RENDER_API_GATEWAY_DEPLOY_HOOK_URL: ${{ secrets.RENDER_API_GATEWAY_DEPLOY_HOOK_URL }}
+        run: |
+          if [[ -z "${RENDER_API_GATEWAY_DEPLOY_HOOK_URL}" ]]; then
+            echo "Missing secret RENDER_API_GATEWAY_DEPLOY_HOOK_URL"
+            exit 1
+          fi
+          curl --fail --show-error --silent -X POST "${RENDER_API_GATEWAY_DEPLOY_HOOK_URL}"
+
+      - name: Trigger Render AI Service deploy
+        shell: bash
+        env:
+          RENDER_AI_SERVICE_DEPLOY_HOOK_URL: ${{ secrets.RENDER_AI_SERVICE_DEPLOY_HOOK_URL }}
+        run: |
+          if [[ -z "${RENDER_AI_SERVICE_DEPLOY_HOOK_URL}" ]]; then
+            echo "Missing secret RENDER_AI_SERVICE_DEPLOY_HOOK_URL"
+            exit 1
+          fi
+          curl --fail --show-error --silent -X POST "${RENDER_AI_SERVICE_DEPLOY_HOOK_URL}"
