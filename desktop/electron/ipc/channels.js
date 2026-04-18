@@ -184,7 +184,12 @@ const CHANNELS = {
     GET_ALL: "integrations:getAll",
     CONNECT: "integrations:connect",
     DISCONNECT: "integrations:disconnect",
-    SYNC_NOW: "integrations:syncNow"
+    SYNC_NOW: "integrations:syncNow",
+    GET_CONFIG: "integrations:getConfig",
+    UPDATE_CONFIG: "integrations:updateConfig",
+    REGENERATE_WEBHOOK_SECRET: "integrations:regenerateWebhookSecret",
+    GET_JIRA_PROJECT_MAPPINGS: "integrations:getJiraProjectMappings",
+    SAVE_JIRA_MAPPING: "integrations:saveJiraMapping"
   },
 
   // GitHub repository management

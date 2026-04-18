@@ -290,6 +290,167 @@ function integrationsDbPath() {
   return path.join(app.getPath("userData"), "integrations.db.json");
 }
 
+function jiraMappingsDbPath() {
+  return path.join(app.getPath("userData"), "jira.project-mappings.db.json");
+}
+
+function createWebhookSecret() {
+  return randomUUID().replace(/-/g, "");
+}
+
+function baseIntegrationConfig(type) {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  if (normalizedType === "github") {
+    return {
+      connected: false,
+      connectedAccount: "",
+      webhookUrl: "",
+      webhookSecret: createWebhookSecret(),
+      syncFrequency: "hourly",
+      githubWebhookRepos: [],
+      githubWebhookDeliveries: [],
+      publicGatewayUrlConfigured: false,
+      webhookConfigured: false,
+      lastEventAt: null,
+    };
+  }
+  if (normalizedType === "jira") {
+    return {
+      connected: false,
+      connectedWorkspace: "",
+      baseUrl: "",
+      email: "",
+      projectKey: "",
+      boardId: null,
+      storyPointsField: "",
+      webhookUrl: "",
+      webhookSecret: createWebhookSecret(),
+      syncFrequency: "daily",
+      syncStatus: {
+        syncing: false,
+        processed: 0,
+        total: 0,
+        message: null,
+      },
+      schedule: {
+        enabled: false,
+        projectKey: null,
+        boardId: null,
+        mode: "incremental",
+        time: "09:00",
+        timezone: "UTC",
+      },
+      webhookLogs: {
+        lastEvent: null,
+        failures: [],
+      },
+      totalSynced: 0,
+      totalFailed: 0,
+      pendingSync: 0,
+      lastSyncAt: null,
+      lastWebhookReceivedAt: null,
+      lastWebhookEvent: null,
+      syncError: null,
+    };
+  }
+  if (normalizedType === "slack") {
+    return {
+      connected: false,
+      connectedWorkspace: "",
+      syncFrequency: "realtime",
+      notificationChannels: {
+        taskCreated: "#general",
+        taskUpdated: "#general",
+        sprintSummary: "#general",
+      },
+    };
+  }
+  return {
+    connected: false,
+    syncFrequency: "manual",
+  };
+}
+
+function normalizeIntegrationConfig(type, configInput, connectedFallback = false) {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  const defaults = baseIntegrationConfig(normalizedType);
+  const input = configInput && typeof configInput === "object" ? configInput : {};
+  const merged = {
+    ...defaults,
+    ...input,
+  };
+
+  if ((normalizedType === "jira" || normalizedType === "github") && !String(merged.webhookSecret || "").trim()) {
+    merged.webhookSecret = createWebhookSecret();
+  }
+
+  if (normalizedType === "jira") {
+    const webhookLogs = merged.webhookLogs && typeof merged.webhookLogs === "object" ? merged.webhookLogs : {};
+    merged.webhookLogs = {
+      lastEvent: webhookLogs.lastEvent || null,
+      failures: Array.isArray(webhookLogs.failures) ? webhookLogs.failures : [],
+    };
+    const schedule = merged.schedule && typeof merged.schedule === "object" ? merged.schedule : {};
+    merged.schedule = {
+      ...defaults.schedule,
+      ...schedule,
+    };
+    const syncStatus = merged.syncStatus && typeof merged.syncStatus === "object" ? merged.syncStatus : {};
+    merged.syncStatus = {
+      ...defaults.syncStatus,
+      ...syncStatus,
+    };
+  }
+
+  if (normalizedType === "slack") {
+    merged.notificationChannels =
+      merged.notificationChannels && typeof merged.notificationChannels === "object"
+        ? merged.notificationChannels
+        : defaults.notificationChannels;
+  }
+
+  const explicitConnected = typeof merged.connected === "boolean" ? merged.connected : null;
+  merged.connected = explicitConnected == null ? Boolean(connectedFallback) : explicitConnected;
+  return merged;
+}
+
+function readJiraProjectMappings() {
+  try {
+    const filePath = jiraMappingsDbPath();
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, JSON.stringify([], null, 2), "utf8");
+      return [];
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .map((item) => {
+        const jiraProjectId = String(item?.jiraProjectId || "").trim();
+        const internalProjectId = String(item?.internalProjectId || "").trim();
+        if (!jiraProjectId || !internalProjectId) {
+          return null;
+        }
+        return {
+          id: String(item?.id || randomUUID()),
+          jiraProjectId,
+          internalProjectId,
+          updatedAt: item?.updatedAt || new Date().toISOString(),
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function writeJiraProjectMappings(mappings) {
+  fs.writeFileSync(jiraMappingsDbPath(), JSON.stringify(mappings, null, 2), "utf8");
+}
+
 function defaultIntegrations() {
   return [
     {
@@ -299,6 +460,7 @@ function defaultIntegrations() {
       description: "Code repositories, pull requests, and issue linking.",
       logo: "GH",
       connected: false,
+      config: baseIntegrationConfig("github"),
       lastSyncAt: null,
       settingsPath: "/settings/integrations"
     },
@@ -309,6 +471,7 @@ function defaultIntegrations() {
       description: "Sprint sync, issues, and webhook event processing.",
       logo: "JI",
       connected: false,
+      config: baseIntegrationConfig("jira"),
       lastSyncAt: null,
       settingsPath: "/settings/integrations"
     },
@@ -319,6 +482,7 @@ function defaultIntegrations() {
       description: "Channel notifications and standup summaries.",
       logo: "SL",
       connected: false,
+      config: baseIntegrationConfig("slack"),
       lastSyncAt: null,
       settingsPath: "/settings/integrations"
     },
@@ -329,6 +493,7 @@ function defaultIntegrations() {
       description: "Documentation and sprint wiki sync.",
       logo: "NO",
       connected: false,
+      config: baseIntegrationConfig("notion"),
       lastSyncAt: null,
       settingsPath: "/settings/integrations"
     },
@@ -339,6 +504,7 @@ function defaultIntegrations() {
       description: "Issue sync and roadmap alignment.",
       logo: "LI",
       connected: false,
+      config: baseIntegrationConfig("linear"),
       lastSyncAt: null,
       settingsPath: "/settings/integrations"
     }
@@ -360,7 +526,11 @@ function readIntegrations() {
     const byType = new Map(parsed.map((item) => [String(item.type || ""), item]));
     return defaultIntegrations().map((seed) => {
       const existing = byType.get(seed.type);
-      return existing ? { ...seed, ...existing } : seed;
+      const merged = existing ? { ...seed, ...existing } : seed;
+      return {
+        ...merged,
+        config: normalizeIntegrationConfig(merged.type, merged.config, merged.connected),
+      };
     });
   } catch {
     return defaultIntegrations();
@@ -398,6 +568,15 @@ function registerIntegrationHandlers() {
         ...integrations[index],
         connected: true,
         credentials: payload.credentials && typeof payload.credentials === "object" ? payload.credentials : {},
+        config: normalizeIntegrationConfig(
+          type,
+          {
+            ...integrations[index].config,
+            ...(payload.config && typeof payload.config === "object" ? payload.config : {}),
+            connected: true,
+          },
+          true
+        ),
         updatedAt: new Date().toISOString()
       };
       integrations[index] = integration;
@@ -425,6 +604,14 @@ function registerIntegrationHandlers() {
       integrations[index] = {
         ...integrations[index],
         connected: false,
+        config: normalizeIntegrationConfig(
+          integrations[index].type,
+          {
+            ...integrations[index].config,
+            connected: false,
+          },
+          false
+        ),
         lastSyncAt: null,
         updatedAt: new Date().toISOString()
       };
@@ -455,6 +642,14 @@ function registerIntegrationHandlers() {
 
       integrations[index] = {
         ...integrations[index],
+        config: normalizeIntegrationConfig(
+          integrations[index].type,
+          {
+            ...integrations[index].config,
+            lastSyncAt: new Date().toISOString(),
+          },
+          integrations[index].connected
+        ),
         lastSyncAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -463,6 +658,155 @@ function registerIntegrationHandlers() {
       return IPCResponse.success({ success: true });
     } catch (error) {
       return IPCResponse.internalError("Failed to run integration sync", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.INTEGRATIONS.GET_CONFIG, async (_event, payload = {}) => {
+    try {
+      const type = String(payload.type || "").trim().toLowerCase();
+      if (!type) {
+        return IPCResponse.validation("type", "type is required");
+      }
+
+      const integrations = readIntegrations();
+      const integration = integrations.find((item) => String(item.type || "") === type);
+      if (!integration) {
+        return IPCResponse.notFound("Integration config");
+      }
+
+      const config = normalizeIntegrationConfig(type, integration.config, integration.connected);
+      return IPCResponse.success(config);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load integration config", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.INTEGRATIONS.UPDATE_CONFIG, async (_event, payload = {}) => {
+    try {
+      const type = String(payload.type || "").trim().toLowerCase();
+      if (!type) {
+        return IPCResponse.validation("type", "type is required");
+      }
+      if (!payload.config || typeof payload.config !== "object") {
+        return IPCResponse.validation("config", "config must be an object");
+      }
+
+      const integrations = readIntegrations();
+      const index = integrations.findIndex((item) => String(item.type || "") === type);
+      if (index < 0) {
+        return IPCResponse.notFound("Integration config");
+      }
+
+      const mergedConfig = normalizeIntegrationConfig(
+        type,
+        {
+          ...integrations[index].config,
+          ...payload.config,
+        },
+        integrations[index].connected
+      );
+
+      integrations[index] = {
+        ...integrations[index],
+        connected: Boolean(mergedConfig.connected),
+        config: mergedConfig,
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (type === "jira" && Array.isArray(payload.config.projectMappings)) {
+        const nextMappings = payload.config.projectMappings
+          .map((item) => ({
+            id: String(item?.id || randomUUID()),
+            jiraProjectId: String(item?.jiraProjectId || "").trim(),
+            internalProjectId: String(item?.internalProjectId || "").trim(),
+            updatedAt: new Date().toISOString(),
+          }))
+          .filter((item) => item.jiraProjectId && item.internalProjectId);
+        writeJiraProjectMappings(nextMappings);
+      }
+
+      writeIntegrations(integrations);
+      return IPCResponse.success(mergedConfig);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update integration config", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.INTEGRATIONS.REGENERATE_WEBHOOK_SECRET, async (_event, payload = {}) => {
+    try {
+      const type = String(payload.type || "").trim().toLowerCase();
+      if (!type) {
+        return IPCResponse.validation("type", "type is required");
+      }
+
+      const integrations = readIntegrations();
+      const index = integrations.findIndex((item) => String(item.type || "") === type);
+      if (index < 0) {
+        return IPCResponse.notFound("Integration config");
+      }
+
+      const secret = createWebhookSecret();
+      const nextConfig = normalizeIntegrationConfig(
+        type,
+        {
+          ...integrations[index].config,
+          webhookSecret: secret,
+        },
+        integrations[index].connected
+      );
+
+      integrations[index] = {
+        ...integrations[index],
+        config: nextConfig,
+        updatedAt: new Date().toISOString(),
+      };
+      writeIntegrations(integrations);
+
+      return IPCResponse.success({ secret });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to regenerate webhook secret", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.INTEGRATIONS.GET_JIRA_PROJECT_MAPPINGS, async () => {
+    try {
+      return IPCResponse.success(readJiraProjectMappings());
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load Jira project mappings", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.INTEGRATIONS.SAVE_JIRA_MAPPING, async (_event, payload = {}) => {
+    try {
+      const jiraProjectId = String(payload.jiraProjectId || "").trim();
+      const internalProjectId = String(payload.internalProjectId || "").trim();
+
+      if (!jiraProjectId) {
+        return IPCResponse.validation("jiraProjectId", "jiraProjectId is required");
+      }
+      if (!internalProjectId) {
+        return IPCResponse.validation("internalProjectId", "internalProjectId is required");
+      }
+
+      const mappings = readJiraProjectMappings();
+      const index = mappings.findIndex((item) => String(item.jiraProjectId) === jiraProjectId);
+      const next = {
+        id: index >= 0 ? String(mappings[index].id) : randomUUID(),
+        jiraProjectId,
+        internalProjectId,
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (index >= 0) {
+        mappings[index] = next;
+      } else {
+        mappings.push(next);
+      }
+
+      writeJiraProjectMappings(mappings);
+      return IPCResponse.success(next);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to save Jira project mapping", String(error));
     }
   });
 }
