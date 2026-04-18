@@ -50,29 +50,21 @@ function payloadPretty(v: unknown): string {
 function extractError(data: unknown): string {
   if (!data || typeof data !== "object") return "Request failed";
   const rec = data as Record<string, unknown>;
-  if ("message" in rec && typeof rec.message === "string" && rec.message) {
-    return rec.message;
-  }
   const err = typeof rec.error === "string" ? rec.error : "Request failed";
   const detail = typeof rec.detail === "string" ? rec.detail : "";
   return detail ? `${err}: ${detail}` : err;
 }
 
-async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
-  if (!window.desktopApi?.invoke) {
-    throw new Error("Desktop IPC bridge unavailable");
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
+  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
+  const text = await resp.text().catch(() => "");
+  let data: T | null = null;
+  try {
+    data = text ? (JSON.parse(text) as T) : null;
+  } catch {
+    data = null;
   }
-
-  const response = await window.desktopApi.invoke(channel, payload);
-  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
-    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
-    if (!wrapped.ok) {
-      throw new Error(extractError(wrapped.error));
-    }
-    return (wrapped.data as T) ?? (null as T);
-  }
-
-  return response as T;
+  return { ok: resp.ok, status: resp.status, data };
 }
 
 export function WebhookDLQPanel() {
@@ -99,30 +91,23 @@ export function WebhookDLQPanel() {
     setLoading(true);
     setError(null);
 
-    try {
-      const data = await invokeDesktop<DlqItem[]>("monitoring:getWebhookDLQ");
-      const allItems = Array.isArray(data) ? data : [];
+    const q = new URLSearchParams();
+    q.set("limit", "200");
+    if (sourceFilter) q.set("source", sourceFilter);
+    if (eventTypeFilter) q.set("eventType", eventTypeFilter);
+    if (fromDate) q.set("from", `${fromDate} 00:00:00`);
+    if (toDate) q.set("to", `${toDate} 23:59:59`);
 
-      const fromTs = fromDate ? new Date(`${fromDate}T00:00:00`).getTime() : null;
-      const toTs = toDate ? new Date(`${toDate}T23:59:59`).getTime() : null;
+    const resp = await fetchJson<DlqResponse>(`/api/admin/webhooks/dlq?${q.toString()}`);
+    setLoading(false);
 
-      const filtered = allItems.filter((item) => {
-        if (sourceFilter && String(item.source || "") !== sourceFilter) return false;
-        if (eventTypeFilter && String(item.event_type || "") !== eventTypeFilter) return false;
-
-        const createdTs = new Date(String(item.created_at || "")).getTime();
-        if (fromTs !== null && Number.isFinite(createdTs) && createdTs < fromTs) return false;
-        if (toTs !== null && Number.isFinite(createdTs) && createdTs > toTs) return false;
-        return true;
-      });
-
-      setItems(filtered);
-      setTotal(filtered.length);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load webhook DLQ");
-    } finally {
-      setLoading(false);
+    if (!resp.ok) {
+      setError(extractError(resp.data));
+      return;
     }
+
+    setItems(Array.isArray(resp.data?.items) ? resp.data!.items : []);
+    setTotal(Number(resp.data?.total || 0));
   }
 
   useEffect(() => {
@@ -142,30 +127,30 @@ export function WebhookDLQPanel() {
     setRetryingId(eventId);
     setError(null);
 
-    try {
-      await invokeDesktop<{ success: boolean }>("webhooks:retryDelivery", { deliveryId: eventId });
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Retry failed");
-    } finally {
-      setRetryingId(null);
+    const resp = await fetchJson<unknown>(`/api/admin/webhooks/retry/${encodeURIComponent(eventId)}`, { method: "POST" });
+    setRetryingId(null);
+
+    if (!resp.ok) {
+      setError(extractError(resp.data));
+      return;
     }
+
+    await load();
   }
 
   async function retryAll() {
     setRetryingAll(true);
     setError(null);
 
-    try {
-      await Promise.all(
-        items.map((item) => invokeDesktop<{ success: boolean }>("webhooks:retryDelivery", { deliveryId: item.id }))
-      );
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Retry all failed");
-    } finally {
-      setRetryingAll(false);
+    const resp = await fetchJson<unknown>("/api/admin/webhooks/retry-all-dlq", { method: "POST" });
+    setRetryingAll(false);
+
+    if (!resp.ok) {
+      setError(extractError(resp.data));
+      return;
     }
+
+    await load();
   }
 
   return (

@@ -16,12 +16,38 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing email or password" }, { status: 400 });
     }
 
-    const gatewayResp = await fetch(`${getGatewayBaseUrl()}/api/v1/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, orgSlug: orgSlug || undefined }),
-      cache: "no-store",
-    });
+    const gatewayBaseUrl = getGatewayBaseUrl();
+    if (
+      process.env.NODE_ENV === "production" &&
+      /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(gatewayBaseUrl)
+    ) {
+      return NextResponse.json(
+        {
+          error: "API gateway is not configured for production",
+          detail: "Set API_GATEWAY_URL (or NEXT_PUBLIC_API_GATEWAY_URL) to your deployed api-gateway origin.",
+        },
+        { status: 500 }
+      );
+    }
+
+    let gatewayResp;
+    try {
+      gatewayResp = await fetch(`${gatewayBaseUrl}/api/v1/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, orgSlug: orgSlug || undefined }),
+        cache: "no-store",
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error: "Unable to reach API gateway",
+          detail: error instanceof Error ? error.message : String(error),
+          gatewayBaseUrl,
+        },
+        { status: 502 }
+      );
+    }
 
     const data = await gatewayResp.json().catch(() => null);
     if (!gatewayResp.ok) {

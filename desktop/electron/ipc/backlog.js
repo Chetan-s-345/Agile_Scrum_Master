@@ -1,4 +1,5 @@
 const CHANNELS = require("./channels");
+const { gatewayRequest } = require("./gateway");
 
 const developers = [
   { id: "dev-1", name: "Ava Patel" },
@@ -47,17 +48,6 @@ let backlogItems = [
     status: "todo",
     order: 3,
   },
-  {
-    id: "bl-4",
-    title: "Create burndown anomaly monitor",
-    type: "story",
-    priority: "low",
-    points: 5,
-    assigneeId: "dev-4",
-    sprintId: "sprint-2",
-    status: "todo",
-    order: 4,
-  },
 ];
 
 function asString(value, fallback = "") {
@@ -86,6 +76,22 @@ function asType(value) {
   return "task";
 }
 
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function firstArray(payload, preferredKeys = []) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+
+  for (const key of preferredKeys) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+
+  const found = Object.values(payload).find((entry) => Array.isArray(entry));
+  return Array.isArray(found) ? found : [];
+}
+
 function getDeveloperById(developerId) {
   return developers.find((developer) => asString(developer.id) === asString(developerId)) || null;
 }
@@ -98,7 +104,7 @@ function sortByOrder(items) {
   return [...items].sort((a, b) => asNumber(a.order, 0) - asNumber(b.order, 0));
 }
 
-function toBacklogItem(item) {
+function toBacklogItem(item, index = 0) {
   const sprint = getSprintById(item.sprintId);
   const developer = getDeveloperById(item.assigneeId);
 
@@ -124,7 +130,38 @@ function toBacklogItem(item) {
           status: asString(sprint.status, "planning"),
         }
       : null,
-    order: asNumber(item.order, 0),
+    order: asNumber(item.order, index + 1),
+  };
+}
+
+function toBacklogItemFromGateway(task, index = 0) {
+  const assignee = task?.assignee && typeof task.assignee === "object"
+    ? {
+        id: asString(task.assignee.id || task.assignee.userId),
+        name: asString(task.assignee.name || task.assignee.fullName || task.assignee.email, "Developer"),
+      }
+    : null;
+
+  const sprintObj = task?.sprint && typeof task.sprint === "object"
+    ? {
+        id: asString(task.sprint.id || task.sprint.sprintId),
+        name: asString(task.sprint.name || task.sprint.title, "Sprint"),
+        status: asString(task.sprint.status, "planning"),
+      }
+    : null;
+
+  return {
+    id: asString(task?.id || task?.taskId),
+    title: asString(task?.title, "Untitled task"),
+    type: asType(task?.type || task?.taskType || "task"),
+    priority: asPriority(task?.priority),
+    points: Math.max(0, asNumber(task?.storyPoints ?? task?.points ?? task?.estimate ?? 0, 0)),
+    storyPoints: Math.max(0, asNumber(task?.storyPoints ?? task?.points ?? task?.estimate ?? 0, 0)),
+    status: asString(task?.status, "todo"),
+    assignee,
+    sprintId: asString(task?.sprintId || sprintObj?.id),
+    sprint: sprintObj,
+    order: index + 1,
   };
 }
 
@@ -174,15 +211,14 @@ function updateItemById(itemId, changes) {
     next.status = asString(changes.status, current.status);
   }
   if (Object.prototype.hasOwnProperty.call(changes, "assigneeId")) {
-    const assigneeId = asString(changes.assigneeId);
-    next.assigneeId = assigneeId;
+    next.assigneeId = asString(changes.assigneeId);
   }
   if (Object.prototype.hasOwnProperty.call(changes, "sprintId")) {
     next.sprintId = asString(changes.sprintId);
   }
 
   backlogItems[index] = next;
-  return toBacklogItem(next);
+  return toBacklogItem(next, index);
 }
 
 function reorderItems(orderedIds) {
@@ -231,19 +267,77 @@ function createItem(payload) {
   };
 
   backlogItems.push(item);
-  return toBacklogItem(item);
+  return toBacklogItem(item, backlogItems.length - 1);
+}
+
+async function listItemsFromGateway(filters) {
+  const query = {
+    projectId: asString(filters?.projectId),
+    sprintId: asString(filters?.sprintId),
+    status: asString(filters?.status),
+    priority: asString(filters?.priority),
+    assigneeId: asString(filters?.assigneeId),
+  };
+
+  const payload = await gatewayRequest("GET", "/api/v1/tasks", { query });
+  const rows = firstArray(payload, ["items", "tasks"]);
+  return rows.map((task, index) => toBacklogItemFromGateway(task, index));
+}
+
+async function createItemFromGateway(payload) {
+  const body = {
+    title: asString(payload?.title, "Untitled task"),
+    type: asType(payload?.type),
+    priority: asPriority(payload?.priority),
+    storyPoints: Math.max(0, asNumber(payload?.storyPoints ?? payload?.points ?? 0, 0)),
+    sprintId: asString(payload?.sprintId),
+    projectId: asString(payload?.projectId),
+  };
+
+  const response = await gatewayRequest("POST", "/api/v1/tasks", { body });
+  const item = response?.task || response?.item || response;
+  return toBacklogItemFromGateway(item, 0);
+}
+
+async function updateItemFromGateway(id, changes) {
+  const body = {
+    ...changes,
+  };
+
+  if (Object.prototype.hasOwnProperty.call(body, "points") && !Object.prototype.hasOwnProperty.call(body, "storyPoints")) {
+    body.storyPoints = body.points;
+  }
+
+  const response = await gatewayRequest("PATCH", `/api/v1/tasks/${encodeURIComponent(id)}`, { body });
+  const item = response?.task || response?.item || response;
+  return toBacklogItemFromGateway(item, 0);
+}
+
+async function deleteItemFromGateway(id) {
+  await gatewayRequest("DELETE", `/api/v1/tasks/${encodeURIComponent(id)}`);
+  return { success: true };
 }
 
 function registerBacklogIpcHandlers(ipcMain) {
   ipcMain.handle(CHANNELS.BACKLOG.GET_ITEMS, async (_event, payload) => {
-    return listItems(payload?.filters || {});
+    const filters = payload?.filters || {};
+    try {
+      return await listItemsFromGateway(filters);
+    } catch {
+      return listItems(filters);
+    }
   });
 
   ipcMain.handle(CHANNELS.BACKLOG.CREATE_ITEM, async (_event, payload) => {
     if (!asString(payload?.title)) {
       throw new Error("title is required");
     }
-    return createItem(payload || {});
+
+    try {
+      return await createItemFromGateway(payload || {});
+    } catch {
+      return createItem(payload || {});
+    }
   });
 
   ipcMain.handle(CHANNELS.BACKLOG.UPDATE_ITEM, async (_event, payload) => {
@@ -251,8 +345,13 @@ function registerBacklogIpcHandlers(ipcMain) {
     if (!id) {
       throw new Error("id is required");
     }
+
     const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : {};
-    return updateItemById(id, changes);
+    try {
+      return await updateItemFromGateway(id, changes);
+    } catch {
+      return updateItemById(id, changes);
+    }
   });
 
   ipcMain.handle(CHANNELS.BACKLOG.REORDER_ITEMS, async (_event, payload) => {
@@ -267,33 +366,52 @@ function registerBacklogIpcHandlers(ipcMain) {
     if (!itemId) throw new Error("itemId is required");
     if (!sprintId) throw new Error("sprintId is required");
 
-    return updateItemById(itemId, { sprintId });
+    try {
+      return await updateItemFromGateway(itemId, { sprintId });
+    } catch {
+      return updateItemById(itemId, { sprintId });
+    }
   });
 
   ipcMain.handle(CHANNELS.BACKLOG.BULK_UPDATE, async (_event, payload) => {
-    const ids = Array.isArray(payload?.ids) ? payload.ids : [];
+    const ids = asArray(payload?.ids).map((id) => asString(id)).filter(Boolean);
     const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : {};
 
-    const updated = ids
-      .map((id) => asString(id))
-      .filter(Boolean)
-      .map((id) => updateItemById(id, changes));
-
-    return updated;
+    try {
+      const updated = await Promise.all(ids.map((id) => updateItemFromGateway(id, changes)));
+      return updated;
+    } catch {
+      return ids.map((id) => updateItemById(id, changes));
+    }
   });
 
   ipcMain.handle(CHANNELS.BACKLOG.DELETE_ITEM, async (_event, payload) => {
     const id = asString(payload?.id);
-    const before = backlogItems.length;
-    backlogItems = backlogItems.filter((item) => asString(item.id) !== id);
-    return { success: backlogItems.length < before };
+    if (!id) {
+      throw new Error("id is required");
+    }
+
+    try {
+      return await deleteItemFromGateway(id);
+    } catch {
+      const before = backlogItems.length;
+      backlogItems = backlogItems.filter((item) => asString(item.id) !== id);
+      return { success: backlogItems.length < before };
+    }
   });
 
   ipcMain.handle(CHANNELS.BACKLOG.BULK_DELETE, async (_event, payload) => {
-    const ids = new Set((Array.isArray(payload?.ids) ? payload.ids : []).map((id) => asString(id)).filter(Boolean));
-    const before = backlogItems.length;
-    backlogItems = backlogItems.filter((item) => !ids.has(asString(item.id)));
-    return { success: backlogItems.length < before };
+    const ids = asArray(payload?.ids).map((id) => asString(id)).filter(Boolean);
+
+    try {
+      await Promise.all(ids.map((id) => deleteItemFromGateway(id)));
+      return { success: true };
+    } catch {
+      const idSet = new Set(ids);
+      const before = backlogItems.length;
+      backlogItems = backlogItems.filter((item) => !idSet.has(asString(item.id)));
+      return { success: backlogItems.length < before };
+    }
   });
 }
 

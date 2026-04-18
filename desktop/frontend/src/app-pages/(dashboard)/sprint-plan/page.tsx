@@ -1,2 +1,1 @@
-export { default } from "./SprintPlanPageImpl";
-
+export { default } from "../sprint_plan/page";

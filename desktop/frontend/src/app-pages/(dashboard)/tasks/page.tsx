@@ -53,58 +53,10 @@ type TaskFilterPreset = {
 
 const TASK_FILTER_PRESETS_KEY = "asm.taskBoard.filterPresets.v1";
 
-function asText(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
-  if (!window.desktopApi?.invoke) {
-    throw new Error("Desktop IPC bridge unavailable");
-  }
-
-  const response = await window.desktopApi.invoke(channel, payload);
-  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
-    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
-    if (!wrapped.ok) {
-      throw new Error(asText(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
-    }
-    return (wrapped.data as T) ?? (null as T);
-  }
-
-  return response as T;
-}
-
-const EMPTY_BOARD: Board = {
-  todo: [],
-  in_progress: [],
-  in_review: [],
-  blocked: [],
-  done: []
-};
-
-function normalizeBoardStatus(status: string): keyof Board {
-  const normalized = String(status || "todo").toLowerCase();
-  if (normalized === "in-progress" || normalized === "in progress") return "in_progress";
-  if (normalized === "in-review" || normalized === "in review") return "in_review";
-  if (normalized === "archived") return "todo";
-  return ["todo", "in_progress", "in_review", "blocked", "done"].includes(normalized)
-    ? (normalized as keyof Board)
-    : "todo";
-}
-
-function toBoard(items: BoardTask[]): Board {
-  const grouped: Board = { todo: [], in_progress: [], in_review: [], blocked: [], done: [] };
-  for (const task of items) {
-    if (String(task.status || "").toLowerCase() === "archived") continue;
-    grouped[normalizeBoardStatus(String(task.status || "todo"))].push(task);
-  }
-  return grouped;
-}
-
 export default function TaskBoardPage() {
   const [sprints, setSprints] = useState<SprintListItem[]>([]);
   const [selectedSprintId, setSelectedSprintId] = useState<string>("");
-  const [board, setBoard] = useState<Board>(EMPTY_BOARD);
+  const [board, setBoard] = useState<Board>({ todo: [], in_progress: [], in_review: [], blocked: [], done: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
@@ -224,19 +176,25 @@ export default function TaskBoardPage() {
     });
   }
 
-  const loadSprints = useCallback(async () => {
+  const loadSprints = useCallback(async (background = false) => {
     setError(null);
-    setLoading(true);
-    setShowCreateTask(false);
-    setNewTaskTitle("");
-    setNewTaskDescription("");
-    setNewTaskStoryPoints("");
+    if (!background) {
+      setLoading(true);
+      setShowCreateTask(false);
+      setNewTaskTitle("");
+      setNewTaskDescription("");
+      setNewTaskStoryPoints("");
+    }
     try {
-      const active = await invokeDesktop<SprintListItem[]>("sprints:getAll", { status: "active" });
-      let items = Array.isArray(active) ? active : [];
+      const respActive = await fetch(`/api/sprints?${new URLSearchParams({ status: "active" }).toString()}`, { cache: "no-store" });
+      const dataActive = await respActive.json().catch(() => null);
+      if (!respActive.ok) throw new Error(String(dataActive?.error || "Failed to load sprints"));
+
+      let items = Array.isArray(dataActive?.items) ? (dataActive.items as SprintListItem[]) : [];
       if (!items.length) {
-        const planning = await invokeDesktop<SprintListItem[]>("sprints:getAll", { status: "planning" });
-        items = Array.isArray(planning) ? planning : [];
+        const respPlanning = await fetch(`/api/sprints?${new URLSearchParams({ status: "planning" }).toString()}`, { cache: "no-store" });
+        const dataPlanning = await respPlanning.json().catch(() => null);
+        if (respPlanning.ok) items = Array.isArray(dataPlanning?.items) ? (dataPlanning.items as SprintListItem[]) : [];
       }
 
       setSprints(items);
@@ -246,32 +204,39 @@ export default function TaskBoardPage() {
       setSelectedSprintId("");
       setError(e instanceof Error ? e.message : "Failed to load sprints");
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }, [selectedSprintId]);
 
-  const loadBoard = useCallback(async (sprintId: string) => {
+  const loadBoard = useCallback(async (sprintId: string, background = false) => {
     setError(null);
-    setLoading(true);
-    setShowCreateTask(false);
-    setNewTaskTitle("");
-    setNewTaskDescription("");
-    setNewTaskStoryPoints("");
+    if (!background) {
+      setLoading(true);
+      setShowCreateTask(false);
+      setNewTaskTitle("");
+      setNewTaskDescription("");
+      setNewTaskStoryPoints("");
+    }
     try {
-      const data = await invokeDesktop<{ items?: BoardTask[] } | BoardTask[]>("tasks:getAll", {
-        filters: { sprintId }
+      const resp = await fetch(`/api/tasks/board/${encodeURIComponent(sprintId)}`, { cache: "no-store" });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to load board"));
+      setBoard({
+        todo: Array.isArray(data?.todo) ? (data.todo as BoardTask[]) : [],
+        in_progress: Array.isArray(data?.in_progress) ? (data.in_progress as BoardTask[]) : [],
+        in_review: Array.isArray(data?.in_review) ? (data.in_review as BoardTask[]) : [],
+        blocked: Array.isArray(data?.blocked) ? (data.blocked as BoardTask[]) : [],
+        done: Array.isArray(data?.done) ? (data.done as BoardTask[]) : [],
       });
-      const items = Array.isArray(data)
-        ? data
-        : Array.isArray((data as { items?: BoardTask[] })?.items)
-          ? ((data as { items?: BoardTask[] }).items as BoardTask[])
-          : [];
-      setBoard(toBoard(items));
     } catch (e) {
-      setBoard(EMPTY_BOARD);
+      setBoard({ todo: [], in_progress: [], in_review: [], blocked: [], done: [] });
       setError(e instanceof Error ? e.message : "Failed to load board");
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -281,14 +246,24 @@ export default function TaskBoardPage() {
     setCreatingTask(true);
     try {
       const sprint = sprints.find((s) => String(s.id) === String(selectedSprintId));
+      const projectId = sprint?.projectId;
+      if (!projectId) throw new Error("Missing projectId for selected sprint");
+
       const storyPoints = newTaskStoryPoints === "" ? 0 : Number(newTaskStoryPoints);
-      await invokeDesktop<BoardTask>("tasks:create", {
-        projectId: sprint?.projectId || undefined,
-        sprintId: selectedSprintId,
-        title: newTaskTitle,
-        description: newTaskDescription || undefined,
-        points: storyPoints,
+      const resp = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          sprintId: selectedSprintId,
+          title: newTaskTitle,
+          description: newTaskDescription || undefined,
+          storyPoints,
+        }),
+        cache: "no-store",
       });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to create task"));
 
       await loadBoard(selectedSprintId);
       setShowCreateTask(false);
@@ -306,10 +281,14 @@ export default function TaskBoardPage() {
     setError(null);
     setUpdatingTaskId(taskId);
     try {
-      await invokeDesktop<{ count: number }>("tasks:bulkUpdate", {
-        ids: [taskId],
-        changes: { status }
+      const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+        cache: "no-store",
       });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Status update failed"));
       if (selectedSprintId) await loadBoard(selectedSprintId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Status update failed");
@@ -323,10 +302,12 @@ export default function TaskBoardPage() {
     setError(null);
     setUpdatingTaskId(taskId);
     try {
-      await invokeDesktop<{ count: number }>("tasks:bulkUpdate", {
-        ids: [taskId],
-        changes: { status: "archived" }
+      const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+        method: "DELETE",
+        cache: "no-store",
       });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to archive task"));
       if (selectedSprintId) await loadBoard(selectedSprintId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to archive task");
@@ -340,9 +321,12 @@ export default function TaskBoardPage() {
     setError(null);
     setUpdatingTaskId(taskId);
     try {
-      await invokeDesktop<{ count: number }>("tasks:bulkDelete", {
-        ids: [taskId]
+      const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}?hard=true`, {
+        method: "DELETE",
+        cache: "no-store",
       });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to delete task"));
       if (selectedSprintId) await loadBoard(selectedSprintId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete task");
@@ -386,7 +370,11 @@ export default function TaskBoardPage() {
     setNewSubtaskTitle("");
 
     try {
-      const taskRaw = (await invokeDesktop<Record<string, unknown>>("tasks:getById", { taskId })) || {};
+      const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { cache: "no-store" });
+      const data = (await resp.json().catch(() => null)) as { task?: Record<string, unknown>; error?: string } | null;
+      if (!resp.ok) throw new Error(String(data?.error || "Failed to load task details"));
+
+      const taskRaw = data?.task || {};
       const subtaskRaw = Array.isArray(taskRaw.subtasks) ? (taskRaw.subtasks as Record<string, unknown>[]) : [];
       setDrawerTask({
         id: String(taskRaw.id || taskId),
@@ -416,10 +404,17 @@ export default function TaskBoardPage() {
       };
     });
 
-    await invokeDesktop<{ count: number }>("tasks:bulkUpdate", {
-      ids: [subtaskId],
-      changes: { status: nextStatus }
+    const resp = await fetch(`/api/tasks/${encodeURIComponent(subtaskId)}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: nextStatus }),
+      cache: "no-store",
     });
+
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => null);
+      throw new Error(String(data?.error || "Failed to update subtask status"));
+    }
 
     if (selectedSprintId) await loadBoard(selectedSprintId);
   }
@@ -428,17 +423,21 @@ export default function TaskBoardPage() {
     if (!drawerTask || !newSubtaskTitle.trim()) return;
     setAddingSubtask(true);
     try {
-      const item = await invokeDesktop<Record<string, unknown>>("tasks:create", {
-        parentTaskId: drawerTask.id,
-        sprintId: selectedSprintId || undefined,
-        title: newSubtaskTitle.trim()
+      const resp = await fetch(`/api/tasks/${encodeURIComponent(drawerTask.id)}/subtasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: newSubtaskTitle.trim() }),
+        cache: "no-store",
       });
+
+      const data = (await resp.json().catch(() => null)) as { item?: Record<string, unknown>; error?: string } | null;
+      if (!resp.ok || !data?.item) throw new Error(String(data?.error || "Failed to create subtask"));
 
       setDrawerTask((prev) => {
         if (!prev) return prev;
         return {
           ...prev,
-          subtasks: [...prev.subtasks, normalizeDrawerSubtask(item)],
+          subtasks: [...prev.subtasks, normalizeDrawerSubtask(data.item as Record<string, unknown>)],
         };
       });
       setNewSubtaskTitle("");
@@ -529,6 +528,17 @@ export default function TaskBoardPage() {
   useEffect(() => {
     if (selectedSprintId) void loadBoard(selectedSprintId);
   }, [selectedSprintId, loadBoard]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void loadSprints(true);
+      if (selectedSprintId) {
+        void loadBoard(selectedSprintId, true);
+      }
+    }, 15_000);
+
+    return () => window.clearInterval(id);
+  }, [loadBoard, loadSprints, selectedSprintId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -870,4 +880,3 @@ export default function TaskBoardPage() {
     </div>
   );
 }
-

@@ -50,11 +50,17 @@ const CHANNELS = {
 
   // Board channels
   BOARD: {
+    GET_ACTIVE_SPRINT: "board:getActiveSprint",
+    GET_TASKS: "board:getTasks",
+    MOVE_TASK: "board:moveTask",
+    CREATE_TASK: "board:createTask",
+    GET_SPRINTS: "board:getSprints",
     GET_SPRINT_BACKLOG: "board:getSprintBacklog",
     MOVE_TO_BOARD: "board:moveToBoard",
     GET_TASKS_WITH_PRS: "board:getTasksWithPRs",
     LINK_PR: "board:linkPR",
-    UNLINK_PR: "board:unlinkPR"
+    UNLINK_PR: "board:unlinkPR",
+    TASK_UPDATED: "board:taskUpdated"
   },
 
   // Forms channels
@@ -62,7 +68,25 @@ const CHANNELS = {
     GET_TEMPLATES: "forms:getTemplates",
     GET_TASK_FORMS: "forms:getTaskForms",
     SUBMIT_FORM: "forms:submitForm",
-    ATTACH_TEMPLATE: "forms:attachTemplate"
+    ATTACH_TEMPLATE: "forms:attachTemplate",
+    CREATE_FORM: "forms:createForm"
+  },
+
+  // Global search channel
+  SEARCH: {
+    QUERY: "search:query"
+  },
+
+  // In-app notification inbox channels
+  IN_APP_NOTIFICATIONS: {
+    GET_LIST: "inAppNotifications:getList",
+    MARK_READ: "inAppNotifications:markRead",
+    MARK_ALL_READ: "inAppNotifications:markAllRead"
+  },
+
+  // Changelog feed channels
+  CHANGELOG: {
+    GET_ITEMS: "changelog:getItems"
   },
 
   // Pages channels
@@ -124,15 +148,25 @@ const CHANNELS = {
     GET_STATS: "developers:getStats",
     GET_CURRENT_TASKS: "developers:getCurrentTasks",
     GET_SPRINT_HISTORY: "developers:getSprintHistory",
-    UPDATE_PROFILE: "developers:updateProfile"
+    UPDATE_PROFILE: "developers:updateProfile",
+    GET_ORG_MEMBERS: "developers:getOrgMembers",
+    UPDATE_ROLE: "developers:updateRole",
+    REMOVE_FROM_ORG: "developers:removeFromOrg",
+    INVITE_TO_ORG: "developers:inviteToOrg",
+    GET_PENDING_INVITATIONS: "developers:getPendingInvitations",
+    REVOKE_INVITATION: "developers:revokeInvitation"
   },
 
   // GitHub integration channels
   GITHUB: {
     GET_CONNECTION_STATUS: "github:getConnectionStatus",
+    GET_AVAILABLE_REPOS: "github:getAvailableRepos",
     GET_LINKED_REPOS: "github:getLinkedRepos",
     GET_RECENT_PRS: "github:getRecentPRs",
-    SYNC_NOW: "github:syncNow"
+    SYNC_NOW: "github:syncNow",
+    TOGGLE_REPO_SYNC: "github:toggleRepoSync",
+    LINK_REPO_TO_PROJECT: "github:linkRepoToProject",
+    BULK_TOGGLE: "github:bulkToggle"
   },
 
   // App metadata and health
@@ -172,6 +206,7 @@ const CHANNELS = {
   // System level capabilities
   SYSTEM: {
     OPEN_EXTERNAL: "system:openExternal",
+    GATEWAY_REQUEST: "system:gatewayRequest",
     OPEN_PATH: "system:openPath",
     GET_PATH: "system:getPath",
     CLIPBOARD_READ: "system:clipboardRead",
@@ -217,15 +252,6 @@ const CHANNELS = {
     REGENERATE_WEBHOOK_SECRET: "integrations:regenerateWebhookSecret",
     GET_JIRA_PROJECT_MAPPINGS: "integrations:getJiraProjectMappings",
     SAVE_JIRA_MAPPING: "integrations:saveJiraMapping"
-  },
-
-  // GitHub repository management
-  GITHUB: {
-    GET_AVAILABLE_REPOS: "github:getAvailableRepos",
-    GET_LINKED_REPOS: "github:getLinkedRepos",
-    TOGGLE_REPO_SYNC: "github:toggleRepoSync",
-    LINK_REPO_TO_PROJECT: "github:linkRepoToProject",
-    BULK_TOGGLE: "github:bulkToggle"
   },
 
   // Monitoring and operational diagnostics
@@ -373,16 +399,6 @@ const CHANNELS = {
     GET_INVOICES: "billing:getInvoices",
     GET_USAGE: "billing:getUsage",
     GET_BILLING_PORTAL_URL: "billing:getBillingPortalUrl"
-  },
-
-  // Organization developer/seat management
-  DEVELOPERS: {
-    GET_ORG_MEMBERS: "developers:getOrgMembers",
-    UPDATE_ROLE: "developers:updateRole",
-    REMOVE_FROM_ORG: "developers:removeFromOrg",
-    INVITE_TO_ORG: "developers:inviteToOrg",
-    GET_PENDING_INVITATIONS: "developers:getPendingInvitations",
-    REVOKE_INVITATION: "developers:revokeInvitation"
   },
 
   // Organization settings and ownership controls

@@ -40,6 +40,16 @@ function isMissingSessionError(error) {
   return message.includes("Gateway request failed (401)");
 }
 
+function isGatewayUnavailableError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  if (!message) return false;
+  return (
+    message.includes("fetch failed") ||
+    message.includes("econnrefused") ||
+    message.includes("gateway request failed (5")
+  );
+}
+
 function emptyDashboardPayload() {
   return {
     summary: {
@@ -243,7 +253,7 @@ function registerDashboardIpcHandlers(ipcMain) {
       const dashboard = await fetchDashboardData(payload);
       return dashboard.summary;
     } catch (error) {
-      if (isMissingSessionError(error)) {
+      if (isMissingSessionError(error) || isGatewayUnavailableError(error)) {
         return emptyDashboardPayload().summary;
       }
       throw error;
@@ -255,7 +265,7 @@ function registerDashboardIpcHandlers(ipcMain) {
       const dashboard = await fetchDashboardData(payload);
       return dashboard.recentActivity;
     } catch (error) {
-      if (isMissingSessionError(error)) {
+      if (isMissingSessionError(error) || isGatewayUnavailableError(error)) {
         return emptyDashboardPayload().recentActivity;
       }
       throw error;
@@ -267,7 +277,7 @@ function registerDashboardIpcHandlers(ipcMain) {
       const dashboard = await fetchDashboardData(payload);
       return dashboard.burndown;
     } catch (error) {
-      if (isMissingSessionError(error)) {
+      if (isMissingSessionError(error) || isGatewayUnavailableError(error)) {
         return emptyDashboardPayload().burndown;
       }
       throw error;

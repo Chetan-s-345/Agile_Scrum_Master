@@ -1,3 +1,5 @@
+import { desktopGatewayRequest } from "@/lib/desktop-gateway";
+
 export type MeResponse = {
   user?: { id: string; email: string; fullName?: string; emailVerified?: boolean; createdAt?: string };
   tenantProvisioningMode?: "manual" | "neon";
@@ -39,77 +41,91 @@ export type EmailSendResult = {
 };
 
 export async function getMe(): Promise<MeResponse | null> {
-  const resp = await fetch("/api/auth/me", { cache: "no-store" });
-  if (!resp.ok) return null;
-  const data = await resp.json().catch(() => null);
-  return (data || null) as MeResponse | null;
+  try {
+    const data = await desktopGatewayRequest<MeResponse>("GET", "/api/v1/auth/me");
+    return (data || null) as MeResponse | null;
+  } catch {
+    return null;
+  }
 }
 
 export async function signOut(): Promise<boolean> {
-  const resp = await fetch("/api/auth/sign-out", {
-    method: "POST",
-    cache: "no-store",
-  });
-  return resp.ok;
+  try {
+    if (window.desktopApi?.invoke) {
+      await window.desktopApi.invoke("auth:clearSession");
+    }
+    await desktopGatewayRequest("POST", "/api/v1/auth/logout", {});
+    return true;
+  } catch {
+    return Boolean(window.desktopApi?.invoke);
+  }
 }
 
 export async function listMembers(params?: { page?: number; limit?: number }): Promise<{ members: OrgMember[] } | null> {
-  const page = params?.page ?? 1;
-  const limit = params?.limit ?? 200;
-  const resp = await fetch(`/api/org/members?page=${encodeURIComponent(String(page))}&limit=${encodeURIComponent(String(limit))}`,
-    { cache: "no-store" }
-  );
-  if (!resp.ok) return null;
-  const data = await resp.json().catch(() => null);
-  if (!data) return null;
-  return { members: Array.isArray(data.members) ? (data.members as OrgMember[]) : [] };
+  try {
+    const page = params?.page ?? 1;
+    const limit = params?.limit ?? 200;
+    const data = await desktopGatewayRequest<{ members?: OrgMember[] }>("GET", "/api/v1/org/members", undefined, {
+      page,
+      limit,
+    });
+    if (!data) return null;
+    return { members: Array.isArray(data.members) ? (data.members as OrgMember[]) : [] };
+  } catch {
+    return null;
+  }
 }
 
 export async function inviteMember(payload: { email: string; role: string }): Promise<
   | { ok: true; invitation?: OrgInvitation; email?: EmailSendResult }
   | { ok: false; error: string; status: number }
 > {
-  const resp = await fetch("/api/org/members/invite", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
-
-  const data = await resp.json().catch(() => null);
-  if (resp.ok) {
+  try {
+    const data = await desktopGatewayRequest<{ invitation?: OrgInvitation; invite?: OrgInvitation; email?: EmailSendResult }>(
+      "POST",
+      "/api/v1/org/members/invite",
+      payload
+    );
     return {
       ok: true,
       invitation: (data?.invitation || data?.invite || undefined) as OrgInvitation | undefined,
       email: (data?.email || undefined) as EmailSendResult | undefined,
     };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invite failed";
+    const status = Number((message.match(/\((\d+)\)/)?.[1] || 500));
+    return {
+      ok: false,
+      status,
+      error: message,
+    };
   }
-  return {
-    ok: false,
-    status: resp.status,
-    error: String(data?.error || "Invite failed"),
-  };
 }
 
 export async function listInvitations(): Promise<
   | { ok: true; invitations: OrgInvitation[] }
   | { ok: false; error: string; status: number }
 > {
-  const resp = await fetch("/api/org/invitations", { cache: "no-store" });
-  const data = await resp.json().catch(() => null);
-  if (resp.ok) {
+  try {
+    const data = await desktopGatewayRequest<{ invitations?: OrgInvitation[]; items?: OrgInvitation[] }>(
+      "GET",
+      "/api/v1/org/invitations"
+    );
     const invitations = Array.isArray(data?.invitations)
       ? (data.invitations as OrgInvitation[])
       : Array.isArray(data?.items)
         ? (data.items as OrgInvitation[])
         : [];
     return { ok: true, invitations };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load invitations";
+    const status = Number((message.match(/\((\d+)\)/)?.[1] || 500));
+    return {
+      ok: false,
+      status,
+      error: message,
+    };
   }
-  return {
-    ok: false,
-    status: resp.status,
-    error: String((data && (data.error || data.message)) || "Failed to load invitations"),
-  };
 }
 
 export async function createOrg(payload: {
@@ -121,22 +137,22 @@ export async function createOrg(payload: {
   | { ok: true; org: { id: string; name?: string; slug?: string } }
   | { ok: false; error: string; status: number }
 > {
-  const resp = await fetch("/api/org", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
-
-  const data = await resp.json().catch(() => null);
-  if (resp.ok) {
+  try {
+    const data = await desktopGatewayRequest<{ org?: { id: string; name?: string; slug?: string } }>(
+      "POST",
+      "/api/v1/org",
+      payload
+    );
     return { ok: true, org: (data?.org || {}) as { id: string; name?: string; slug?: string } };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Create org failed";
+    const status = Number((message.match(/\((\d+)\)/)?.[1] || 500));
+    return {
+      ok: false,
+      status,
+      error: message,
+    };
   }
-  return {
-    ok: false,
-    status: resp.status,
-    error: String(data?.error || "Create org failed"),
-  };
 }
 
 export async function provisionOrgDb(payload: {
@@ -147,24 +163,24 @@ export async function provisionOrgDb(payload: {
   | { ok: true; provisioned: boolean; provider?: string }
   | { ok: false; error: string; status: number }
 > {
-  const resp = await fetch("/api/org/provision-db", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
-
-  const data = await resp.json().catch(() => null);
-  if (resp.ok) {
+  try {
+    const data = await desktopGatewayRequest<{ provisioned?: boolean; ok?: boolean; provider?: string }>(
+      "POST",
+      "/api/v1/org/provision-db",
+      payload
+    );
     return {
       ok: true,
       provisioned: Boolean(data?.provisioned ?? data?.ok ?? true),
       provider: typeof data?.provider === "string" ? data.provider : undefined,
     };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Provision DB failed";
+    const status = Number((message.match(/\((\d+)\)/)?.[1] || 500));
+    return {
+      ok: false,
+      status,
+      error: message,
+    };
   }
-  return {
-    ok: false,
-    status: resp.status,
-    error: String(data?.error || "Provision DB failed"),
-  };
 }

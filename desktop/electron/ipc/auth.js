@@ -4,6 +4,7 @@ const { app, safeStorage } = require("electron");
 const CHANNELS = require("./channels");
 
 const SESSION_FILE_NAME = "auth-session.json";
+const MAX_SESSION_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function asString(value, fallback = "") {
   const text = String(value ?? fallback).trim();
@@ -69,10 +70,15 @@ function sanitizeSession(raw) {
     ? expiresAtInput
     : deriveExpiresAt(accessToken);
 
+  const nowMs = Date.now();
+  const createdAtInput = Number(new Date(raw?.createdAt || raw?.updatedAt || nowMs).getTime());
+  const createdAtMs = Number.isFinite(createdAtInput) && createdAtInput > 0 ? createdAtInput : nowMs;
+
   return {
     accessToken,
     user,
     expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
+    createdAt: new Date(createdAtMs).toISOString(),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -148,7 +154,23 @@ function getSessionStatus() {
     return { authenticated: false, session: null, reason: "missing" };
   }
 
-  if (Number.isFinite(session.expiresAt) && Number(session.expiresAt) <= Date.now()) {
+  const email = asString(session?.user?.email).toLowerCase();
+  if (email === "demo@agilescrummaster.dev") {
+    clearSession();
+    return { authenticated: false, session: null, reason: "invalid" };
+  }
+
+  const createdAtMs = Number(new Date(session.createdAt || 0).getTime());
+  const weeklyExpiry = Number.isFinite(createdAtMs) && createdAtMs > 0
+    ? createdAtMs + MAX_SESSION_AGE_MS
+    : Date.now() + MAX_SESSION_AGE_MS;
+
+  const tokenExpiry = Number(session.expiresAt);
+  const effectiveExpiry = Number.isFinite(tokenExpiry) && tokenExpiry > 0
+    ? Math.min(tokenExpiry, weeklyExpiry)
+    : weeklyExpiry;
+
+  if (effectiveExpiry <= Date.now()) {
     clearSession();
     return { authenticated: false, session: null, reason: "expired" };
   }
@@ -157,7 +179,8 @@ function getSessionStatus() {
     authenticated: true,
     session: {
       user: session.user,
-      expiresAt: session.expiresAt,
+      expiresAt: effectiveExpiry,
+      createdAt: session.createdAt,
       updatedAt: session.updatedAt,
     },
     reason: "ok",
@@ -202,6 +225,37 @@ function processDesktopAuthCallback(rawUrl) {
   };
 }
 
+function getGatewayBaseUrl() {
+  const candidate = asString(
+    process.env.DESKTOP_API_GATEWAY_URL ||
+      process.env.API_GATEWAY_URL ||
+      process.env.NEXT_PUBLIC_API_URL ||
+      "http://localhost:4000"
+  );
+  return candidate.replace(/\/+$/, "");
+}
+
+async function validateSessionWithGateway(session) {
+  const token = asString(session?.accessToken);
+  if (!token) return { valid: false, reason: "missing" };
+
+  const response = await fetch(`${getGatewayBaseUrl()}/api/v1/auth/me`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  });
+
+  if (response.ok) return { valid: true, reason: "ok" };
+  if (response.status === 401 || response.status === 403) {
+    return { valid: false, reason: "invalid" };
+  }
+
+  return { valid: true, reason: "unreachable" };
+}
+
 function registerAuthIpcHandlers(ipcMain, options = {}) {
   const onSessionChanged = typeof options.onSessionChanged === "function" ? options.onSessionChanged : null;
 
@@ -233,10 +287,46 @@ function registerAuthIpcHandlers(ipcMain, options = {}) {
   });
 
   ipcMain.handle(CHANNELS.AUTH.CHECK_SESSION, async () => {
+    const localStatus = getSessionStatus();
+    if (!localStatus.authenticated) {
+      return localStatus;
+    }
+
+    try {
+      const validation = await validateSessionWithGateway(readSession());
+      if (!validation.valid && validation.reason === "invalid") {
+        clearSession();
+        if (onSessionChanged) {
+          onSessionChanged({ authenticated: false });
+        }
+        return { authenticated: false, session: null, reason: "invalid" };
+      }
+    } catch {
+      return localStatus;
+    }
+
     return getSessionStatus();
   });
 
   ipcMain.handle(CHANNELS.AUTH.VALIDATE_TOKEN, async () => {
+    const localStatus = getSessionStatus();
+    if (!localStatus.authenticated) {
+      return localStatus;
+    }
+
+    try {
+      const validation = await validateSessionWithGateway(readSession());
+      if (!validation.valid && validation.reason === "invalid") {
+        clearSession();
+        if (onSessionChanged) {
+          onSessionChanged({ authenticated: false });
+        }
+        return { authenticated: false, session: null, reason: "invalid" };
+      }
+    } catch {
+      return localStatus;
+    }
+
     return getSessionStatus();
   });
 }

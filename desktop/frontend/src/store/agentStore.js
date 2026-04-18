@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { io } from "socket.io-client";
+import { desktopGatewayRequest } from "@/lib/desktop-gateway";
 
 function toArray(value, key) {
   if (!value || typeof value !== "object") return [];
@@ -49,8 +50,7 @@ export const useAgentStore = create((set, get) => ({
     if (!projectId) return;
 
     try {
-      const statusResp = await fetch("/api/agents/status", { cache: "no-store" });
-      const statusJson = await statusResp.json().catch(() => ({}));
+      const statusJson = await desktopGatewayRequest("GET", "/api/v1/agents/status");
       set({ agents: toArray(statusJson, "agents") });
     } catch (err) {
       const detail = err instanceof Error ? err.message : "Failed to load agent status.";
@@ -63,10 +63,10 @@ export const useAgentStore = create((set, get) => ({
     if (!projectId) return;
 
     try {
-      const approvalsResp = await fetch(`/api/agents/approvals?projectId=${encodeURIComponent(projectId)}&status=pending`, {
-        cache: "no-store",
+      const approvalsJson = await desktopGatewayRequest("GET", "/api/v1/agents/approvals", undefined, {
+        projectId,
+        status: "pending",
       });
-      const approvalsJson = await approvalsResp.json().catch(() => ({}));
       const approvals = toArray(approvalsJson, "approvals");
       set({ approvals, pendingApprovals: pendingOnly(approvals) });
     } catch (err) {
@@ -80,8 +80,10 @@ export const useAgentStore = create((set, get) => ({
     if (!projectId) return;
 
     try {
-      const actionsResp = await fetch(`/api/agents/actions?projectId=${encodeURIComponent(projectId)}&limit=20`, { cache: "no-store" });
-      const actionsJson = await actionsResp.json().catch(() => ({}));
+      const actionsJson = await desktopGatewayRequest("GET", "/api/v1/agents/actions", undefined, {
+        projectId,
+        limit: 20,
+      });
       const items = toArray(actionsJson, "items");
       set({ recentActions: items });
     } catch (err) {
@@ -171,11 +173,7 @@ export const useAgentStore = create((set, get) => ({
     const approvalId = String(id || "").trim();
     if (!approvalId) return;
 
-    await fetch(`/api/agents/approvals/${encodeURIComponent(approvalId)}/approve`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
+    await desktopGatewayRequest("PATCH", `/api/v1/agents/approvals/${encodeURIComponent(approvalId)}/approve`, {});
     await get().refreshApprovals();
     await get().refreshActions();
   },
@@ -184,11 +182,7 @@ export const useAgentStore = create((set, get) => ({
     const approvalId = String(id || "").trim();
     if (!approvalId) return;
 
-    await fetch(`/api/agents/approvals/${encodeURIComponent(approvalId)}/reject`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason }),
-    });
+    await desktopGatewayRequest("PATCH", `/api/v1/agents/approvals/${encodeURIComponent(approvalId)}/reject`, { reason });
     await get().refreshApprovals();
     await get().refreshActions();
   },
