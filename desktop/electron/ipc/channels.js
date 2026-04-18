@@ -237,6 +237,17 @@ const CHANNELS = {
     GET_JIRA_SYNC_LOGS: "monitoring:getJiraSyncLogs"
   },
 
+  // Webhook management and delivery diagnostics
+  WEBHOOKS: {
+    GET_ALL: "webhooks:getAll",
+    CREATE: "webhooks:create",
+    UPDATE: "webhooks:update",
+    DELETE: "webhooks:delete",
+    TEST: "webhooks:test",
+    GET_DELIVERY_LOG: "webhooks:getDeliveryLog",
+    RETRY_DELIVERY: "webhooks:retryDelivery"
+  },
+
   // Onboarding workflow
   ONBOARDING: {
     GET_STATUS: "onboarding:getStatus",
@@ -270,6 +281,7 @@ const CHANNELS = {
   // Team management settings
   TEAMS: {
     GET_ALL: "teams:getAll",
+    GET_DETAIL: "teams:getDetail",
     CREATE: "teams:create",
     UPDATE: "teams:update",
     DELETE: "teams:delete",

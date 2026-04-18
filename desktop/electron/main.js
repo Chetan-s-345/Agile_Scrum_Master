@@ -1237,6 +1237,343 @@ function registerMonitoringHandlers() {
   });
 }
 
+function webhooksDbPath() {
+  return path.join(app.getPath("userData"), "webhooks.db.json");
+}
+
+function defaultWebhookData() {
+  const now = new Date().toISOString();
+  const previous = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+
+  return {
+    webhooks: [
+      {
+        id: "webhook-1",
+        url: "https://hooks.example.com/agile/events",
+        events: ["task.updated", "sprint.completed"],
+        status: "active",
+        secret: "whsec_demo_123",
+        lastTriggered: previous,
+        successRate: 100,
+        createdAt: previous,
+        updatedAt: previous
+      }
+    ],
+    deliveries: [
+      {
+        id: "delivery-1",
+        webhookId: "webhook-1",
+        eventType: "task.updated",
+        status: "success",
+        responseCode: 200,
+        requestBody: { id: "task-1", status: "in_progress" },
+        responseBody: { ok: true },
+        triggeredAt: previous,
+        attempts: 1
+      },
+      {
+        id: "delivery-2",
+        webhookId: "webhook-1",
+        eventType: "sprint.completed",
+        status: "failed",
+        responseCode: 502,
+        requestBody: { id: "sprint-24", outcome: "completed" },
+        responseBody: { error: "Bad gateway" },
+        triggeredAt: now,
+        attempts: 1
+      }
+    ]
+  };
+}
+
+function normalizeWebhookStatus(value) {
+  return String(value || "active").trim().toLowerCase() === "inactive" ? "inactive" : "active";
+}
+
+function normalizeWebhookRecord(value) {
+  return {
+    id: String(value?.id || `webhook-${randomUUID()}`),
+    url: String(value?.url || "").trim(),
+    events: Array.isArray(value?.events) ? value.events.map((event) => String(event || "").trim()).filter(Boolean) : [],
+    status: normalizeWebhookStatus(value?.status),
+    secret: String(value?.secret || "").trim(),
+    lastTriggered: value?.lastTriggered ? String(value.lastTriggered) : null,
+    successRate: Math.max(0, Math.min(100, Number(value?.successRate || 0))),
+    createdAt: String(value?.createdAt || new Date().toISOString()),
+    updatedAt: String(value?.updatedAt || new Date().toISOString())
+  };
+}
+
+function normalizeDeliveryRecord(value) {
+  return {
+    id: String(value?.id || `delivery-${randomUUID()}`),
+    webhookId: String(value?.webhookId || "").trim(),
+    eventType: String(value?.eventType || "manual"),
+    status: String(value?.status || "success"),
+    responseCode: Number(value?.responseCode || 0),
+    requestBody: value?.requestBody || {},
+    responseBody: value?.responseBody || {},
+    triggeredAt: String(value?.triggeredAt || new Date().toISOString()),
+    attempts: Math.max(1, Number(value?.attempts || 1))
+  };
+}
+
+function readWebhooksData() {
+  try {
+    const filePath = webhooksDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultWebhookData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const defaults = defaultWebhookData();
+    return {
+      webhooks: Array.isArray(parsed?.webhooks) ? parsed.webhooks.map((item) => normalizeWebhookRecord(item)) : defaults.webhooks,
+      deliveries: Array.isArray(parsed?.deliveries) ? parsed.deliveries.map((item) => normalizeDeliveryRecord(item)) : defaults.deliveries
+    };
+  } catch {
+    return defaultWebhookData();
+  }
+}
+
+function writeWebhooksData(data) {
+  fs.writeFileSync(webhooksDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function computeWebhookSuccessRate(webhookId, deliveries) {
+  const items = deliveries.filter((entry) => String(entry.webhookId || "") === String(webhookId || ""));
+  if (!items.length) return 0;
+  const successCount = items.filter((entry) => String(entry.status || "") === "success").length;
+  return Math.round((successCount / items.length) * 100);
+}
+
+function mapWebhookView(webhook, deliveries) {
+  const last = deliveries
+    .filter((entry) => String(entry.webhookId || "") === String(webhook.id || ""))
+    .sort((a, b) => new Date(String(b.triggeredAt || 0)).getTime() - new Date(String(a.triggeredAt || 0)).getTime())[0];
+
+  return {
+    ...webhook,
+    lastTriggered: webhook.lastTriggered || last?.triggeredAt || null,
+    successRate: computeWebhookSuccessRate(webhook.id, deliveries)
+  };
+}
+
+function isValidWebhookUrl(url) {
+  try {
+    const parsed = new URL(String(url || ""));
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function retryDeliveryInStores(deliveryId) {
+  const id = String(deliveryId || "").trim();
+  if (!id) return false;
+
+  const webhookData = readWebhooksData();
+  const deliveryIndex = webhookData.deliveries.findIndex((entry) => String(entry.id || "") === id);
+  if (deliveryIndex >= 0) {
+    const now = new Date().toISOString();
+    const current = webhookData.deliveries[deliveryIndex];
+    webhookData.deliveries[deliveryIndex] = {
+      ...current,
+      status: "success",
+      responseCode: 200,
+      responseBody: { ok: true, retried: true },
+      triggeredAt: now,
+      attempts: Number(current.attempts || 1) + 1
+    };
+
+    const webhookIndex = webhookData.webhooks.findIndex((entry) => String(entry.id || "") === String(current.webhookId || ""));
+    if (webhookIndex >= 0) {
+      webhookData.webhooks[webhookIndex] = {
+        ...webhookData.webhooks[webhookIndex],
+        lastTriggered: now,
+        updatedAt: now
+      };
+    }
+
+    writeWebhooksData(webhookData);
+    return true;
+  }
+
+  const monitoringData = readMonitoringData();
+  const dlqIndex = monitoringData.webhookDlq.findIndex((entry) => String(entry.id || "") === id);
+  if (dlqIndex >= 0) {
+    monitoringData.webhookDlq.splice(dlqIndex, 1);
+    writeMonitoringData(monitoringData);
+    return true;
+  }
+
+  return false;
+}
+
+function registerWebhookHandlers() {
+  ipcMain.handle(CHANNELS.WEBHOOKS.GET_ALL, async () => {
+    try {
+      const data = readWebhooksData();
+      const items = data.webhooks
+        .map((webhook) => mapWebhookView(webhook, data.deliveries))
+        .sort((a, b) => new Date(String(b.updatedAt || 0)).getTime() - new Date(String(a.updatedAt || 0)).getTime());
+      return IPCResponse.success(items);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load webhooks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.CREATE, async (_event, payload = {}) => {
+    try {
+      const url = String(payload.url || "").trim();
+      const events = Array.isArray(payload.events) ? payload.events.map((event) => String(event || "").trim()).filter(Boolean) : [];
+      const secret = String(payload.secret || "").trim();
+
+      if (!url) return IPCResponse.validation("url", "url is required");
+      if (!isValidWebhookUrl(url)) return IPCResponse.validation("url", "url must be a valid HTTP(S) URL");
+      if (!events.length) return IPCResponse.validation("events", "events must include at least one event");
+
+      const data = readWebhooksData();
+      const now = new Date().toISOString();
+      const created = normalizeWebhookRecord({
+        id: `webhook-${randomUUID()}`,
+        url,
+        events,
+        secret,
+        status: "active",
+        lastTriggered: null,
+        successRate: 0,
+        createdAt: now,
+        updatedAt: now
+      });
+
+      data.webhooks.unshift(created);
+      writeWebhooksData(data);
+      return IPCResponse.success(mapWebhookView(created, data.deliveries));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to create webhook", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.UPDATE, async (_event, payload = {}) => {
+    try {
+      const webhookId = String(payload.webhookId || "").trim();
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+      if (!webhookId) return IPCResponse.validation("webhookId", "webhookId is required");
+      if (!changes) return IPCResponse.validation("changes", "changes is required");
+
+      const data = readWebhooksData();
+      const index = data.webhooks.findIndex((entry) => String(entry.id || "") === webhookId);
+      if (index < 0) return IPCResponse.notFound("Webhook");
+
+      const current = data.webhooks[index];
+      const nextUrl = Object.prototype.hasOwnProperty.call(changes, "url") ? String(changes.url || "").trim() : current.url;
+      if (!nextUrl || !isValidWebhookUrl(nextUrl)) {
+        return IPCResponse.validation("url", "url must be a valid HTTP(S) URL");
+      }
+
+      const updated = normalizeWebhookRecord({
+        ...current,
+        ...changes,
+        url: nextUrl,
+        events: Object.prototype.hasOwnProperty.call(changes, "events") ? changes.events : current.events,
+        status: Object.prototype.hasOwnProperty.call(changes, "status") ? changes.status : current.status,
+        updatedAt: new Date().toISOString()
+      });
+
+      data.webhooks[index] = updated;
+      writeWebhooksData(data);
+      return IPCResponse.success(mapWebhookView(updated, data.deliveries));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update webhook", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.DELETE, async (_event, payload = {}) => {
+    try {
+      const webhookId = String(payload.webhookId || "").trim();
+      if (!webhookId) return IPCResponse.validation("webhookId", "webhookId is required");
+
+      const data = readWebhooksData();
+      const before = data.webhooks.length;
+      data.webhooks = data.webhooks.filter((entry) => String(entry.id || "") !== webhookId);
+      if (data.webhooks.length === before) return IPCResponse.notFound("Webhook");
+
+      data.deliveries = data.deliveries.filter((entry) => String(entry.webhookId || "") !== webhookId);
+      writeWebhooksData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete webhook", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.TEST, async (_event, payload = {}) => {
+    try {
+      const webhookId = String(payload.webhookId || "").trim();
+      if (!webhookId) return IPCResponse.validation("webhookId", "webhookId is required");
+
+      const data = readWebhooksData();
+      const index = data.webhooks.findIndex((entry) => String(entry.id || "") === webhookId);
+      if (index < 0) return IPCResponse.notFound("Webhook");
+
+      const now = new Date().toISOString();
+      const delivery = normalizeDeliveryRecord({
+        id: `delivery-${randomUUID()}`,
+        webhookId,
+        eventType: "webhook.test",
+        status: "success",
+        responseCode: 200,
+        requestBody: { webhookId, test: true },
+        responseBody: { ok: true },
+        triggeredAt: now,
+        attempts: 1
+      });
+
+      data.deliveries.unshift(delivery);
+      data.webhooks[index] = normalizeWebhookRecord({
+        ...data.webhooks[index],
+        lastTriggered: now,
+        updatedAt: now
+      });
+
+      writeWebhooksData(data);
+      return IPCResponse.success({ success: true, responseCode: 200 });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to test webhook", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.GET_DELIVERY_LOG, async (_event, payload = {}) => {
+    try {
+      const webhookId = String(payload.webhookId || "").trim();
+      if (!webhookId) return IPCResponse.validation("webhookId", "webhookId is required");
+
+      const data = readWebhooksData();
+      const rows = data.deliveries
+        .filter((entry) => String(entry.webhookId || "") === webhookId)
+        .sort((a, b) => new Date(String(b.triggeredAt || 0)).getTime() - new Date(String(a.triggeredAt || 0)).getTime());
+      return IPCResponse.success(rows);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load webhook delivery log", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.RETRY_DELIVERY, async (_event, payload = {}) => {
+    try {
+      const deliveryId = String(payload.deliveryId || "").trim();
+      if (!deliveryId) return IPCResponse.validation("deliveryId", "deliveryId is required");
+
+      const retried = retryDeliveryInStores(deliveryId);
+      if (!retried) return IPCResponse.notFound("Delivery");
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to retry webhook delivery", String(error));
+    }
+  });
+}
+
 function onboardingDbPath() {
   return path.join(app.getPath("userData"), "onboarding.db.json");
 }
@@ -5145,6 +5482,63 @@ function registerTeamsHandlers() {
     }
   });
 
+  ipcMain.handle(CHANNELS.TEAMS.GET_DETAIL, async (_event, payload = {}) => {
+    try {
+      const teamId = String(payload.teamId || "").trim();
+      if (!teamId) {
+        return IPCResponse.validation("teamId", "teamId is required");
+      }
+
+      const data = readTeamsData();
+      const developers = readDevelopersData();
+      const team = data.teams.find((item) => String(item.id || "") === teamId);
+      if (!team) {
+        return IPCResponse.notFound("Team");
+      }
+
+      const teamView = buildTeamView(team, developers.members);
+      const members = Array.isArray(teamView.members)
+        ? teamView.members.map((member) => ({
+            id: String(member.id || ""),
+            fullName: String(member.fullName || ""),
+            email: String(member.email || ""),
+            role: String(member.role || "developer")
+          }))
+        : [];
+
+      const memberIdSet = new Set(members.map((member) => String(member.id || "")).filter(Boolean));
+      const tasksData = readTasksData();
+      const currentTasks = Array.isArray(tasksData?.tasks)
+        ? tasksData.tasks
+            .filter((task) => {
+              const assigneeId = String(task?.assignee?.id || task?.assigneeId || "").trim();
+              return Boolean(assigneeId) && memberIdSet.has(assigneeId);
+            })
+            .map((task, index) => toBoardTask(task, index))
+        : [];
+
+      const velocity = Array.from({ length: 6 }, (_item, index) => {
+        const sprintLabel = `S-${index + 1}`;
+        const completed = currentTasks.filter((task) => String(task.status || "") === "done").length;
+        const points = currentTasks.reduce((sum, task) => sum + Number(task.storyPoints || 0), 0);
+        return {
+          sprint: sprintLabel,
+          completedTasks: Math.max(0, completed - (5 - index)),
+          velocity: Math.max(0, Math.round(points / Math.max(1, members.length)) - (5 - index))
+        };
+      });
+
+      return IPCResponse.success({
+        team: teamView,
+        members,
+        currentTasks,
+        velocity
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load team detail", String(error));
+    }
+  });
+
   ipcMain.handle(CHANNELS.TEAMS.CREATE, async (_event, payload = {}) => {
     try {
       const name = String(payload.name || "").trim();
@@ -6289,6 +6683,7 @@ app.whenReady().then(() => {
   registerIntegrationHandlers();
   registerGithubRepoHandlers();
   registerMonitoringHandlers();
+  registerWebhookHandlers();
   registerOnboardingHandlers();
   registerProfileHandlers();
   registerStandupHandlers();

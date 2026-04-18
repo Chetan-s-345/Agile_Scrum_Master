@@ -44,6 +44,13 @@ type ScoreItem = {
 
 type OrgMember = { id: string; fullName?: string; email?: string; role?: string };
 
+type TeamDetailResponse = {
+  team: Team;
+  members: Array<{ id?: string; fullName?: string; email?: string; role?: string }>;
+  currentTasks: Array<{ id?: string; assignee?: { id?: string }; assigneeId?: string }>;
+  velocity: Array<{ sprint?: string; velocity?: number; completedTasks?: number }>;
+};
+
 type MeResponse = {
   user?: { id?: string; email?: string; fullName?: string };
   activeOrgId?: string | null;
@@ -188,10 +195,14 @@ export default function TeamsPage() {
     }
 
     try {
-      const team = teams.find((item) => item.id === activeTeamId);
-      const currentMembers = Array.isArray(team?.members) ? team.members : [];
+      const detail = await invokeDesktop<TeamDetailResponse>("teams:getDetail", { teamId: activeTeamId });
+      const team = detail?.team;
+      if (team?.id) {
+        setTeams((prev) => prev.map((item) => (item.id === team.id ? { ...item, ...team } : item)));
+      }
 
-      const detailedMembers: TeamMember[] = currentMembers.map((member, index) => ({
+      const detailMembers = Array.isArray(detail?.members) ? detail.members : [];
+      const detailedMembers: TeamMember[] = detailMembers.map((member, index) => ({
         memberId: String(member.id || ""),
         fullName: asText(member.fullName),
         email: asText(member.email),
