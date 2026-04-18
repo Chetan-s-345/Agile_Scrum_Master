@@ -30,6 +30,26 @@ type SprintEvent = {
   scheduledAt?: string;
 };
 
+type SprintSummary = {
+  sprintId: string;
+  totalTasks: number;
+  completedTasks: number;
+  blockedTasks: number;
+  plannedPoints: number;
+  completedPoints: number;
+  velocity: number;
+  completionPct: number;
+  upcomingEvents?: SprintEvent[];
+};
+
+type MemberContribution = {
+  memberId: string;
+  name: string;
+  tasksCompleted: number;
+  totalTasks: number;
+  pointsCompleted: number;
+};
+
 type Velocity = {
   currentVelocity: number;
   requiredVelocity: number;
@@ -94,45 +114,51 @@ export default function SprintDetailPage() {
   const [alerts, setAlerts] = useState<AlertsResp | null>(null);
   const [risk, setRisk] = useState<Risk | null>(null);
   const [burndown, setBurndown] = useState<BurndownPoint[]>([]);
+  const [contributions, setContributions] = useState<MemberContribution[]>([]);
 
   async function load() {
     setLoading(true);
     setError(null);
 
     try {
-      const [nextSprint, nextTasks, nextEvents] = await Promise.all([
-        invokeDesktop<Sprint>("sprint:getById", { sprintId }),
-        invokeDesktop<SprintTask[]>("sprint:getTasks", { sprintId }),
-        invokeDesktop<SprintEvent[]>("sprint:getEvents", { sprintId }),
+      const [nextSprint, nextTasks, nextSummary, nextContributions] = await Promise.all([
+        invokeDesktop<Sprint>("sprints:getById", { sprintId }),
+        invokeDesktop<SprintTask[]>("sprints:getTasks", { sprintId }),
+        invokeDesktop<SprintSummary>("sprints:getSummary", { sprintId }),
+        invokeDesktop<MemberContribution[]>("sprints:getContributions", { sprintId }),
       ]);
 
       const taskRows = Array.isArray(nextTasks) ? nextTasks : [];
-      const eventRows = Array.isArray(nextEvents) ? nextEvents : [];
-      const doneCount = taskRows.filter((task) => {
+      const summary = nextSummary && typeof nextSummary === "object" ? nextSummary : null;
+      const eventRows = Array.isArray(summary?.upcomingEvents) ? summary!.upcomingEvents! : [];
+      const doneCount = Number(summary?.completedTasks ?? taskRows.filter((task) => {
         const normalized = String(task.status || "").toLowerCase();
         return normalized === "done" || normalized === "completed";
-      }).length;
+      }).length);
+      const totalTaskCount = Math.max(1, Number(summary?.totalTasks || taskRows.length || 1));
 
       const endDate = new Date(String(nextSprint?.endDate || ""));
       const today = new Date();
       const daysRemaining = Number.isNaN(endDate.getTime())
         ? 0
         : Math.max(0, Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
-      const totalTasks = Math.max(taskRows.length, 1);
+      const totalTasks = totalTaskCount;
 
-      const blockedTasks = taskRows.filter(
+      const blockedTasks = Number(summary?.blockedTasks ?? taskRows.filter(
         (task) => String(task.status || "").toLowerCase() === "blocked"
-      );
+      ).length);
 
       const alertItems: AlertItem[] = [
-        ...blockedTasks.map((task) => ({
-          id: `blocked-${task.id}`,
+        ...(blockedTasks > 0
+          ? [{
+          id: `blocked-${String(nextSprint?.id || sprintId || "unknown")}`,
           severity: "high",
-          title: `Blocked task: ${task.title}`,
-          message: `${task.assignee || "Unassigned"} needs support to unblock this task.`,
+          title: `${blockedTasks} blocked task${blockedTasks === 1 ? "" : "s"}`,
+          message: "Sprint contains blocked work that may impact completion.",
           createdAt: new Date().toISOString(),
           acknowledged: false,
-        })),
+        }]
+          : []),
         ...eventRows.map((event) => ({
           id: `event-${event.id}`,
           severity: "info",
@@ -162,20 +188,22 @@ export default function SprintDetailPage() {
       setSprint(nextSprint || null);
       setTasks(taskRows);
       setEvents(eventRows);
+      setContributions(Array.isArray(nextContributions) ? nextContributions : []);
       setVelocity({
-        currentVelocity: Number(((doneCount / totalTasks) * 10).toFixed(1)),
+        currentVelocity: Number((Number(summary?.velocity ?? ((doneCount / totalTasks) * 10))).toFixed(1)),
         requiredVelocity: Number((((totalTasks - doneCount) / Math.max(daysRemaining, 1))).toFixed(1)),
         gapPct: Number((((totalTasks - doneCount) / totalTasks) * 100).toFixed(1)),
-        onTrack: blockedTasks.length === 0,
+        onTrack: blockedTasks === 0,
         daysRemaining,
       });
       setAlerts({ items: alertItems });
       setRisk({
-        totalTasks: taskRows.length,
+        totalTasks: Number(summary?.totalTasks ?? taskRows.length),
         completed: doneCount,
         inProgress: taskRows.filter((task) => String(task.status || "").toLowerCase() === "in_progress").length,
-        blocked: blockedTasks.length,
+        blocked: blockedTasks,
         upcomingEvents: eventRows.length,
+        contributors: Array.isArray(nextContributions) ? nextContributions.length : 0,
       });
       setBurndown(burndownRows);
     } catch (err) {
@@ -186,6 +214,7 @@ export default function SprintDetailPage() {
       setAlerts(null);
       setRisk(null);
       setBurndown([]);
+      setContributions([]);
       setError(err instanceof Error ? err.message : "Failed to load sprint");
     } finally {
       setLoading(false);
@@ -200,7 +229,7 @@ export default function SprintDetailPage() {
   async function startSprint() {
     const resolvedSprintId = String(sprint?.id || sprintId || "").trim();
     if (!resolvedSprintId) return;
-    await invokeDesktop<Sprint>("sprint:update", {
+    await invokeDesktop<Sprint>("sprints:update", {
       sprintId: resolvedSprintId,
       changes: { status: "active" },
     });
@@ -210,7 +239,7 @@ export default function SprintDetailPage() {
   async function completeSprint() {
     const resolvedSprintId = String(sprint?.id || sprintId || "").trim();
     if (!resolvedSprintId) return;
-    await invokeDesktop<Sprint>("sprint:update", {
+    await invokeDesktop<Sprint>("sprints:update", {
       sprintId: resolvedSprintId,
       changes: { status: "completed" },
     });
@@ -219,6 +248,7 @@ export default function SprintDetailPage() {
 
   void tasks;
   void events;
+  void contributions;
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">

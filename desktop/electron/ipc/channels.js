@@ -92,7 +92,21 @@ const CHANNELS = {
   // Sprint listing and creation for /sprints route
   SPRINTS: {
     GET_ALL: "sprints:getAll",
-    CREATE: "sprints:create"
+    CREATE: "sprints:create",
+    GET_BY_ID: "sprints:getById",
+    GET_TASKS: "sprints:getTasks",
+    UPDATE: "sprints:update",
+    DELETE: "sprints:delete",
+    GET_SUMMARY: "sprints:getSummary",
+    GET_CONTRIBUTIONS: "sprints:getContributions"
+  },
+
+  // Daily standup workflow
+  STANDUP: {
+    GET_TODAY: "standup:getToday",
+    SUBMIT: "standup:submit",
+    GET_HISTORY: "standup:getHistory",
+    GENERATE_SUMMARY: "standup:generateSummary"
   },
 
   // Timeline channels

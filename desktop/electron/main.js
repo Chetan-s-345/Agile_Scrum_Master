@@ -1662,6 +1662,143 @@ function registerProfileHandlers() {
   });
 }
 
+function standupDbPath() {
+  return path.join(app.getPath("userData"), "standup.db.json");
+}
+
+function defaultStandupData() {
+  return {
+    entries: []
+  };
+}
+
+function readStandupData() {
+  try {
+    const filePath = standupDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultStandupData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return {
+      entries: Array.isArray(parsed?.entries) ? parsed.entries : []
+    };
+  } catch {
+    return defaultStandupData();
+  }
+}
+
+function writeStandupData(data) {
+  fs.writeFileSync(standupDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function standupDateKey(dateInput) {
+  const raw = String(dateInput || "").trim();
+  if (raw) {
+    const dt = new Date(raw);
+    if (Number.isFinite(dt.getTime())) {
+      return dt.toISOString().slice(0, 10);
+    }
+  }
+  return new Date().toISOString().slice(0, 10);
+}
+
+function standupSummaryText(entries, date) {
+  const rows = Array.isArray(entries) ? entries : [];
+  if (!rows.length) {
+    return `Standup summary for ${date}: No updates submitted.`;
+  }
+
+  const lines = [`Standup summary for ${date}`];
+  for (const row of rows) {
+    const name = String(row.userName || row.userId || "Team member");
+    const yesterday = String(row.yesterday || "No update").trim();
+    const today = String(row.today || "No update").trim();
+    const blockers = String(row.blockers || "None").trim();
+    lines.push(`- ${name}: Yesterday ${yesterday}; Today ${today}; Blockers ${blockers}.`);
+  }
+  return lines.join("\n");
+}
+
+function registerStandupHandlers() {
+  ipcMain.handle(CHANNELS.STANDUP.GET_TODAY, async () => {
+    try {
+      const date = standupDateKey();
+      const data = readStandupData();
+      const items = data.entries.filter((entry) => String(entry.date || "") === date);
+      return IPCResponse.success(items);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load today's standup entries", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.STANDUP.SUBMIT, async (_event, payload = {}) => {
+    try {
+      const userId = String(payload.userId || "").trim();
+      const yesterday = String(payload.yesterday || "").trim();
+      const today = String(payload.today || "").trim();
+      const blockers = String(payload.blockers || "").trim();
+
+      if (!userId) return IPCResponse.validation("userId", "userId is required");
+      if (!yesterday && !today && !blockers) {
+        return IPCResponse.validation("today", "At least one standup field is required");
+      }
+
+      const profile = readProfileData();
+      const date = standupDateKey();
+      const data = readStandupData();
+      const idx = data.entries.findIndex((entry) => String(entry.userId || "") === userId && String(entry.date || "") === date);
+      const userName = String(profile?.userProfile?.displayName || profile?.userProfile?.name || userId);
+
+      const nextEntry = {
+        id: idx >= 0 ? String(data.entries[idx].id || `standup-${Date.now()}`) : `standup-${Date.now()}`,
+        date,
+        userId,
+        userName,
+        yesterday,
+        today,
+        blockers,
+        submittedAt: new Date().toISOString()
+      };
+
+      if (idx >= 0) {
+        data.entries[idx] = nextEntry;
+      } else {
+        data.entries.push(nextEntry);
+      }
+      writeStandupData(data);
+      return IPCResponse.success(nextEntry);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to submit standup", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.STANDUP.GET_HISTORY, async (_event, payload = {}) => {
+    try {
+      const date = standupDateKey(payload.date);
+      const data = readStandupData();
+      const items = data.entries.filter((entry) => String(entry.date || "") === date);
+      return IPCResponse.success(items);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load standup history", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.STANDUP.GENERATE_SUMMARY, async (_event, payload = {}) => {
+    try {
+      const date = standupDateKey(payload.date);
+      const data = readStandupData();
+      const items = data.entries.filter((entry) => String(entry.date || "") === date);
+      const summary = standupSummaryText(items, date);
+      return IPCResponse.success({ summary });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to generate standup summary", String(error));
+    }
+  });
+}
+
 function sprintOverviewDbPath() {
   return path.join(app.getPath("userData"), "sprint.overview.db.json");
 }
@@ -1926,6 +2063,22 @@ function registerSprintHandlers() {
 }
 
 function registerSprintsHandlers() {
+  function getSprintProjectMaps() {
+    const projects = readProjectsData();
+    const projectNameById = new Map((Array.isArray(projects.projects) ? projects.projects : []).map((p) => [String(p.id || ""), String(p.name || "")]));
+    const projectBySprintId = new Map();
+    for (const [projectId, list] of Object.entries(projects.sprintsByProject || {})) {
+      const rows = Array.isArray(list) ? list : [];
+      for (const item of rows) {
+        const sprintId = String(item?.id || "").trim();
+        if (sprintId) {
+          projectBySprintId.set(sprintId, String(projectId || ""));
+        }
+      }
+    }
+    return { projects, projectBySprintId, projectNameById };
+  }
+
   ipcMain.handle(CHANNELS.SPRINTS.GET_ALL, async (_event, payload = {}) => {
     try {
       const statusFilter = String(payload.status || "").trim().toLowerCase();
@@ -1934,18 +2087,7 @@ function registerSprintsHandlers() {
       const endFilter = String(payload.endDate || "").trim();
 
       const overview = readSprintOverviewData();
-      const projects = readProjectsData();
-      const projectNameById = new Map((Array.isArray(projects.projects) ? projects.projects : []).map((p) => [String(p.id || ""), String(p.name || "")]))
-      const projectBySprintId = new Map();
-      for (const [projectId, list] of Object.entries(projects.sprintsByProject || {})) {
-        const rows = Array.isArray(list) ? list : [];
-        for (const item of rows) {
-          const sprintId = String(item?.id || "").trim();
-          if (sprintId) {
-            projectBySprintId.set(sprintId, String(projectId || ""));
-          }
-        }
-      }
+      const { projectBySprintId, projectNameById } = getSprintProjectMaps();
 
       const startMs = startFilter ? new Date(startFilter).getTime() : NaN;
       const endMs = endFilter ? new Date(endFilter).getTime() : NaN;
@@ -2000,6 +2142,220 @@ function registerSprintsHandlers() {
       return IPCResponse.success(items);
     } catch (error) {
       return IPCResponse.internalError("Failed to load sprints", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.GET_BY_ID, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const overview = readSprintOverviewData();
+      const sprint = overview.sprints?.[sprintId] || null;
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const { projectBySprintId, projectNameById } = getSprintProjectMaps();
+      const projectId = String(projectBySprintId.get(sprintId) || "");
+
+      return IPCResponse.success({
+        ...sprint,
+        projectId,
+        projectName: projectNameById.get(projectId) || ""
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint by id", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.GET_TASKS, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const overview = readSprintOverviewData();
+      if (!overview.sprints?.[sprintId]) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const tasks = Array.isArray(overview.tasksBySprint?.[sprintId]) ? overview.tasksBySprint[sprintId] : [];
+      return IPCResponse.success(tasks);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint tasks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.GET_SUMMARY, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const overview = readSprintOverviewData();
+      const sprint = overview.sprints?.[sprintId] || null;
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const tasks = Array.isArray(overview.tasksBySprint?.[sprintId]) ? overview.tasksBySprint[sprintId] : [];
+      const done = tasks.filter((task) => {
+        const normalized = String(task.status || "").trim().toLowerCase();
+        return normalized === "done" || normalized === "completed";
+      }).length;
+      const total = tasks.length;
+      const plannedPoints = Math.max(0, Number(sprint.plannedPoints || 0));
+      const completedPoints = Math.max(0, Number(sprint.completedPoints || 0));
+      const completionPct = total > 0 ? Math.round((done / total) * 100) : 0;
+      const eventRows = Array.isArray(overview.eventsBySprint?.[sprintId]) ? overview.eventsBySprint[sprintId] : [];
+
+      return IPCResponse.success({
+        sprintId,
+        totalTasks: total,
+        completedTasks: done,
+        blockedTasks: tasks.filter((task) => String(task.status || "").toLowerCase() === "blocked").length,
+        plannedPoints,
+        completedPoints,
+        velocity: completedPoints,
+        completionPct,
+        burndown: {
+          idealRemaining: Math.max(0, total - done),
+          actualRemaining: Math.max(0, total - done)
+        },
+        upcomingEvents: eventRows
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint summary", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.GET_CONTRIBUTIONS, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const overview = readSprintOverviewData();
+      if (!overview.sprints?.[sprintId]) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const tasks = Array.isArray(overview.tasksBySprint?.[sprintId]) ? overview.tasksBySprint[sprintId] : [];
+      const byMember = new Map();
+      for (const task of tasks) {
+        const memberName = String(task.assignee || "Unassigned");
+        const current = byMember.get(memberName) || {
+          memberId: memberName.toLowerCase().replace(/\s+/g, "-"),
+          name: memberName,
+          tasksCompleted: 0,
+          totalTasks: 0,
+          pointsCompleted: 0
+        };
+        current.totalTasks += 1;
+        const status = String(task.status || "").toLowerCase();
+        if (status === "done" || status === "completed") {
+          current.tasksCompleted += 1;
+          current.pointsCompleted += Math.max(0, Number(task.story_points || 0));
+        }
+        byMember.set(memberName, current);
+      }
+
+      return IPCResponse.success(Array.from(byMember.values()));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint contributions", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.UPDATE, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+      if (!changes) {
+        return IPCResponse.validation("changes", "changes is required");
+      }
+
+      const overview = readSprintOverviewData();
+      const current = overview.sprints?.[sprintId] || null;
+      if (!current) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const next = applySprintChanges(current, changes);
+      const status = String(next.status || "").trim().toLowerCase();
+      if (status && !["planning", "active", "completed", "cancelled"].includes(status)) {
+        return IPCResponse.validation("status", "status must be planning|active|completed|cancelled");
+      }
+      if (!String(next.name || "").trim()) {
+        return IPCResponse.validation("name", "name cannot be empty");
+      }
+
+      overview.sprints[sprintId] = next;
+      writeSprintOverviewData(overview);
+
+      const projects = readProjectsData();
+      for (const [projectId, list] of Object.entries(projects.sprintsByProject || {})) {
+        const rows = Array.isArray(list) ? list : [];
+        const rowIndex = rows.findIndex((row) => String(row?.id || "") === sprintId);
+        if (rowIndex >= 0) {
+          rows[rowIndex] = {
+            ...rows[rowIndex],
+            id: sprintId,
+            name: String(next.name || ""),
+            status: String(next.status || "planning"),
+            startDate: String(next.startDate || ""),
+            endDate: String(next.endDate || "")
+          };
+          projects.sprintsByProject[projectId] = rows;
+          break;
+        }
+      }
+      writeProjectsData(projects);
+
+      return IPCResponse.success(next);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update sprint", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.DELETE, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const overview = readSprintOverviewData();
+      if (!overview.sprints?.[sprintId]) {
+        return IPCResponse.notFound("Sprint");
+      }
+      delete overview.sprints[sprintId];
+      delete overview.tasksBySprint[sprintId];
+      delete overview.eventsBySprint[sprintId];
+      if (String(overview.currentSprintId || "") === sprintId) {
+        const remainingIds = Object.keys(overview.sprints || {});
+        overview.currentSprintId = remainingIds.length ? remainingIds[0] : "";
+      }
+      writeSprintOverviewData(overview);
+
+      const projects = readProjectsData();
+      for (const [projectId, list] of Object.entries(projects.sprintsByProject || {})) {
+        const rows = Array.isArray(list) ? list : [];
+        projects.sprintsByProject[projectId] = rows.filter((row) => String(row?.id || "") !== sprintId);
+      }
+      writeProjectsData(projects);
+
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete sprint", String(error));
     }
   });
 
@@ -5226,6 +5582,7 @@ app.whenReady().then(() => {
   registerMonitoringHandlers();
   registerOnboardingHandlers();
   registerProfileHandlers();
+  registerStandupHandlers();
   registerSprintHandlers();
   registerSprintsHandlers();
   registerSprintPlanHandlers();
