@@ -170,6 +170,127 @@ const CHANNELS = {
     RESUME_SYNC: "sync:resumeSync"
   },
 
+  // Goals and key results
+  GOALS: {
+    GET_ALL: "goals:getAll",
+    CREATE: "goals:create",
+    UPDATE: "goals:update",
+    UPDATE_PROGRESS: "goals:updateProgress",
+    DELETE: "goals:delete"
+  },
+
+  // Third-party integration hub
+  INTEGRATIONS: {
+    GET_ALL: "integrations:getAll",
+    CONNECT: "integrations:connect",
+    DISCONNECT: "integrations:disconnect",
+    SYNC_NOW: "integrations:syncNow"
+  },
+
+  // GitHub repository management
+  GITHUB: {
+    GET_AVAILABLE_REPOS: "github:getAvailableRepos",
+    GET_LINKED_REPOS: "github:getLinkedRepos",
+    TOGGLE_REPO_SYNC: "github:toggleRepoSync",
+    LINK_REPO_TO_PROJECT: "github:linkRepoToProject",
+    BULK_TOGGLE: "github:bulkToggle"
+  },
+
+  // Monitoring and operational diagnostics
+  MONITORING: {
+    GET_HEALTH_STATUS: "monitoring:getHealthStatus",
+    GET_ERROR_LOGS: "monitoring:getErrorLogs",
+    GET_WEBHOOK_DLQ: "monitoring:getWebhookDLQ",
+    RETRY_WEBHOOK: "monitoring:retryWebhook",
+    GET_JIRA_SYNC_LOGS: "monitoring:getJiraSyncLogs"
+  },
+
+  // Onboarding workflow
+  ONBOARDING: {
+    GET_STATUS: "onboarding:getStatus",
+    MARK_STEP_COMPLETE: "onboarding:markStepComplete",
+    SKIP_STEP: "onboarding:skipStep",
+    RESET: "onboarding:reset"
+  },
+
+  // User profile management
+  PROFILE: {
+    GET_CURRENT: "profile:getCurrent",
+    UPDATE: "profile:update",
+    CHANGE_PASSWORD: "profile:changePassword",
+    UPLOAD_AVATAR: "profile:uploadAvatar",
+    GET_ACTIVITY_STATS: "profile:getActivityStats"
+  },
+
+  // Project detail and management
+  PROJECTS: {
+    GET_BY_ID: "projects:getById",
+    GET_SPRINTS: "projects:getSprints",
+    GET_MEMBERS: "projects:getMembers",
+    ADD_MEMBER: "projects:addMember",
+    UPDATE: "projects:update",
+    ARCHIVE: "projects:archive"
+  },
+
+  // Sprint reports and velocity analytics
+  REPORTS: {
+    GET_ALL: "reports:getAll",
+    GENERATE: "reports:generate",
+    GET_VELOCITY_HISTORY: "reports:getVelocityHistory",
+    GET_BY_SPRINT_ID: "reports:getBySprintId",
+    UPDATE_RETRO_NOTES: "reports:updateRetroNotes",
+    EXPORT_PDF: "reports:exportPDF"
+  },
+
+  // Scrum Master control center
+  SCRUM_MASTER: {
+    GET_AGENDA: "scrumMaster:getAgenda",
+    GET_IMPEDIMENTS: "scrumMaster:getImpediments",
+    RESOLVE_IMPEDIMENT: "scrumMaster:resolveImpediment",
+    GET_SPRINT_HEALTH: "scrumMaster:getSprintHealth",
+    RUN_AGENT_ACTION: "scrumMaster:runAgentAction",
+    ANALYZE_TASK: "scrumMaster:analyzeTask"
+  },
+
+  // Task detail and task-level collaboration
+  TASKS: {
+    GET_BY_ID: "tasks:getById",
+    GET_ACTIVITY_LOG: "tasks:getActivityLog",
+    ADD_BLOCKER: "tasks:addBlocker",
+    REMOVE_BLOCKER: "tasks:removeBlocker",
+    ADD_COMMENT: "tasks:addComment"
+  },
+
+  // Agent detail, chat, and runtime controls
+  AGENT: {
+    GET_BY_ID: "agent:getById",
+    GET_CONVERSATION: "agent:getConversation",
+    SEND_MESSAGE: "agent:sendMessage",
+    GET_ACTION_LOG: "agent:getActionLog",
+    TOGGLE_RUN: "agent:toggleRun",
+    UPDATE_CONFIG: "agent:updateConfig",
+    DELETE: "agent:delete"
+  },
+
+  // Billing and subscription settings
+  BILLING: {
+    GET_PLAN: "billing:getPlan",
+    GET_PAYMENT_METHOD: "billing:getPaymentMethod",
+    GET_INVOICES: "billing:getInvoices",
+    GET_USAGE: "billing:getUsage",
+    GET_BILLING_PORTAL_URL: "billing:getBillingPortalUrl"
+  },
+
+  // Organization developer/seat management
+  DEVELOPERS: {
+    GET_ORG_MEMBERS: "developers:getOrgMembers",
+    UPDATE_ROLE: "developers:updateRole",
+    REMOVE_FROM_ORG: "developers:removeFromOrg",
+    INVITE_TO_ORG: "developers:inviteToOrg",
+    GET_PENDING_INVITATIONS: "developers:getPendingInvitations",
+    REVOKE_INVITATION: "developers:revokeInvitation"
+  },
+
   // Events (one-way from main to renderer)
   EVENTS: {
     UPDATE_STATUS: "updates:status",
