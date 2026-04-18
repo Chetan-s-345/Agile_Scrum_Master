@@ -31,6 +31,23 @@ function deriveExpiresAt(accessToken) {
   return exp * 1000;
 }
 
+function sanitizeUser(rawUser) {
+  if (!rawUser || typeof rawUser !== "object") return null;
+
+  const id = asString(rawUser.id || rawUser.userId || rawUser.sub);
+  const email = asString(rawUser.email || rawUser.username || rawUser.preferred_username || rawUser.upn);
+  const fullName = asString(rawUser.fullName || rawUser.name || rawUser.displayName || rawUser.given_name);
+
+  if (!id && !email && !fullName) return null;
+  return { id, email, fullName };
+}
+
+function deriveUserFromToken(accessToken) {
+  const payload = decodeJwtPayload(accessToken);
+  if (!payload || typeof payload !== "object") return null;
+  return sanitizeUser(payload);
+}
+
 function getSessionFilePath() {
   return path.join(app.getPath("userData"), SESSION_FILE_NAME);
 }
@@ -39,13 +56,13 @@ function sanitizeSession(raw) {
   const accessToken = asString(raw?.accessToken || raw?.token);
   if (!accessToken) return null;
 
-  const user = raw?.user && typeof raw.user === "object"
-    ? {
-        id: asString(raw.user.id),
-        email: asString(raw.user.email),
-        fullName: asString(raw.user.fullName),
-      }
-    : null;
+  const userFromInput = sanitizeUser(raw?.user);
+  const userFromToken = deriveUserFromToken(accessToken);
+  const user = sanitizeUser({
+    id: userFromInput?.id || userFromToken?.id,
+    email: userFromInput?.email || userFromToken?.email,
+    fullName: userFromInput?.fullName || userFromToken?.fullName,
+  });
 
   const expiresAtInput = Number(raw?.expiresAt);
   const expiresAt = Number.isFinite(expiresAtInput) && expiresAtInput > 0
@@ -185,9 +202,14 @@ function processDesktopAuthCallback(rawUrl) {
   };
 }
 
-function registerAuthIpcHandlers(ipcMain) {
+function registerAuthIpcHandlers(ipcMain, options = {}) {
+  const onSessionChanged = typeof options.onSessionChanged === "function" ? options.onSessionChanged : null;
+
   ipcMain.handle(CHANNELS.AUTH.SAVE_SESSION, async (_event, payload) => {
     const saved = saveSession(payload);
+    if (onSessionChanged) {
+      onSessionChanged({ authenticated: true });
+    }
     return {
       authenticated: true,
       session: {
@@ -204,6 +226,9 @@ function registerAuthIpcHandlers(ipcMain) {
 
   ipcMain.handle(CHANNELS.AUTH.CLEAR_SESSION, async () => {
     clearSession();
+    if (onSessionChanged) {
+      onSessionChanged({ authenticated: false });
+    }
     return { authenticated: false, session: null, reason: "cleared" };
   });
 

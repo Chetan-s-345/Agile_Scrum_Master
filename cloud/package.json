@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "concurrently -k \"npm run dev:web\" \"npm run dev:api\"",
+    "dev:web": "next dev -p 3000",
+    "dev:api": "npm run dev --prefix backend/api-gateway",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -38,6 +40,7 @@
     "zustand": "^4.4.7"
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "@tailwindcss/postcss": "^4",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
