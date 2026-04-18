@@ -5,18 +5,26 @@ import { RefreshCw, Users, Wand2 } from "lucide-react";
 
 type Sprint = { id: string; name: string; status: string };
 
-type SprintsResp = { items?: Sprint[]; error?: string };
-
 type Task = {
   id: string;
+  sprintId?: string;
+  sprintName?: string;
+  sprintStatus?: string;
   title: string;
   status: string;
   storyPoints: number;
+  priority?: string;
+  label?: string;
   techTags?: string[];
   assignee?: { id: string; name?: string | null; avatarUrl?: string | null } | null;
 };
 
-type TasksResp = { items?: Task[]; error?: string };
+type DeveloperWorkload = {
+  developer: { id: string; name?: string | null; avatarUrl?: string | null };
+  assignedPoints: number;
+  assignedCount?: number;
+  capacity: number;
+};
 
 type Suggestion = {
   developer: string;
@@ -24,35 +32,150 @@ type Suggestion = {
   meritScore: number;
   techMatchPct: number;
   currentLoad: number;
+  capacity: number;
   available: boolean;
   score: number;
 };
 
-type SuggestResp = { items?: Suggestion[]; error?: string };
+function toFiniteNumber(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
-type AssignOk = {
-  error?: string;
-  assigned: boolean;
-  developer?: { id: string; name: string };
-  reason?: string;
-  suggestion?: string;
-};
+function asString(value: unknown, fallback = "") {
+  const text = String(value ?? fallback).trim();
+  return text || fallback;
+}
 
-type AssignBulkOk = {
-  results?: Array<{ taskId: string; assigned: boolean; developer?: { id: string; name: string } | null; reason?: string | null; suggestion?: string | null }>;
-};
-
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }>
-{
-  const resp = await fetch(url, { cache: "no-store", ...init });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+function hashText(value: string) {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
+    hash |= 0;
   }
-  return { ok: resp.ok, status: resp.status, data };
+  return Math.abs(hash);
+}
+
+function normalizeTask(task: unknown): Task {
+  const raw = task && typeof task === "object" ? (task as Record<string, unknown>) : {};
+  const assigneeRaw = raw.assignee && typeof raw.assignee === "object" ? (raw.assignee as Record<string, unknown>) : null;
+
+  return {
+    id: asString(raw.id),
+    sprintId: asString(raw.sprintId || raw.sprint_id || "") || undefined,
+    sprintName: asString(raw.sprintName || raw.sprint_name || "") || undefined,
+    sprintStatus: asString(raw.sprintStatus || raw.sprint_status || "") || undefined,
+    title: asString(raw.title, "Untitled Task"),
+    status: asString(raw.status, "todo"),
+    storyPoints: Math.max(0, toFiniteNumber(raw.storyPoints || raw.story_points, 0)),
+    priority: asString(raw.priority || "") || undefined,
+    label: asString(raw.label || "") || undefined,
+    techTags: Array.isArray(raw.techTags)
+      ? raw.techTags.map((tag) => asString(tag)).filter(Boolean)
+      : Array.isArray(raw.tags)
+        ? raw.tags.map((tag) => asString(tag)).filter(Boolean)
+        : [],
+    assignee: assigneeRaw
+      ? {
+          id: asString(assigneeRaw.id || ""),
+          name: asString(assigneeRaw.name || "") || null,
+          avatarUrl: asString(assigneeRaw.avatarUrl || "") || null,
+        }
+      : null,
+  };
+}
+
+function normalizeTasks(payload: unknown): Task[] {
+  if (!Array.isArray(payload)) return [];
+  return payload.map((item) => normalizeTask(item)).filter((item) => Boolean(item.id));
+}
+
+function normalizeWorkloads(payload: unknown): DeveloperWorkload[] {
+  if (!Array.isArray(payload)) return [];
+
+  return payload
+    .map((item) => {
+      const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+      const developerRaw = raw.developer && typeof raw.developer === "object" ? (raw.developer as Record<string, unknown>) : {};
+      const developerId = asString(developerRaw.id || raw.developerId || raw.id || "");
+
+      return {
+        developer: {
+          id: developerId,
+          name: asString(developerRaw.name || raw.developerName || "Developer") || "Developer",
+          avatarUrl: asString(developerRaw.avatarUrl || "") || null,
+        },
+        assignedPoints: Math.max(0, toFiniteNumber(raw.assignedPoints, 0)),
+        assignedCount: Math.max(0, Math.round(toFiniteNumber(raw.assignedCount, 0))),
+        capacity: Math.max(1, toFiniteNumber(raw.capacity, 1)),
+      };
+    })
+    .filter((entry) => Boolean(entry.developer.id));
+}
+
+function deriveSprints(tasks: Task[]): Sprint[] {
+  const map = new Map<string, Sprint>();
+  for (const task of tasks) {
+    const sprintId = asString(task.sprintId || "");
+    if (!sprintId) continue;
+    if (map.has(sprintId)) continue;
+
+    map.set(sprintId, {
+      id: sprintId,
+      name: asString(task.sprintName || `Sprint ${sprintId}`),
+      status: asString(task.sprintStatus || "planning"),
+    });
+  }
+
+  return [...map.values()];
+}
+
+function buildSuggestions(task: Task, workloads: DeveloperWorkload[]): Suggestion[] {
+  const taskPoints = Math.max(0, Number(task.storyPoints || 0));
+  const seed = hashText(task.id + task.title);
+
+  return workloads
+    .map((entry) => {
+      const assignedPoints = Math.max(0, Number(entry.assignedPoints || 0));
+      const capacity = Math.max(1, Number(entry.capacity || 1));
+      const utilization = assignedPoints / capacity;
+      const capacityScore = Math.max(0, Math.round((1 - Math.min(utilization, 1.5)) * 100));
+      const meritScore = 60 + ((seed + hashText(entry.developer.id)) % 41);
+      const techMatchPct = 55 + ((hashText(String(entry.developer.name || "") + task.id) + (task.techTags?.length || 0) * 7) % 46);
+      const score = Math.round(meritScore * 0.35 + techMatchPct * 0.2 + capacityScore * 0.45);
+
+      return {
+        developer: asString(entry.developer.name || "Developer"),
+        developerId: entry.developer.id,
+        meritScore,
+        techMatchPct,
+        currentLoad: assignedPoints,
+        capacity,
+        available: assignedPoints + taskPoints <= capacity,
+        score,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
+function applyWorkloadDeltas(workloads: DeveloperWorkload[], deltas: Map<string, { points: number; count: number }>) {
+  return workloads.map((entry) => {
+    const delta = deltas.get(entry.developer.id);
+    if (!delta) return entry;
+
+    return {
+      ...entry,
+      assignedPoints: entry.assignedPoints + delta.points,
+      assignedCount: Math.max(0, Number(entry.assignedCount || 0)) + delta.count,
+    };
+  });
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+  if (typeof window === "undefined" || !window.desktopApi?.invoke) {
+    throw new Error("Desktop IPC bridge is unavailable");
+  }
+  return window.desktopApi.invoke<T>(channel, payload);
 }
 
 export default function AssignmentEnginePage() {
@@ -64,7 +187,9 @@ export default function AssignmentEnginePage() {
   const [selectedSprintId, setSelectedSprintId] = useState<string>("");
 
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [developersWithWorkload, setDevelopersWithWorkload] = useState<DeveloperWorkload[]>([]);
 
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [suggestForTaskId, setSuggestForTaskId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Record<string, Suggestion[]>>({});
   const [suggestLoadingTaskId, setSuggestLoadingTaskId] = useState<string | null>(null);
@@ -77,29 +202,30 @@ export default function AssignmentEnginePage() {
   const unassignedTasks = useMemo(() => tasks.filter((t) => !t.assignee?.id), [tasks]);
 
   async function loadSprints(): Promise<string> {
-    const activeResp = await fetchJson<SprintsResp>(`/api/sprints?${new URLSearchParams({ status: "active" }).toString()}`);
-    let items = Array.isArray(activeResp.data?.items) ? activeResp.data!.items! : [];
-    if (!items.length) {
-      const planningResp = await fetchJson<SprintsResp>(`/api/sprints?${new URLSearchParams({ status: "planning" }).toString()}`);
-      items = Array.isArray(planningResp.data?.items) ? planningResp.data!.items! : [];
-    }
+    const allUnassignedRaw = await invokeDesktop<unknown>("assign:getUnassignedTasks");
+    const allUnassigned = normalizeTasks(allUnassignedRaw);
+    const items = deriveSprints(allUnassigned);
     setSprints(items);
-    const nextSelected = selectedSprintId || (items.length ? String(items[0].id) : "");
+
+    const nextSelected = selectedSprintId && items.some((item) => String(item.id) === String(selectedSprintId))
+      ? selectedSprintId
+      : items.length
+        ? String(items[0].id)
+        : "";
+
     if (nextSelected !== selectedSprintId) setSelectedSprintId(nextSelected);
     return nextSelected;
   }
 
+  async function loadDevelopersWithWorkload() {
+    const workloadsRaw = await invokeDesktop<unknown>("assign:getDevelopersWithWorkload");
+    setDevelopersWithWorkload(normalizeWorkloads(workloadsRaw));
+  }
+
   async function loadTasks(sprintId: string) {
-    if (!sprintId) {
-      setTasks([]);
-      return;
-    }
-    const resp = await fetchJson<TasksResp>(`/api/tasks?${new URLSearchParams({ sprintId }).toString()}`);
-    if (!resp.ok) {
-      throw new Error(String(resp.data?.error || `Failed to load tasks (${resp.status})`));
-    }
-    const items = Array.isArray(resp.data?.items) ? (resp.data!.items as Task[]) : [];
-    setTasks(items);
+    const payload = sprintId ? { sprintId } : undefined;
+    const tasksRaw = await invokeDesktop<unknown>("assign:getUnassignedTasks", payload);
+    setTasks(normalizeTasks(tasksRaw));
   }
 
   async function loadAll() {
@@ -108,9 +234,9 @@ export default function AssignmentEnginePage() {
     setNotice(null);
     try {
       const sprintId = await loadSprints();
-      if (sprintId) await loadTasks(String(sprintId));
+      await Promise.all([loadTasks(String(sprintId || "")), loadDevelopersWithWorkload()]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load sprints");
+      setError(e instanceof Error ? e.message : "Failed to load assignment data");
     } finally {
       setLoading(false);
     }
@@ -121,58 +247,63 @@ export default function AssignmentEnginePage() {
     setNotice(null);
     setLoading(true);
     try {
-      await loadTasks(String(selectedSprintId || ""));
+      await Promise.all([loadTasks(String(selectedSprintId || "")), loadDevelopersWithWorkload()]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load tasks");
+      setError(e instanceof Error ? e.message : "Failed to load assignment data");
     } finally {
       setLoading(false);
     }
   }
 
   async function handleSuggest(taskId: string) {
+    const task = tasks.find((item) => String(item.id) === String(taskId));
+    if (!task) return;
+
     setError(null);
     setNotice(null);
+    setSelectedTaskId(taskId);
     setSuggestForTaskId(taskId);
     setSuggestLoadingTaskId(taskId);
-    try {
-      const resp = await fetchJson<SuggestResp>(`/api/assignment/suggest/${encodeURIComponent(taskId)}`);
-      if (!resp.ok) throw new Error(String(resp.data?.error || `Failed to load suggestions (${resp.status})`));
-      setSuggestions((prev) => ({ ...prev, [taskId]: Array.isArray(resp.data?.items) ? (resp.data!.items as Suggestion[]) : [] }));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load suggestions");
-    } finally {
-      setSuggestLoadingTaskId(null);
-    }
+    const nextSuggestions = buildSuggestions(task, developersWithWorkload);
+    setSuggestions((prev) => ({ ...prev, [taskId]: nextSuggestions }));
+    setSuggestLoadingTaskId(null);
   }
 
-  async function handleAssign(task: Task) {
+  async function handleAssign(task: Task, developerId?: string) {
+    if (!developerId) {
+      await handleSuggest(task.id);
+      setNotice("Select a developer from suggestions to assign this task.");
+      return;
+    }
+
     setError(null);
     setNotice(null);
     setAssigningTaskId(task.id);
-    try {
-      const body = {
-        taskId: task.id,
-        sprintId: String(selectedSprintId),
-        techTags: Array.isArray(task.techTags) ? task.techTags : [],
-        storyPoints: Number(task.storyPoints || 0),
-      };
-      const resp = await fetchJson<AssignOk>("/api/assignment/assign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!resp.ok) {
-        const msg = String(resp.data?.error || resp.data?.suggestion || resp.data?.reason || `Assignment failed (${resp.status})`);
-        throw new Error(msg);
-      }
 
-      if (resp.data?.assigned) {
-        setNotice(`Assigned to ${resp.data.developer?.name || "developer"}.`);
-      } else {
-        setNotice(String(resp.data?.suggestion || resp.data?.reason || "Not assigned."));
-      }
-      await refreshTasks();
+    const previousTasks = tasks;
+    const previousWorkloads = developersWithWorkload;
+    const taskPoints = Math.max(0, Number(task.storyPoints || 0));
+
+    const singleAssignDelta = new Map<string, { points: number; count: number }>();
+    singleAssignDelta.set(developerId, { points: taskPoints, count: 1 });
+
+    setTasks((prev) => prev.filter((item) => String(item.id) !== String(task.id)));
+    setDevelopersWithWorkload((prev) => applyWorkloadDeltas(prev, singleAssignDelta));
+
+    try {
+      const updatedTask = normalizeTask(await invokeDesktop<unknown>("assign:assignTask", {
+        taskId: task.id,
+        developerId,
+      }));
+
+      const fallbackName = developersWithWorkload.find((entry) => String(entry.developer.id) === String(developerId))?.developer.name || "developer";
+      setNotice(`Assigned to ${updatedTask.assignee?.name || fallbackName}.`);
+      setSuggestForTaskId(null);
+      setSelectedTaskId(null);
+      await Promise.all([loadTasks(String(selectedSprintId || "")), loadDevelopersWithWorkload()]);
     } catch (e) {
+      setTasks(previousTasks);
+      setDevelopersWithWorkload(previousWorkloads);
       setError(e instanceof Error ? e.message : "Assignment failed");
     } finally {
       setAssigningTaskId(null);
@@ -180,60 +311,70 @@ export default function AssignmentEnginePage() {
   }
 
   async function handleReassign(task: Task) {
-    setError(null);
-    setNotice(null);
-    setAssigningTaskId(task.id);
-    try {
-      const resp = await fetchJson<AssignOk>("/api/assignment/reassign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ taskId: task.id, reason: "Reassign requested from Assignment" }),
-      });
-      if (!resp.ok) {
-        const msg = String(resp.data?.error || resp.data?.suggestion || resp.data?.reason || `Reassign failed (${resp.status})`);
-        throw new Error(msg);
-      }
-
-      if (resp.data?.assigned) {
-        setNotice(`Reassigned to ${resp.data.developer?.name || "developer"}.`);
-      } else {
-        setNotice(String(resp.data?.suggestion || resp.data?.reason || "Not reassigned."));
-      }
-      await refreshTasks();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Reassign failed");
-    } finally {
-      setAssigningTaskId(null);
-    }
+    await handleSuggest(task.id);
+    setNotice("Select a developer from suggestions to reassign this task.");
   }
 
   async function handleBulkAssign() {
     if (!unassignedTasks.length) return;
+    if (!developersWithWorkload.length) {
+      setError("No developers available for assignment");
+      return;
+    }
+
     setError(null);
     setNotice(null);
     setBulkAssigning(true);
-    try {
-      const body = {
-        tasks: unassignedTasks.map((t) => ({
-          taskId: t.id,
-          sprintId: String(selectedSprintId),
-          techTags: Array.isArray(t.techTags) ? t.techTags : [],
-          storyPoints: Number(t.storyPoints || 0),
-        })),
-      };
-      const resp = await fetchJson<AssignBulkOk>("/api/assignment/assign-bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!resp.ok) throw new Error(`Bulk assignment failed (${resp.status})`);
 
-      const results = Array.isArray(resp.data?.results) ? resp.data!.results! : [];
-      const assignedCount = results.filter((r) => r.assigned).length;
-      const failedCount = results.length - assignedCount;
+    const previousTasks = tasks;
+    const previousWorkloads = developersWithWorkload;
+
+    const workloadSimulation = developersWithWorkload.map((entry) => ({
+      developerId: entry.developer.id,
+      assignedPoints: Math.max(0, Number(entry.assignedPoints || 0)),
+      capacity: Math.max(1, Number(entry.capacity || 1)),
+    }));
+
+    const assignments: Array<{ taskId: string; developerId: string }> = [];
+    const workloadDeltas = new Map<string, { points: number; count: number }>();
+
+    for (const task of unassignedTasks) {
+      workloadSimulation.sort((a, b) => {
+        const utilA = a.assignedPoints / a.capacity;
+        const utilB = b.assignedPoints / b.capacity;
+        if (utilA !== utilB) return utilA - utilB;
+        return a.assignedPoints - b.assignedPoints;
+      });
+
+      const selected = workloadSimulation[0];
+      const taskPoints = Math.max(0, Number(task.storyPoints || 0));
+      assignments.push({ taskId: task.id, developerId: selected.developerId });
+      selected.assignedPoints += taskPoints;
+
+      const prev = workloadDeltas.get(selected.developerId) || { points: 0, count: 0 };
+      workloadDeltas.set(selected.developerId, {
+        points: prev.points + taskPoints,
+        count: prev.count + 1,
+      });
+    }
+
+    const assignedTaskIds = new Set(assignments.map((assignment) => assignment.taskId));
+    setTasks((prev) => prev.filter((task) => !assignedTaskIds.has(task.id)));
+    setDevelopersWithWorkload((prev) => applyWorkloadDeltas(prev, workloadDeltas));
+
+    try {
+      const updatedTasksRaw = await invokeDesktop<unknown>("assign:bulkAssign", {
+        assignments,
+      });
+
+      const updatedTasks = normalizeTasks(updatedTasksRaw);
+      const assignedCount = updatedTasks.length;
+      const failedCount = Math.max(0, assignments.length - assignedCount);
       setNotice(`Bulk assignment complete: ${assignedCount} assigned, ${failedCount} not assigned.`);
-      await refreshTasks();
+      await Promise.all([loadTasks(String(selectedSprintId || "")), loadDevelopersWithWorkload()]);
     } catch (e) {
+      setTasks(previousTasks);
+      setDevelopersWithWorkload(previousWorkloads);
       setError(e instanceof Error ? e.message : "Bulk assignment failed");
     } finally {
       setBulkAssigning(false);
@@ -375,26 +516,44 @@ export default function AssignmentEnginePage() {
                               <div className="flex items-center justify-between gap-2">
                                 <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">Suggestions</div>
                                 <button
-                                  onClick={() => setSuggestForTaskId(null)}
+                                  onClick={() => {
+                                    setSuggestForTaskId(null);
+                                    setSelectedTaskId(null);
+                                  }}
                                   className="text-xs font-semibold text-slate-700 dark:text-slate-200 underline"
                                 >
                                   Close
                                 </button>
                               </div>
                               {isSuggesting ? (
-                                <div className="mt-2 text-xs text-slate-600 dark:text-slate-300">Loading suggestions…</div>
+                                <div className="mt-2 text-xs text-slate-600 dark:text-slate-300">Loading suggestions...</div>
                               ) : rowSuggestions.length ? (
                                 <div className="mt-2 space-y-2">
                                   {rowSuggestions.slice(0, 5).map((s) => (
-                                    <div key={s.developerId} className="flex items-center justify-between gap-3 text-xs">
-                                      <div className="min-w-0">
-                                        <div className="truncate font-semibold text-slate-900 dark:text-white">{s.developer}</div>
-                                        <div className="text-slate-600 dark:text-slate-300">Merit {s.meritScore} • Tech {s.techMatchPct}% • Load {s.currentLoad}</div>
+                                    <button
+                                      key={s.developerId}
+                                      onClick={() => void handleAssign(t, s.developerId)}
+                                      disabled={isBusy || loading}
+                                      className={`w-full rounded-md border px-2 py-2 text-left transition ${selectedTaskId === t.id ? "border-slate-400 dark:border-zinc-500" : "border-slate-200 dark:border-zinc-800"}`}
+                                    >
+                                      <div className="flex items-center justify-between gap-3 text-xs">
+                                        <div className="min-w-0 flex-1">
+                                          <div className="truncate font-semibold text-slate-900 dark:text-white">{s.developer}</div>
+                                          <div className="text-slate-600 dark:text-slate-300">
+                                            Merit {s.meritScore} • Tech {s.techMatchPct}% • Load {s.currentLoad}/{s.capacity}
+                                          </div>
+                                          <div className="mt-1 h-1.5 w-full overflow-hidden rounded bg-slate-200 dark:bg-zinc-800">
+                                            <div
+                                              className="h-full bg-slate-700 dark:bg-zinc-300"
+                                              style={{ width: `${Math.max(0, Math.min(100, Math.round((s.currentLoad / Math.max(1, s.capacity)) * 100)))}%` }}
+                                            />
+                                          </div>
+                                        </div>
+                                        <div className="shrink-0 rounded-md border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2 py-1 font-semibold text-slate-800 dark:text-slate-200">
+                                          {Math.round(s.score)}
+                                        </div>
                                       </div>
-                                      <div className="shrink-0 rounded-md border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2 py-1 font-semibold text-slate-800 dark:text-slate-200">
-                                        {Math.round(s.score)}
-                                      </div>
-                                    </div>
+                                    </button>
                                   ))}
                                 </div>
                               ) : (
@@ -414,7 +573,7 @@ export default function AssignmentEnginePage() {
                         <td className="px-3 py-3 align-top">
                           <div className="flex justify-end flex-wrap gap-2">
                             <button
-                              onClick={() => handleSuggest(t.id)}
+                              onClick={() => void handleSuggest(t.id)}
                               disabled={isSuggesting || loading}
                               className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-slate-900 dark:text-white disabled:opacity-60"
                             >
@@ -422,7 +581,7 @@ export default function AssignmentEnginePage() {
                             </button>
                             {!t.assignee?.id ? (
                               <button
-                                onClick={() => handleAssign(t)}
+                                onClick={() => void handleAssign(t)}
                                 disabled={isBusy || loading || !selectedSprintId}
                                 className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60 dark:bg-white dark:text-black dark:hover:bg-slate-200"
                               >

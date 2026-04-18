@@ -4,6 +4,110 @@
  */
 
 const CHANNELS = {
+  // Dashboard overview channels
+  DASHBOARD: {
+    GET_SUMMARY: "dashboard:getSummary",
+    GET_RECENT_ACTIVITY: "dashboard:getRecentActivity",
+    GET_BURNDOWN_DATA: "dashboard:getBurndownData"
+  },
+
+  // Assignment channels
+  ASSIGN: {
+    GET_UNASSIGNED_TASKS: "assign:getUnassignedTasks",
+    GET_DEVELOPERS_WITH_WORKLOAD: "assign:getDevelopersWithWorkload",
+    ASSIGN_TASK: "assign:assignTask",
+    BULK_ASSIGN: "assign:bulkAssign"
+  },
+
+  // Assignment overview channels
+  ASSIGNMENT: {
+    GET_ALL_ASSIGNMENTS: "assignment:getAllAssignments",
+    REASSIGN_TASK: "assignment:reassignTask",
+    GET_SPRINT_LIST: "assignment:getSprintList"
+  },
+
+  // Admin control panel channels
+  ADMIN: {
+    GET_USERS: "admin:getUsers",
+    UPDATE_USER_ROLE: "admin:updateUserRole",
+    REMOVE_USER: "admin:removeUser",
+    GET_AUDIT_LOGS: "admin:getAuditLogs",
+    GET_FEATURE_FLAGS: "admin:getFeatureFlags",
+    TOGGLE_FEATURE_FLAG: "admin:toggleFeatureFlag"
+  },
+
+  // Backlog channels
+  BACKLOG: {
+    GET_ITEMS: "backlog:getItems",
+    CREATE_ITEM: "backlog:createItem",
+    UPDATE_ITEM: "backlog:updateItem",
+    REORDER_ITEMS: "backlog:reorderItems",
+    ADD_TO_SPRINT: "backlog:addToSprint",
+    BULK_UPDATE: "backlog:bulkUpdate",
+    DELETE_ITEM: "backlog:deleteItem",
+    BULK_DELETE: "backlog:bulkDelete"
+  },
+
+  // Board channels
+  BOARD: {
+    GET_SPRINT_BACKLOG: "board:getSprintBacklog",
+    MOVE_TO_BOARD: "board:moveToBoard",
+    GET_TASKS_WITH_PRS: "board:getTasksWithPRs",
+    LINK_PR: "board:linkPR",
+    UNLINK_PR: "board:unlinkPR"
+  },
+
+  // Forms channels
+  FORMS: {
+    GET_TEMPLATES: "forms:getTemplates",
+    GET_TASK_FORMS: "forms:getTaskForms",
+    SUBMIT_FORM: "forms:submitForm",
+    ATTACH_TEMPLATE: "forms:attachTemplate"
+  },
+
+  // Pages channels
+  PAGES: {
+    GET_LIST: "pages:getList",
+    GET_CONTENT: "pages:getContent",
+    CREATE_PAGE: "pages:createPage",
+    UPDATE_PAGE: "pages:updatePage",
+    DELETE_PAGE: "pages:deletePage"
+  },
+
+  // Sprint analytics channels
+  SPRINT: {
+    GET_SUMMARY: "sprint:getSummary",
+    GET_BURNDOWN: "sprint:getBurndown",
+    GET_VELOCITY_HISTORY: "sprint:getVelocityHistory",
+    GET_CONTRIBUTORS: "sprint:getContributors"
+  },
+
+  // Timeline channels
+  TIMELINE: {
+    GET_TASKS: "timeline:getTasks",
+    UPDATE_TASK_DATES: "timeline:updateTaskDates"
+  },
+
+  // Developers directory channels
+  DEVELOPERS: {
+    GET_ALL: "developers:getAll",
+    INVITE: "developers:invite",
+    SEARCH: "developers:search",
+    GET_BY_ID: "developers:getById",
+    GET_STATS: "developers:getStats",
+    GET_CURRENT_TASKS: "developers:getCurrentTasks",
+    GET_SPRINT_HISTORY: "developers:getSprintHistory",
+    UPDATE_PROFILE: "developers:updateProfile"
+  },
+
+  // GitHub integration channels
+  GITHUB: {
+    GET_CONNECTION_STATUS: "github:getConnectionStatus",
+    GET_LINKED_REPOS: "github:getLinkedRepos",
+    GET_RECENT_PRS: "github:getRecentPRs",
+    SYNC_NOW: "github:syncNow"
+  },
+
   // App metadata and health
   APP: {
     GET_VERSION: "app:getVersion",

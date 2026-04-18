@@ -17,6 +17,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, MoreHorizontal, Plus, RefreshCw } from "lucide-react";
+import { usePathname } from "@/next-shims/navigation";
 
 type Project = { id: string; name: string };
 type Sprint = { id: string; name: string; startDate?: string; endDate?: string; status?: string };
@@ -36,6 +37,13 @@ type Task = {
   jiraIssueKey?: string;
 };
 
+type CreateTaskForm = {
+  title: string;
+  type: string;
+  priority: string;
+  points: string;
+};
+
 type ContainerMap = Record<string, string[]>;
 type FilterState = {
   assigneeIds: string[];
@@ -53,18 +61,28 @@ function asNumber(value: unknown): number {
   return typeof value === "number" ? value : Number(value || 0);
 }
 
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+  if (typeof window === "undefined" || !window.desktopApi?.invoke) {
+    throw new Error("Desktop IPC bridge is unavailable");
+  }
+  return window.desktopApi.invoke<T>(channel, payload);
+}
+
 function toTaskList(items: unknown[]): Task[] {
   return items.map((item) => {
     const rec = (item || {}) as Record<string, unknown>;
     const assigneeRaw = rec.assignee as Record<string, unknown> | null;
+    const sprintRaw = rec.sprint as Record<string, unknown> | null;
+    const sprintId = asString(rec.sprintId || sprintRaw?.id);
+    const storyPoints = asNumber(rec.storyPoints || rec.points);
     return {
       id: asString(rec.id),
       title: asString(rec.title),
       status: asString(rec.status),
-      type: asString(rec.type) || "task",
+      type: asString(rec.type) || "story",
       priority: asString(rec.priority) || "medium",
-      storyPoints: asNumber(rec.storyPoints),
-      sprintId: asString(rec.sprintId) || null,
+      storyPoints,
+      sprintId: sprintId || null,
       dueDate: asString(rec.dueDate),
       techTags: Array.isArray(rec.techTags) ? (rec.techTags as string[]) : [],
       epicTitle: asString(rec.epicTitle),
@@ -78,6 +96,33 @@ function toTaskList(items: unknown[]): Task[] {
         : null,
     };
   });
+}
+
+function deriveDevelopers(taskItems: Task[]): Developer[] {
+  const map = new Map<string, Developer>();
+  for (const task of taskItems) {
+    if (!task.assignee?.id) continue;
+    if (map.has(task.assignee.id)) continue;
+    map.set(task.assignee.id, {
+      id: task.assignee.id,
+      name: task.assignee.name || "Developer",
+    });
+  }
+  return [...map.values()];
+}
+
+function deriveSprints(taskItems: Task[]): Sprint[] {
+  const map = new Map<string, Sprint>();
+  for (const task of taskItems) {
+    if (!task.sprintId) continue;
+    if (map.has(task.sprintId)) continue;
+    map.set(task.sprintId, {
+      id: task.sprintId,
+      name: `Sprint ${task.sprintId}`,
+      status: "planning",
+    });
+  }
+  return [...map.values()];
 }
 
 function sprintLabel(sprint: Sprint): string {
@@ -94,8 +139,12 @@ function getContainerForTask(taskId: string, containers: ContainerMap): string {
 }
 
 export default function BacklogPage() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState("");
+  const pathname = usePathname();
+  const isBoardBacklog = pathname.startsWith("/board/backlog");
+
+  const [projects] = useState<Project[]>([{ id: "desktop", name: "Agile Scrum Master" }]);
+  const [projectId, setProjectId] = useState("desktop");
+  const [selectedSprintId, setSelectedSprintId] = useState("sprint-1");
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [developers, setDevelopers] = useState<Developer[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -105,11 +154,20 @@ export default function BacklogPage() {
   const [filters, setFilters] = useState<FilterState>({ assigneeIds: [], priority: "all", label: "all", type: "all", epic: "all" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ id: string; field: "title" | "storyPoints"; value: string } | null>(null);
+  const [editing, setEditing] = useState<{ id: string; field: "title" | "priority" | "storyPoints"; value: string } | null>(null);
   const [assigneePickerTaskId, setAssigneePickerTaskId] = useState<string | null>(null);
   const [visibleBacklogCount, setVisibleBacklogCount] = useState(25);
   const [toast, setToast] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ taskId: string; x: number; y: number } | null>(null);
+  const [addToSprintPickerTaskId, setAddToSprintPickerTaskId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createForm, setCreateForm] = useState<CreateTaskForm>({
+    title: "",
+    type: "story",
+    priority: "medium",
+    points: "3",
+  });
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -183,50 +241,32 @@ export default function BacklogPage() {
   }, []);
 
   useEffect(() => {
-    let ignore = false;
-    async function loadStaticData() {
-      const [projectsResp, devResp] = await Promise.all([
-        fetch("/api/projects", { cache: "no-store" }),
-        fetch("/api/developers", { cache: "no-store" }),
-      ]);
-      const projectsData = await projectsResp.json().catch(() => null) as { items?: Project[] } | null;
-      const devData = await devResp.json().catch(() => null) as { items?: Developer[] } | null;
-      if (ignore) return;
-      const pItems = Array.isArray(projectsData?.items) ? projectsData!.items : [];
-      setProjects(pItems);
-      if (!projectId && pItems[0]?.id) setProjectId(pItems[0].id);
-      setDevelopers(Array.isArray(devData?.items) ? devData!.items : []);
-    }
-    void loadStaticData();
-    return () => {
-      ignore = true;
-    };
-  }, [projectId]);
-
-  useEffect(() => {
-    if (!projectId) return;
+    if (isBoardBacklog && !selectedSprintId) return;
+    if (!isBoardBacklog && !projectId) return;
     void refreshData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [projectId, selectedSprintId, isBoardBacklog]);
 
   async function refreshData() {
     setLoading(true);
     setError(null);
     try {
-      const [sprintsResp, tasksResp] = await Promise.all([
-        fetch(`/api/sprints?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" }),
-        fetch(`/api/tasks?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" }),
-      ]);
-      const sprintsData = await sprintsResp.json().catch(() => null) as { items?: Sprint[] } | null;
-      const tasksData = await tasksResp.json().catch(() => null) as { items?: unknown[] } | null;
-
-      const sprintItems = Array.isArray(sprintsData?.items) ? sprintsData!.items : [];
-      const taskItems = toTaskList(Array.isArray(tasksData?.items) ? tasksData!.items : []);
-      setSprints(sprintItems);
+      const items = isBoardBacklog
+        ? await invokeDesktop<unknown[]>("board:getSprintBacklog", { sprintId: selectedSprintId })
+        : await invokeDesktop<unknown[]>("backlog:getItems", { filters: { projectId } });
+      const taskItems = toTaskList(Array.isArray(items) ? items : []);
+      const sprintItems = deriveSprints(taskItems);
+      const developerItems = deriveDevelopers(taskItems);
+      setSprints(
+        isBoardBacklog && !sprintItems.length && selectedSprintId
+          ? [{ id: selectedSprintId, name: `Sprint ${selectedSprintId}`, status: "planning" }]
+          : sprintItems
+      );
+      setDevelopers(developerItems);
       setTasks(taskItems);
 
       const nextContainers: ContainerMap = { backlog: [] };
-      sprintItems.forEach((sprint) => {
+      (isBoardBacklog ? (sprintItems.length ? sprintItems : [{ id: selectedSprintId, name: "", status: "planning" }]) : sprintItems).forEach((sprint) => {
         nextContainers[`sprint-${sprint.id}`] = [];
       });
 
@@ -245,17 +285,24 @@ export default function BacklogPage() {
     }
   }
 
-  async function patchTask(taskId: string, patch: Record<string, unknown>, successMessage?: string) {
-    const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
+  async function patchTask(taskId: string, changes: Record<string, unknown>, successMessage?: string) {
+    await invokeDesktop("backlog:updateItem", {
+      id: taskId,
+      changes,
     });
-    if (!resp.ok) {
-      const data = await resp.json().catch(() => null) as { error?: string } | null;
-      throw new Error(data?.error || "Task update failed");
-    }
     if (successMessage) setToast(successMessage);
+  }
+
+  function getGlobalOrderedIds(nextContainers: ContainerMap) {
+    const sprintContainerIds = sprints.map((sprint) => `sprint-${sprint.id}`);
+    const allContainerIds = [...sprintContainerIds, "backlog"];
+    const ordered: string[] = [];
+    allContainerIds.forEach((containerId) => {
+      (nextContainers[containerId] || []).forEach((id) => {
+        if (!ordered.includes(id)) ordered.push(id);
+      });
+    });
+    return ordered;
   }
 
   async function saveInlineEdit() {
@@ -264,9 +311,12 @@ export default function BacklogPage() {
       if (editing.field === "title") {
         await patchTask(editing.id, { title: editing.value }, "Title updated");
       }
+      if (editing.field === "priority") {
+        await patchTask(editing.id, { priority: editing.value }, "Priority updated");
+      }
       if (editing.field === "storyPoints") {
         const nextPoints = Math.max(0, Number(editing.value || 0));
-        await patchTask(editing.id, { storyPoints: nextPoints }, "Story points updated");
+        await patchTask(editing.id, { points: nextPoints }, "Story points updated");
       }
       await refreshData();
       setEditing(null);
@@ -277,16 +327,7 @@ export default function BacklogPage() {
 
   async function onSelectAssignee(task: Task, developerId: string) {
     try {
-      if (!task.sprintId) {
-        setToast("Assigning backlog tasks requires sprint context");
-        return;
-      }
-      const resp = await fetch("/api/assignment/assign-explicit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ taskId: task.id, sprintId: task.sprintId, developerId }),
-      });
-      if (!resp.ok) throw new Error("Failed to assign");
+      await patchTask(task.id, { assigneeId: developerId });
       setAssigneePickerTaskId(null);
       setToast("Assignee updated");
       await refreshData();
@@ -296,26 +337,82 @@ export default function BacklogPage() {
   }
 
   async function onReorder(containerId: string, orderedIds: string[]) {
-    setContainers((prev) => ({ ...prev, [containerId]: orderedIds }));
-    await fetch("/api/tasks/reorder", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orderedIds }),
+    const nextContainers = { ...containers, [containerId]: orderedIds };
+    setContainers(nextContainers);
+    await invokeDesktop("backlog:reorderItems", {
+      orderedIds: getGlobalOrderedIds(nextContainers),
     });
   }
 
-  async function onMoveTask(taskId: string, destinationContainer: string) {
-    const sprintId = destinationContainer.startsWith("sprint-") ? destinationContainer.replace("sprint-", "") : null;
-    const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sprintId }),
+  async function moveTaskToBoard(taskId: string, status: string) {
+    await invokeDesktop("board:moveToBoard", {
+      taskId,
+      status,
     });
+    setToast("Moved to board");
+    await refreshData();
+  }
 
-    if (!resp.ok) {
-      setToast("Move persisted locally only (backend sprint move unsupported)");
+  async function onMoveTask(taskId: string, destinationContainer: string) {
+    if (isBoardBacklog) {
+      const status = destinationContainer === "backlog" ? "todo" : "in_progress";
+      await moveTaskToBoard(taskId, status);
+      return;
+    }
+
+    const sprintId = destinationContainer.startsWith("sprint-") ? destinationContainer.replace("sprint-", "") : null;
+    if (sprintId) {
+      await invokeDesktop("backlog:addToSprint", { itemId: taskId, sprintId });
     } else {
-      setToast("Task moved");
+      await patchTask(taskId, { sprintId: "" });
+    }
+    setToast("Task moved");
+  }
+
+  async function onAddTaskToSprint(taskId: string, sprintId: string) {
+    if (!sprintId) return;
+    try {
+      await invokeDesktop("backlog:addToSprint", { itemId: taskId, sprintId });
+      setAddToSprintPickerTaskId(null);
+      setToast("Added to sprint");
+      await refreshData();
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "Failed to add to sprint");
+    }
+  }
+
+  async function onMoveToBoard(taskId: string, status: string) {
+    try {
+      await moveTaskToBoard(taskId, status);
+      setAddToSprintPickerTaskId(null);
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "Failed to move task to board");
+    }
+  }
+
+  async function createTask() {
+    const title = createForm.title.trim();
+    if (!title) {
+      setToast("Title is required");
+      return;
+    }
+
+    try {
+      setCreating(true);
+      await invokeDesktop("backlog:createItem", {
+        title,
+        type: createForm.type,
+        priority: createForm.priority,
+        points: Math.max(0, Number(createForm.points || 0)),
+      });
+      setCreateOpen(false);
+      setCreateForm({ title: "", type: "story", priority: "medium", points: "3" });
+      setToast("Task created");
+      await refreshData();
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "Failed to create task");
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -383,55 +480,42 @@ export default function BacklogPage() {
 
   async function applyBulkAssign(developerId: string) {
     const selectedTasks = selectedIds.map((id) => taskById.get(id)).filter(Boolean) as Task[];
-    const withSprint = selectedTasks.filter((task) => task.sprintId);
-    if (!withSprint.length) {
-      setToast("No sprint-scoped tasks selected");
+    if (!selectedTasks.length) {
+      setToast("No tasks selected");
       return;
     }
 
-    await Promise.all(
-      withSprint.map((task) =>
-        fetch("/api/assignment/assign-explicit", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ taskId: task.id, sprintId: task.sprintId, developerId }),
-        })
-      )
-    );
+    await invokeDesktop("backlog:bulkUpdate", {
+      ids: selectedTasks.map((task) => task.id),
+      changes: { assigneeId: developerId },
+    });
     setToast("Bulk assign applied");
     await refreshData();
   }
 
   async function applyBulkMove(sprintId: string) {
-    const resp = await fetch("/api/tasks/bulk", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: selectedIds, sprintId }),
+    await invokeDesktop("backlog:bulkUpdate", {
+      ids: selectedIds,
+      changes: { sprintId },
     });
-    if (!resp.ok) setToast("Bulk move may be partially unsupported by backend");
-    else setToast("Bulk move requested");
+    setToast("Bulk move requested");
     await refreshData();
   }
 
   async function applyBulkPriority(priority: string) {
-    const resp = await fetch("/api/tasks/bulk", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: selectedIds, priority }),
+    await invokeDesktop("backlog:bulkUpdate", {
+      ids: selectedIds,
+      changes: { priority },
     });
-    if (!resp.ok) setToast("Bulk priority update failed");
-    else setToast("Priority updated");
+    setToast("Priority updated");
     await refreshData();
   }
 
   async function applyBulkDelete() {
-    const resp = await fetch("/api/tasks/bulk", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: selectedIds }),
+    await invokeDesktop("backlog:bulkDelete", {
+      ids: selectedIds,
     });
-    if (!resp.ok) setToast("Bulk delete failed");
-    else setToast("Deleted selected tasks");
+    setToast("Deleted selected tasks");
     await refreshData();
   }
 
@@ -449,8 +533,17 @@ export default function BacklogPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-[#121212] px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-xs text-white">
-            {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+          <select
+            value={isBoardBacklog ? selectedSprintId : projectId}
+            onChange={(e) => {
+              if (isBoardBacklog) setSelectedSprintId(e.target.value);
+              else setProjectId(e.target.value);
+            }}
+            className="rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-xs text-white"
+          >
+            {isBoardBacklog
+              ? sprints.map((sprint) => <option key={sprint.id} value={sprint.id}>{sprint.name}</option>)
+              : projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>
 
           {developers.slice(0, 8).map((dev) => {
@@ -489,7 +582,7 @@ export default function BacklogPage() {
           <button onClick={() => void refreshData()} className="rounded-md border border-[var(--border)] px-3 py-2 text-xs text-[#bbb]"><RefreshCw className="h-3.5 w-3.5" /></button>
         </div>
 
-        <button className="inline-flex items-center gap-1 rounded-md border border-white bg-white px-3 py-2 text-xs font-semibold text-black">
+        <button onClick={() => setCreateOpen(true)} className="inline-flex items-center gap-1 rounded-md border border-white bg-white px-3 py-2 text-xs font-semibold text-black">
           <Plus className="h-3.5 w-3.5" /> Create Task
         </button>
       </div>
@@ -522,8 +615,8 @@ export default function BacklogPage() {
                   <p className="text-[11px] text-[#8f8f8f]">{sprintLabel(sprint)} • {taskCount} tasks • {points} points</p>
                 </button>
                 <div className="flex gap-2">
-                  <button onClick={() => fetch(`/api/sprints/${encodeURIComponent(sprint.id)}/start`, { method: "PATCH" })} className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] text-[#cfcfcf]">Start Sprint</button>
-                  <button onClick={() => fetch(`/api/sprints/${encodeURIComponent(sprint.id)}/complete`, { method: "PATCH" })} className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] text-[#cfcfcf]">Complete Sprint</button>
+                  <button onClick={() => setToast("Sprint controls are not available in desktop backlog IPC")} className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] text-[#cfcfcf]">Start Sprint</button>
+                  <button onClick={() => setToast("Sprint controls are not available in desktop backlog IPC")} className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] text-[#cfcfcf]">Complete Sprint</button>
                 </div>
               </div>
 
@@ -541,14 +634,20 @@ export default function BacklogPage() {
                           selected={selectedIds.includes(task.id)}
                           editing={editing}
                           assigneePickerTaskId={assigneePickerTaskId}
+                          addToSprintPickerTaskId={addToSprintPickerTaskId}
                           developers={developers}
+                          sprints={sprints}
+                          isBoardBacklog={isBoardBacklog}
                           onToggleSelected={() => {
                             setSelectedIds((prev) => (prev.includes(task.id) ? prev.filter((x) => x !== task.id) : [...prev, task.id]));
                           }}
                           onEdit={(field, value) => setEditing({ id: task.id, field, value })}
                           onSaveInlineEdit={() => void saveInlineEdit()}
                           onAssigneePicker={() => setAssigneePickerTaskId((prev) => (prev === task.id ? null : task.id))}
+                          onAddToSprintPicker={() => setAddToSprintPickerTaskId((prev) => (prev === task.id ? null : task.id))}
                           onSelectAssignee={(developerId) => void onSelectAssignee(task, developerId)}
+                          onAddToSprint={(sprintId) => void onAddTaskToSprint(task.id, sprintId)}
+                          onMoveToBoard={(status) => void onMoveToBoard(task.id, status)}
                           onContextMenu={(x, y) => setContextMenu({ taskId: task.id, x, y })}
                         />
                       );
@@ -578,14 +677,20 @@ export default function BacklogPage() {
                     selected={selectedIds.includes(task.id)}
                     editing={editing}
                     assigneePickerTaskId={assigneePickerTaskId}
+                    addToSprintPickerTaskId={addToSprintPickerTaskId}
                     developers={developers}
+                    sprints={sprints}
+                    isBoardBacklog={isBoardBacklog}
                     onToggleSelected={() => {
                       setSelectedIds((prev) => (prev.includes(task.id) ? prev.filter((x) => x !== task.id) : [...prev, task.id]));
                     }}
                     onEdit={(field, value) => setEditing({ id: task.id, field, value })}
                     onSaveInlineEdit={() => void saveInlineEdit()}
                     onAssigneePicker={() => setAssigneePickerTaskId((prev) => (prev === task.id ? null : task.id))}
+                    onAddToSprintPicker={() => setAddToSprintPickerTaskId((prev) => (prev === task.id ? null : task.id))}
                     onSelectAssignee={(developerId) => void onSelectAssignee(task, developerId)}
+                    onAddToSprint={(sprintId) => void onAddTaskToSprint(task.id, sprintId)}
+                    onMoveToBoard={(status) => void onMoveToBoard(task.id, status)}
                     onContextMenu={(x, y) => setContextMenu({ taskId: task.id, x, y })}
                   />
                 );
@@ -636,6 +741,75 @@ export default function BacklogPage() {
         </div>
       ) : null}
 
+      {createOpen ? (
+        <div className="fixed inset-0 z-30 flex">
+          <button className="h-full flex-1 bg-black/40" onClick={() => setCreateOpen(false)} aria-label="Close create drawer" />
+          <div className="h-full w-full max-w-md border-l border-[var(--border)] bg-[#121212] p-4">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-white">Create Task</h3>
+              <button onClick={() => setCreateOpen(false)} className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[#d2d2d2]">Close</button>
+            </div>
+
+            <div className="space-y-3">
+              <label className="block text-xs text-[#bdbdbd]">
+                Title
+                <input
+                  value={createForm.title}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, title: e.target.value }))}
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-xs text-white"
+                />
+              </label>
+
+              <label className="block text-xs text-[#bdbdbd]">
+                Type
+                <select
+                  value={createForm.type}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, type: e.target.value }))}
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-xs text-white"
+                >
+                  <option value="story">Story</option>
+                  <option value="bug">Bug</option>
+                  <option value="task">Task</option>
+                </select>
+              </label>
+
+              <label className="block text-xs text-[#bdbdbd]">
+                Priority
+                <select
+                  value={createForm.priority}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, priority: e.target.value }))}
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-xs text-white"
+                >
+                  <option value="critical">Critical</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+
+              <label className="block text-xs text-[#bdbdbd]">
+                Story Points
+                <input
+                  type="number"
+                  min={0}
+                  value={createForm.points}
+                  onChange={(e) => setCreateForm((prev) => ({ ...prev, points: e.target.value }))}
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-xs text-white"
+                />
+              </label>
+
+              <button
+                disabled={creating}
+                onClick={() => void createTask()}
+                className="w-full rounded-md border border-white bg-white px-3 py-2 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {creating ? "Creating..." : "Create Task"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {loading ? <p className="text-xs text-[#8f8f8f]">Loading...</p> : null}
       {toast ? <div className="fixed bottom-4 right-4 z-20 rounded-md border border-[var(--border)] bg-[#151515] px-3 py-2 text-xs text-white">{toast}</div> : null}
     </div>
@@ -648,25 +822,37 @@ function TaskRow({
   selected,
   editing,
   assigneePickerTaskId,
+  addToSprintPickerTaskId,
   developers,
+  sprints,
+  isBoardBacklog,
   onToggleSelected,
   onEdit,
   onSaveInlineEdit,
   onAssigneePicker,
+  onAddToSprintPicker,
   onSelectAssignee,
+  onAddToSprint,
+  onMoveToBoard,
   onContextMenu,
 }: {
   task: Task;
   index: number;
   selected: boolean;
-  editing: { id: string; field: "title" | "storyPoints"; value: string } | null;
+  editing: { id: string; field: "title" | "priority" | "storyPoints"; value: string } | null;
   assigneePickerTaskId: string | null;
+  addToSprintPickerTaskId: string | null;
   developers: Developer[];
+  sprints: Sprint[];
+  isBoardBacklog: boolean;
   onToggleSelected: () => void;
-  onEdit: (field: "title" | "storyPoints", value: string) => void;
+  onEdit: (field: "title" | "priority" | "storyPoints", value: string) => void;
   onSaveInlineEdit: () => void;
   onAssigneePicker: () => void;
+  onAddToSprintPicker: () => void;
   onSelectAssignee: (developerId: string) => void;
+  onAddToSprint: (sprintId: string) => void;
+  onMoveToBoard: (status: string) => void;
   onContextMenu: (x: number, y: number) => void;
 }) {
   const { setNodeRef, transform, transition, listeners, attributes } = useSortable({ id: task.id });
@@ -701,7 +887,22 @@ function TaskRow({
         <button onClick={() => onEdit("title", task.title)} className="truncate text-left text-white hover:underline">{task.title}</button>
       )}
 
-      <span className="truncate rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[#ddd]">{task.priority || "medium"}</span>
+      {editing?.id === task.id && editing.field === "priority" ? (
+        <select
+          autoFocus
+          value={editing.value}
+          onChange={(e) => onEdit("priority", e.target.value)}
+          onBlur={onSaveInlineEdit}
+          className="truncate rounded border border-[var(--border-strong)] bg-[#101010] px-1.5 py-0.5 text-[11px] text-[#ddd]"
+        >
+          <option value="critical">critical</option>
+          <option value="high">high</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
+        </select>
+      ) : (
+        <button onClick={() => onEdit("priority", task.priority || "medium")} className="truncate rounded border border-[var(--border)] px-1.5 py-0.5 text-[11px] text-[#ddd]">{task.priority || "medium"}</button>
+      )}
 
       {editing?.id === task.id && editing.field === "storyPoints" ? (
         <input
@@ -734,7 +935,36 @@ function TaskRow({
       </div>
 
       <span className="text-[11px] text-[#a9a9a9]">{task.dueDate || "-"}</span>
-      <button className="text-[#9f9f9f]"><MoreHorizontal className="h-4 w-4" /></button>
+      <div className="relative">
+        <button
+          onClick={onAddToSprintPicker}
+          className={isBoardBacklog ? "rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-[#d9d9d9]" : "text-[#9f9f9f]"}
+          title={isBoardBacklog ? "Move to Board" : "Add to Sprint"}
+        >
+          {isBoardBacklog ? "Move" : <MoreHorizontal className="h-4 w-4" />}
+        </button>
+        {addToSprintPickerTaskId === task.id ? (
+          <div className="absolute right-0 top-6 z-10 min-w-40 rounded-md border border-[var(--border)] bg-[#121212] p-1">
+            <p className="px-2 py-1 text-[11px] text-[#9f9f9f]">{isBoardBacklog ? "Move to Board" : "Add to Sprint"}</p>
+            {isBoardBacklog ? (
+              [
+                { value: "todo", label: "To Do" },
+                { value: "in_progress", label: "In Progress" },
+                { value: "in_review", label: "In Review" },
+                { value: "done", label: "Done" },
+              ].map((status) => (
+                <button key={status.value} onClick={() => onMoveToBoard(status.value)} className="block w-full rounded px-2 py-1 text-left text-[11px] text-[#ddd] hover:bg-[#1f1f1f]">
+                  {status.label}
+                </button>
+              ))
+            ) : sprints.map((sprint) => (
+              <button key={sprint.id} onClick={() => onAddToSprint(sprint.id)} className="block w-full rounded px-2 py-1 text-left text-[11px] text-[#ddd] hover:bg-[#1f1f1f]">
+                {sprint.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
