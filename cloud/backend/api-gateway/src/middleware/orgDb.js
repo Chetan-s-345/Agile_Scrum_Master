@@ -1,5 +1,10 @@
 const { db } = require('../config/database');
 
+// Cache schema initialization state to avoid repeated checks
+const schemaInitCache = new Map(); // orgId -> { tenantOk: bool, meetingsOk: bool, timestamp }
+const schemaInitInFlight = new Map(); // orgId -> Promise<void>
+const SCHEMA_CACHE_TTL = 3600000; // 1 hour
+
 function mapTokenRoleToTenantRole(role) {
   const r = String(role || '').trim().toLowerCase();
   if (['owner', 'admin', 'manager', 'developer', 'qa', 'designer', 'viewer'].includes(r)) return r;
@@ -25,6 +30,56 @@ async function ensureTenantSchema(pool) {
         details: { hasTeamMembers, hasProjects },
       }
     );
+  }
+}
+
+async function ensureMeetingsSchema(pool) {
+  const resp = await pool.query("SELECT to_regclass('public.meeting_sessions') AS meeting_sessions");
+  const row = resp.rows[0] || {};
+  if (!row.meeting_sessions) {
+    throw Object.assign(new Error('Meetings schema missing in tenant database'), {
+      statusCode: 503,
+      code: 'MEETINGS_SCHEMA_MISSING',
+      details: {
+        hint: 'Run db/migrations/add_meetings_lifecycle.js for tenant DBs before using meetings endpoints.',
+      },
+    });
+  }
+}
+
+async function ensureSchemasOnceForOrg(orgId, pool) {
+  const now = Date.now();
+  const cached = schemaInitCache.get(orgId);
+  const isCacheValid = Boolean(cached && now - cached.timestamp < SCHEMA_CACHE_TTL);
+  if (isCacheValid) return;
+
+  const existing = schemaInitInFlight.get(orgId);
+  if (existing) {
+    await existing;
+    return;
+  }
+
+  const initPromise = (async () => {
+    const startTime = Date.now();
+    await ensureTenantSchema(pool);
+    await ensureMeetingsSchema(pool);
+    schemaInitCache.set(orgId, {
+      tenantOk: true,
+      meetingsOk: true,
+      timestamp: Date.now(),
+    });
+
+    const duration = Date.now() - startTime;
+    if (duration > 1500) {
+      console.warn(`[SCHEMA_INIT_SLOW] orgId=${orgId} took ${duration}ms`);
+    }
+  })();
+
+  schemaInitInFlight.set(orgId, initPromise);
+  try {
+    await initPromise;
+  } finally {
+    schemaInitInFlight.delete(orgId);
   }
 }
 
@@ -124,12 +179,14 @@ async function orgDbMiddleware(req, res, next) {
     req.orgDb = pool;
     req.orgQuery = (sql, params) => pool.query(sql, params);
 
-    // Bootstrap tenant DB for older orgs / partial setups.
+    // One-time schema check per org (cached + de-duped for concurrent requests).
     try {
-      await ensureTenantSchema(pool);
+      await ensureSchemasOnceForOrg(String(orgId), pool);
     } catch (schemaError) {
+      schemaInitCache.delete(String(orgId)); // invalidate cache on error
+      schemaInitInFlight.delete(String(orgId));
       const schemaMsg = String(schemaError?.message || schemaError);
-      console.error('ensureTenantSchema failed:', schemaError);
+      console.error('Tenant schema bootstrap failed:', schemaError);
       return res.status(503).json({
         error: 'Tenant schema incomplete',
         code: 'TENANT_SCHEMA_MISSING',

@@ -17,7 +17,14 @@ function errorHandler(err, req, res, next) {
       ? publicMessage || 'Internal server error'
       : err.message || publicMessage || 'Internal server error';
 
-  const payload = { error: message, code: statusCode, detail: String(message) };
+  const detail = typeof err?.detail === 'string' && err.detail.trim()
+    ? err.detail.trim()
+    : String(message);
+
+  const payload = { error: message, code: statusCode, detail };
+  if (typeof err?.hint === 'string' && err.hint.trim()) {
+    payload.hint = err.hint.trim();
+  }
 
   // Pass through structured details for client-side form errors.
   // Only include these for non-5xx responses to avoid leaking internals.

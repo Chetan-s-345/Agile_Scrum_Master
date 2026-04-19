@@ -1,0 +1,409 @@
+Agile Scrum Master - Meetings Page Full Diagnostic Dossier
+Date: 2026-04-20
+Scope: cloud web app (Next.js app router) + api-gateway meetings stack
+
+============================================================
+1) USER-REPORTED FAILURE
+============================================================
+Observed browser console error:
+- POST /api/meetings/:meetingId/start -> 502 (Bad Gateway)
+Example:
+- POST http://localhost:3000/api/meetings/cbe2f762-b8c8-4e09-b3cb-ab6957e61ec1/start 502
+
+Expected behavior from user:
+- Clicking Schedule should create a meeting.
+- It should auto-create Google Meet link.
+- Join link should be available in meeting UI.
+- Start should not fail with 502.
+
+
+============================================================
+2) HIGH-LEVEL ARCHITECTURE
+============================================================
+Client UI:
+- File: app/(dashboard)/meetings/page.tsx
+- Type: client component with Suspense wrapper
+- Handles:
+  - listing meetings
+  - selecting details
+  - creating/scheduling meetings
+  - starting meetings
+  - attendee assignment
+  - notes
+  - transcript upload
+  - AI summarize/description helpers
+
+Next.js BFF API routes (server routes):
+- app/api/meetings/route.ts
+- app/api/meetings/[meetingId]/route.ts
+- app/api/meetings/[meetingId]/start/route.ts
+- app/api/meetings/[meetingId]/attendees/route.ts
+- app/api/meetings/[meetingId]/notes/route.ts
+- app/api/meetings/[meetingId]/description/route.ts
+- app/api/meetings/[meetingId]/transcripts/route.ts
+- app/api/meetings/[meetingId]/summarize/route.ts
+
+Proxy helper:
+- lib/api-gateway.ts
+- Reads auth_token cookie
+- Forwards Bearer token to gateway
+- Adds per-route and default timeout handling
+- Returns JSON errors with { error, code, detail, hint, upstream }
+
+Backend API gateway:
+- routes/meetings.routes.js
+- controllers/meetings.controller.js
+- services/meetings.service.js
+- validators/meetings.schemas.js
+- middleware/auth.js + middleware/orgDb.js + middleware/errorHandler.js
+
+DB schema migration:
+- db/migrations/add_meetings_lifecycle.js
+
+
+============================================================
+3) FRONTEND MEETINGS PAGE - FULL BEHAVIORAL MAP
+============================================================
+File: app/(dashboard)/meetings/page.tsx
+
+Core UI data models used by page:
+- MeetingItem
+- MeetingDetail
+- MeetingNote
+- MeetingTranscript
+- MeetingAttendee
+- MeetingActionItem
+
+Major async loaders:
+- refreshMeetings(preferId?)
+- refreshMeetingDetail(meetingId)
+- refreshDevelopers()
+- refreshTranscripts(meetingId)
+
+Race-protection and cancellation:
+- Uses AbortController refs for meetings, detail, transcripts requests.
+- Uses monotonic requestId refs to ignore stale responses.
+- Cleanup abort on component unmount.
+
+Create/Schedule flow (createMeeting):
+- POST /api/meetings with payload:
+  - type
+  - title
+  - scheduledStart
+  - createJoinUrl: true
+  - provider: google_meet
+- On success:
+  - refreshes list and selects created meeting
+  - if backend returns provisioningWarning, shows non-fatal warning in error banner
+
+Start flow (startMeeting):
+- POST /api/meetings/:id/start
+- First attempt body now includes:
+  - provider: google_meet
+  - joinUrl: selectedMeeting.joinUrl (if exists)
+  - providerMeetingId: selectedMeeting.providerMeetingId (if exists)
+- If non-200 and payload indicates Google/timeout-like failure:
+  - prompts for manual URL
+  - validates strict meet.google.com URL before retry
+- On success:
+  - updates selected meeting + list status/joinUrl/provider fields
+
+Error normalization in page:
+- normalizeError(payload, fallback) preference order:
+  - detail
+  - hint
+  - error
+  - fallback
+
+Important UI expectation details:
+- Schedule tries to create DB meeting and Meet link in one action.
+- If Meet fails due external Google permission/config, meeting can still exist and warning is shown.
+
+
+============================================================
+4) NEXT BFF ROUTES - FULL MAP
+============================================================
+GET /api/meetings
+- Proxies to /api/v1/meetings
+- Timeout: 60000ms
+
+POST /api/meetings
+- Proxies to /api/v1/meetings
+- Timeout: 90000ms (for Google conference provisioning path)
+
+GET /api/meetings/:id
+- Proxies to /api/v1/meetings/:id
+- Timeout: 60000ms
+
+PATCH /api/meetings/:id
+- Proxies to /api/v1/meetings/:id
+
+DELETE /api/meetings/:id
+- Proxies to /api/v1/meetings/:id
+
+POST /api/meetings/:id/start
+- Proxies to /api/v1/meetings/:id/start
+- Timeout: 90000ms
+
+POST /api/meetings/:id/attendees
+GET/POST /api/meetings/:id/notes
+POST /api/meetings/:id/description
+GET/POST /api/meetings/:id/transcripts
+POST /api/meetings/:id/summarize
+
+All BFF routes:
+- require auth_token cookie
+- return 401 with standardized payload if missing token
+
+
+============================================================
+5) PROXY LAYER (lib/api-gateway.ts) - FULL DETAILS
+============================================================
+Base URL resolution order:
+1. API_GATEWAY_URL
+2. SERVER_API_GATEWAY_URL
+3. NEXT_PUBLIC_API_GATEWAY_URL
+4. NEXT_PUBLIC_API_URL
+5. default http://localhost:4000
+
+Timeout resolution:
+- per-call timeoutMs if provided
+- else env API_GATEWAY_PROXY_TIMEOUT_MS
+- else fallback 30000ms
+
+On network failure to gateway:
+- returns 502 or 504
+- payload contains:
+  - error
+  - code
+  - detail
+  - upstream { baseUrl, url }
+  - hint
+
+On non-JSON upstream response:
+- wraps error with body snippet + hint
+
+
+============================================================
+6) BACKEND ROUTING + VALIDATION
+============================================================
+Routes:
+- GET /api/v1/meetings
+- POST /api/v1/meetings
+- GET /api/v1/meetings/:meetingId
+- PATCH /api/v1/meetings/:meetingId
+- DELETE /api/v1/meetings/:meetingId
+- POST /api/v1/meetings/:meetingId/attendees
+- GET /api/v1/meetings/:meetingId/notes
+- POST /api/v1/meetings/:meetingId/notes
+- POST /api/v1/meetings/:meetingId/description
+- POST /api/v1/meetings/:meetingId/start
+- GET /api/v1/meetings/:meetingId/transcripts
+- POST /api/v1/meetings/:meetingId/transcripts
+- POST /api/v1/meetings/:meetingId/summarize
+
+Validation schema highlights:
+- startMeetingSchema validates provider enum and optional joinUrl URL.
+- For provider google_meet, joinUrl must match strict regex:
+  https://meet.google.com/...
+- createMeetingSchema supports:
+  - createJoinUrl (optional boolean)
+  - provider (optional, currently google_meet)
+
+
+============================================================
+7) BACKEND SERVICE (meetings.service.js) - FULL LOGIC MAP
+============================================================
+Main exported class methods:
+- list
+- getById
+- create
+- update
+- delete
+- setAttendees
+- listNotes
+- addNote
+- updateDescription
+- startMeeting
+- listTranscripts
+- uploadTranscript
+- summarizeMeeting
+
+Google Meet provisioning internals:
+- getGoogleMeetConfig()
+- buildServiceAccountAssertion()
+- getGoogleAccessToken()
+- createGoogleMeetConference()
+
+Conference creation strategy:
+- OAuth service account JWT flow -> access token
+- Create calendar event with conferenceData createRequest
+- Handles invalid conference type fallback
+- Polls event for delayed join URL population
+- Patches existing event for conferenceData if needed
+- Attempts writable calendar fallback discovery
+- Enforces join URL must be valid meet.google.com link
+
+Create meeting method behavior:
+- Inserts meeting row first
+- Inserts attendees
+- If createJoinUrl true and provider google_meet:
+  - attempts createGoogleMeetConference
+  - updates meeting with provider/joinUrl on success
+  - does NOT fail overall create on Google failure
+  - attaches provisioningWarning to response item
+
+Start meeting method behavior after latest fix:
+- Reads existing meeting including join_url/provider_meeting_id
+- If provider google_meet and no payload joinUrl:
+  - reuses existing stored join_url if valid
+- Only if no valid join URL available:
+  - calls createGoogleMeetConference
+- Updates session status to in_progress, sets actual_start, provider fields
+
+Critical regression fix included now:
+- Start no longer forces a new Google conference when meeting already has join_url.
+- This prevents repeated 502 loops caused by unnecessary re-provision attempt.
+
+Calendar preflight behavior adjusted now:
+- Calendar inspection is now non-fatal before create event call.
+- Avoids preflight blocking scenarios where metadata call can fail but event creation could still proceed.
+
+
+============================================================
+8) DB TABLES USED BY MEETINGS
+============================================================
+Main tables:
+- meeting_sessions
+- meeting_attendees
+- meeting_notes
+- meeting_action_items
+- meeting_transcripts
+
+Key fields in meeting_sessions relevant to incident:
+- video_provider
+- provider_meeting_id
+- join_url
+- status
+- scheduled_start
+- actual_start
+
+
+============================================================
+9) ENVIRONMENT VARIABLES - REQUIRED AND OBSERVED
+============================================================
+Root web env (observed):
+- API_GATEWAY_URL=http://localhost:4000
+- NEXT_PUBLIC_API_URL=http://localhost:4000
+
+Gateway env keys required for Google Meet:
+- GOOGLE_MEET_SERVICE_ACCOUNT_JSON (optional if not using combined json)
+- GOOGLE_MEET_SERVICE_ACCOUNT_EMAIL
+- GOOGLE_MEET_SERVICE_ACCOUNT_PRIVATE_KEY
+- GOOGLE_MEET_CALENDAR_ID
+- GOOGLE_MEET_IMPERSONATE_USER (optional; Workspace delegation scenario)
+
+Observed gateway env state (from local file inspection):
+- GOOGLE_MEET_SERVICE_ACCOUNT_JSON is empty
+- GOOGLE_MEET_SERVICE_ACCOUNT_EMAIL is set
+- GOOGLE_MEET_SERVICE_ACCOUNT_PRIVATE_KEY is set
+- GOOGLE_MEET_CALENDAR_ID is set to personal Gmail calendar id
+- GOOGLE_MEET_IMPERSONATE_USER not set (normal for personal Gmail flow)
+
+Permission requirements outside code (must be true):
+1) The target calendar must be shared with service-account email.
+2) Permission level must be Make changes to events.
+3) Google Calendar API enabled in the service-account project.
+4) Calendar ID in env exactly matches shared calendar.
+
+
+============================================================
+10) 502 FAILURE MODES FOR /start
+============================================================
+A) Next proxy cannot reach gateway
+- Symptom: 502 with hint about API gateway URL/running service.
+- Cause: gateway process down/wrong URL.
+
+B) Gateway returns 502 from Google Meet creation
+- Symptom: payload code often starts with GOOGLE_MEET_...
+- Common causes:
+  - service account not shared on calendar
+  - calendar id wrong/not found
+  - invalid service-account key/json
+  - Google API rejects conference creation
+
+C) Timeout path
+- Symptom: 504/502 with timeout hint.
+- Cause: long-running gateway call/network latency.
+
+
+============================================================
+11) CHANGES APPLIED IN THIS DEBUG SESSION
+============================================================
+Already in code before this final report:
+- Added proxy timeout overrides for meetings routes.
+- Added strict manual URL validation for Google Meet domain.
+- Added richer Google config and creation diagnostics.
+- Added frontend request race-protection for meetings page loaders.
+- Added schedule-time auto Meet provisioning support.
+
+Applied in the latest incident fix pass:
+1) startMeeting now reuses existing join_url first.
+2) startMeeting UI sends existing joinUrl/providerMeetingId if available.
+3) Google calendar preflight check made non-fatal before event creation.
+
+Resulting expected behavior after fix:
+- If meeting already has valid join URL, Start should not call Google create again and should avoid 502 from re-provision path.
+
+
+============================================================
+12) HOW THE MEETINGS PAGE WAS CREATED (IMPLEMENTATION BREAKDOWN)
+============================================================
+Creation pattern used:
+1) Added backend meetings schema migration and indexes.
+2) Added backend service/controller/route/validator files for meetings lifecycle APIs.
+3) Wired meetings route into gateway app.
+4) Added Next BFF API route handlers under app/api/meetings/*.
+5) Built client page with full lifecycle sections:
+   - create/list/detail
+   - status updates
+   - start/join
+   - notes
+   - attendees
+   - transcript upload
+   - AI summary/description
+6) Added typed payload models in page for all response contracts.
+7) Added robust error handling and stale-request cancellation.
+8) Added route variants for daily/weekly/retrospective/business pages.
+
+
+============================================================
+13) WHAT TO PROVIDE ANOTHER AI FOR NEXT-LEVEL DIAGNOSIS
+============================================================
+Give the AI this dossier plus:
+1) Exact JSON payload body returned by failed POST /api/meetings/:id/start.
+2) Gateway terminal logs around the failing timestamp.
+3) Response headers from /api/meetings/:id/start including x-upstream-status.
+4) Whether selected meeting already has join_url in GET /api/meetings/:id.
+5) Google Calendar sharing screenshot for service-account email permissions.
+
+Suggested AI task framing:
+- Verify whether 502 is transport-level proxy failure or upstream functional failure.
+- If upstream functional, classify by GOOGLE_MEET_* code and propose smallest safe fix.
+- Validate no duplicate conference creation on start when join_url already exists.
+
+
+============================================================
+14) QUICK OPERATOR CHECKLIST
+============================================================
+1) Ensure gateway running on :4000.
+2) Ensure web app uses API_GATEWAY_URL=http://localhost:4000.
+3) Open a meeting detail and confirm join_url exists after Schedule.
+4) Click Start:
+   - If join_url exists, start should reuse and mark in_progress.
+5) If still failing:
+   - inspect JSON error payload detail/hint/code
+   - confirm Google calendar share + permissions
+
+
+End of dossier.
