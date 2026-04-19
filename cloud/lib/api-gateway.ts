@@ -6,6 +6,7 @@ type ProxyOptions = {
   method: string;
   token?: string | null;
   body?: unknown;
+  timeoutMs?: number;
 };
 
 type ProxySseOptions = {
@@ -42,7 +43,7 @@ async function readGatewayResponse(resp: Response): Promise<{ json: unknown | nu
   }
 }
 
-export async function proxyToApiGateway({ upstreamPath, method, token, body }: ProxyOptions) {
+export async function proxyToApiGateway({ upstreamPath, method, token, body, timeoutMs: timeoutOverrideMs }: ProxyOptions) {
   const baseUrl = getApiGatewayBaseUrl();
   const normalizedPath = upstreamPath.startsWith("/") ? upstreamPath : `/${upstreamPath}`;
   const upstreamUrl = `${baseUrl}${normalizedPath}`;
@@ -52,23 +53,50 @@ export async function proxyToApiGateway({ upstreamPath, method, token, body }: P
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
   let resp: Response;
+  const envTimeoutMs = Number(process.env.API_GATEWAY_PROXY_TIMEOUT_MS || "30000");
+  const normalizedEnvTimeoutMs = Number.isFinite(envTimeoutMs) && envTimeoutMs > 0 ? envTimeoutMs : 30000;
+  const timeoutMs =
+    Number.isFinite(timeoutOverrideMs) && Number(timeoutOverrideMs) > 0
+      ? Number(timeoutOverrideMs)
+      : normalizedEnvTimeoutMs;
+  const startTime = Date.now();
   try {
-    resp = await fetch(upstreamUrl, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      cache: "no-store",
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    
+    try {
+      resp = await fetch(upstreamUrl, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    
+    const duration = Date.now() - startTime;
+    if (duration > 5000) {
+      console.warn(`[SLOW REQUEST] ${method} ${upstreamUrl} took ${duration}ms`);
+    }
   } catch (err) {
+    const duration = Date.now() - startTime;
     const message = err instanceof Error ? err.message : String(err);
+    const isTimeout = message.includes('abort') || message.includes('timeout');
+    console.error(`[GATEWAY ERROR] ${method} ${upstreamUrl} after ${duration}ms - ${message}`);
+    
     return NextResponse.json(
       {
-        error: "Bad gateway",
-        details: message,
+        error: isTimeout ? "Request timeout" : "Bad gateway",
+        code: isTimeout ? 504 : 502,
+        detail: message,
         upstream: { baseUrl, url: upstreamUrl },
-        hint: "Ensure the API gateway is running and API_GATEWAY_URL is set to its origin.",
+        hint: isTimeout 
+          ? `API gateway request timed out after ${Math.round(timeoutMs / 1000)} seconds. Check if the backend service is running and not stuck in a long operation.`
+          : "Ensure the API gateway is running and API_GATEWAY_URL is set to its origin.",
       },
-      { status: 502 }
+      { status: isTimeout ? 504 : 502 }
     );
   }
 

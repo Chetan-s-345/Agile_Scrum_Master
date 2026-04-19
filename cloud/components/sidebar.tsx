@@ -13,6 +13,7 @@ import {
   Archive,
   BookOpen,
   Bot,
+  CalendarDays,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -25,7 +26,6 @@ import {
   Flag,
   GitBranch,
   Grid3X3,
-  LayoutDashboard,
   ListTodo,
   PanelsTopLeft,
   Pencil,
@@ -76,26 +76,20 @@ const mainLinks: LinkItem[] = [
   { label: "Overview", href: "/board", icon: UserRound },
   { label: "Recent", href: "/sprints", icon: ChevronRight },
   { label: "Starred", href: "/reports", icon: Star },
-  { label: "Tasks", href: "/tasks", icon: AppWindow },
-  { label: "Plans", href: "/sprint-plan", icon: Workflow },
 ];
 
 const appPages: LinkItem[] = [
-  { label: "Sprint Plan", href: "/sprint-plan", icon: Zap },
   { label: "Agentic Scrum Master", href: "/scrum-master", icon: Bot },
   { label: "Sprints", href: "/sprints", icon: Flag },
-  { label: "Tasks", href: "/tasks", icon: ListTodo },
-  { label: "Pages", href: "/pages", icon: PanelsTopLeft },
   { label: "GitHub", href: "/github", icon: GitBranch },
   { label: "Assignment", href: "/assignment", icon: Compass },
   { label: "Monitoring", href: "/monitoring", icon: Activity },
   { label: "Reports", href: "/reports", icon: BookOpen },
-  { label: "Admin Webhooks", href: "/webhooks", icon: ShieldAlert },
 ];
 
 const bottomLinks: LinkItem[] = [
   { label: "Filters", href: "/tasks", icon: Filter },
-  { label: "Dashboards", href: "/tasks", icon: LayoutDashboard },
+  { label: "Meetings", href: "/meetings/daily", icon: CalendarDays },
   { label: "Goals", href: "/goals", icon: Flag },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "More", href: "/settings", icon: Ellipsis },
