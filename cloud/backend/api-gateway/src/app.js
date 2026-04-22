@@ -20,7 +20,9 @@ const { startSprintMonitoringWorker } = require('./workers/sprintMonitoring.work
 const { startJiraSyncWorker } = require('./workers/jiraSync.worker');
 const { startWebhookProcessingWorker } = require('./workers/webhookProcessing.worker');
 const { startPrMetricsWorker } = require('./workers/prMetrics.worker');
+const { startPostMeetingWorker } = require('./workers/post-meeting.worker');
 const { startWebhookRetryWorker } = require('./jobs/webhookRetryWorker');
+const { startSprintSchedulerJob } = require('./jobs/sprint-scheduler.job');
 const { pingRedis } = require('./services/queue.service');
 
 const authRoutes = require('./routes/auth.routes');
@@ -48,7 +50,7 @@ const agentRoutes = require('./routes/agents.routes');
 const agentCommandRoutes = require('./routes/agent.routes');
 const sprintAutopilotRoutes = require('./routes/sprintAutopilot.routes');
 const { startAllAgents } = require('../server/agents');
-const { setIo, projectRoom } = require('./realtime/io');
+const { setIo, projectRoom, orgRoom } = require('./realtime/io');
 
 const app = express();
 const server = http.createServer(app);
@@ -62,6 +64,20 @@ const io = new Server(server, {
 setIo(io);
 
 io.on('connection', (socket) => {
+  socket.on('org:join', (orgPayload) => {
+    const raw = typeof orgPayload === 'object' && orgPayload !== null ? orgPayload.orgId : orgPayload;
+    const id = String(raw || '').trim();
+    if (!id) return;
+    socket.join(orgRoom(id));
+  });
+
+  socket.on('org:leave', (orgPayload) => {
+    const raw = typeof orgPayload === 'object' && orgPayload !== null ? orgPayload.orgId : orgPayload;
+    const id = String(raw || '').trim();
+    if (!id) return;
+    socket.leave(orgRoom(id));
+  });
+
   socket.on('project:join', (projectPayload) => {
     const raw = typeof projectPayload === 'object' && projectPayload !== null ? projectPayload.projectId : projectPayload;
     const id = String(raw || '').trim();
@@ -161,6 +177,12 @@ server.listen(env.PORT, () => {
     ensureRepeatableJobs().catch((err) => {
       logger.error({ err }, 'Failed to ensure repeatable jobs');
     });
+
+    try {
+      startSprintSchedulerJob();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start sprint scheduler cron job');
+    }
   }
 
   if (env.ENABLE_WORKERS) {
@@ -192,6 +214,12 @@ server.listen(env.PORT, () => {
       startWebhookRetryWorker();
     } catch (err) {
       logger.error({ err }, 'Failed to start webhook retry worker');
+    }
+
+    try {
+      startPostMeetingWorker();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start post-meeting worker');
     }
 
     try {

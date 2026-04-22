@@ -9,11 +9,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useUIStore } from "@/lib/ui-store";
 import {
   Activity,
-  AppWindow,
   Archive,
   BookOpen,
   Bot,
-  CalendarDays,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -26,16 +24,14 @@ import {
   Flag,
   GitBranch,
   Grid3X3,
-  ListTodo,
   PanelsTopLeft,
   Pencil,
   Plus,
-  ShieldAlert,
   Star,
   Trash2,
   UserRound,
   Users,
-  Workflow,
+  Video,
   Zap,
 } from "lucide-react";
 
@@ -89,7 +85,7 @@ const appPages: LinkItem[] = [
 
 const bottomLinks: LinkItem[] = [
   { label: "Filters", href: "/tasks", icon: Filter },
-  { label: "Meetings", href: "/meetings/daily", icon: CalendarDays },
+  { label: "Meetings", href: "/meetings", icon: Video },
   { label: "Goals", href: "/goals", icon: Flag },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "More", href: "/settings", icon: Ellipsis },

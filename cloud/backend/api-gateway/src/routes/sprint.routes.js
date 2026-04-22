@@ -10,6 +10,7 @@ router.use(authMiddleware, orgDbMiddleware);
 router.get('/', sprintController.listSprints);
 router.post('/', sprintController.createSprint);
 router.post('/:sprintId/plan', sprintController.planSprint);
+router.post('/:sprintId/schedule-meetings', sprintController.scheduleSprintMeetings);
 router.patch('/:sprintId/start', sprintController.startSprint);
 router.patch('/:sprintId/complete', sprintController.completeSprint);
 router.patch('/:sprintId/archive', sprintController.archiveSprint);

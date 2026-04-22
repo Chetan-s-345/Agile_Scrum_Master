@@ -66,6 +66,7 @@ function getQueues() {
     jiraSync: new Queue('jira-sync', { connection }),
     webhookProcessing: new Queue('webhook-processing', { connection }),
     prMetrics: new Queue('pr-metrics', { connection }),
+    postMeeting: new Queue('post-meeting', { connection }),
   };
 
   return _queues;

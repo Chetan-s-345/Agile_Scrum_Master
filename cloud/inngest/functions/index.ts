@@ -7,6 +7,8 @@ export {
 	taskCreatedAutoAssign,
 	taskUpdatedMonitoring,
 	customAgentRunObserved,
+	meetingCompletedObserved,
+	meetingTaskCreatedObserved,
 	projectMonitoringPulse,
 	sprintEndCleanupCron,
 	sprintEndCleanupEvent,

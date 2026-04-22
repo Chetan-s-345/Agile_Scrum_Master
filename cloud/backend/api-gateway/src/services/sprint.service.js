@@ -1,6 +1,7 @@
 const { assignmentService } = require('./assignment.service');
 const { getQueues } = require('./queue.service');
 const { queueJiraTaskSync } = require('./jiraSync.service');
+const { scheduleSprintMeetings } = require('./scheduler.service');
 const { logger } = require('../middleware/logger');
 const { queueEmbedSprint } = require('../../server/lib/githubIngestion');
 
@@ -557,6 +558,36 @@ class SprintService {
       }
       throw e;
     }
+  }
+
+  async scheduleMeetings(req, sprintId) {
+    const orgPool = requireOrgDb(req);
+    const orgId = String(req.user?.orgId || '').trim();
+    if (!orgId) {
+      throw Object.assign(new Error('Missing orgId in token'), {
+        statusCode: 400,
+        code: 'MISSING_ORG_ID',
+      });
+    }
+
+    const sprintResp = await orgPool.query(
+      `SELECT id, project_id, name, start_date, end_date
+       FROM sprints
+       WHERE id = $1
+       LIMIT 1`,
+      [String(sprintId)]
+    );
+    const sprint = sprintResp.rows[0] || null;
+    if (!sprint) {
+      throw Object.assign(new Error('Sprint not found'), { statusCode: 404 });
+    }
+
+    const result = await scheduleSprintMeetings(orgId, sprint);
+    return {
+      sprintId: String(sprintId),
+      createdCount: Number(result.createdCount || 0),
+      items: Array.isArray(result.items) ? result.items : [],
+    };
   }
 
   async archive(req, sprintId, context) {

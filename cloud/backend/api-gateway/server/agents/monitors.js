@@ -366,24 +366,24 @@ function splitStandupSections(text) {
   };
 }
 
-async function callAnthropicStandup(message) {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!safe(key)) return 'Standup generation skipped: ANTHROPIC_API_KEY missing.';
+async function callGroqStandup(message) {
+  const key = process.env.GROQ_API_KEY;
+  if (!safe(key)) return 'Standup generation skipped: GROQ_API_KEY missing.';
 
   const resp = await axios({
     method: 'POST',
-    url: 'https://api.anthropic.com/v1/messages',
+    url: 'https://api.groq.com/openai/v1/chat/completions',
     timeout: 120000,
     headers: {
       'content-type': 'application/json',
-      'x-api-key': key,
-      'anthropic-version': '2023-06-01',
+      'Authorization': `Bearer ${key}`,
     },
     data: {
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 800,
-      system: 'You are a scrum assistant. Produce concise standup using sections Yesterday:, Today:, Blockers:.',
+      model: 'llama3-8b-8192',
       messages: [{ role: 'user', content: String(message) }],
+      system: 'You are a scrum assistant. Produce concise standup using sections Yesterday:, Today:, Blockers:.',
+      max_tokens: 800,
+      temperature: 0.3,
     },
     validateStatus: () => true,
   });
@@ -392,8 +392,7 @@ async function callAnthropicStandup(message) {
     return 'Standup generation failed. Falling back to raw context summary.';
   }
 
-  const blocks = Array.isArray(resp.data?.content) ? resp.data.content : [];
-  const text = blocks.filter((b) => b?.type === 'text').map((b) => b.text).join('');
+  const text = resp.data?.choices?.[0]?.message?.content || '';
   return safe(text) || 'No standup text generated.';
 }
 
@@ -463,7 +462,7 @@ async function runDailyStandupCompilerForOrg(orgPool, orgId) {
         `Blocked tasks: ${(blockedResp.rows || []).map((r) => r.title).join('; ') || 'None'}`,
       ].join('\n');
 
-      const generated = await callAnthropicStandup(context);
+      const generated = await callGroqStandup(context);
       const sections = splitStandupSections(generated);
 
       await orgPool.query(
@@ -497,32 +496,32 @@ async function runDailyStandupCompilerForOrg(orgPool, orgId) {
   return { standupsCreated: created };
 }
 
-async function callAnthropicReport(message) {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!safe(key)) return 'Report generation skipped: ANTHROPIC_API_KEY missing.';
+async function callGroqReport(message) {
+  const key = process.env.GROQ_API_KEY;
+  if (!safe(key)) return 'Report generation skipped: GROQ_API_KEY missing.';
 
   const resp = await axios({
     method: 'POST',
-    url: 'https://api.anthropic.com/v1/messages',
+    url: 'https://api.groq.com/openai/v1/chat/completions',
     timeout: 120000,
     headers: {
       'content-type': 'application/json',
-      'x-api-key': key,
-      'anthropic-version': '2023-06-01',
+      'Authorization': `Bearer ${key}`,
     },
     data: {
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      system: 'Generate a concise sprint completion report with achievements, challenges, and recommendations.',
+      model: 'llama3-8b-8192',
       messages: [{ role: 'user', content: String(message) }],
+      system: 'Generate a concise sprint completion report with achievements, challenges, and recommendations.',
+      max_tokens: 1000,
+      temperature: 0.3,
     },
     validateStatus: () => true,
   });
 
   if (resp.status >= 400) return 'Sprint report generation failed.';
 
-  const blocks = Array.isArray(resp.data?.content) ? resp.data.content : [];
-  return safe(blocks.filter((b) => b?.type === 'text').map((b) => b.text).join('')) || 'No report text generated.';
+  const text = resp.data?.choices?.[0]?.message?.content || '';
+  return safe(text) || 'No report text generated.';
 }
 
 async function runSprintCompletionReporterForOrg(orgPool, orgId) {
@@ -567,7 +566,7 @@ async function runSprintCompletionReporterForOrg(orgPool, orgId) {
       `averageCycleTimeHours: ${averageCycleTime}`,
     ].join('\n');
 
-    const reportText = await callAnthropicReport(prompt);
+    const reportText = await callGroqReport(prompt);
 
     await orgPool.query(
       `INSERT INTO sprint_reports (

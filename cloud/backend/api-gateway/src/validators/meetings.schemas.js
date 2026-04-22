@@ -1,11 +1,12 @@
 const { z } = require('zod');
 
 const uuidSchema = z.string().uuid();
-const meetingTypeSchema = z.enum(['daily', 'weekly', 'retrospective', 'business']);
+const meetingTypeSchema = z.enum(['daily', 'planning', 'review', 'retro', 'weekly', 'retrospective', 'business']);
 const meetingStatusSchema = z.enum(['scheduled', 'in_progress', 'completed', 'archived']);
-const googleMeetJoinUrlRegex = /^https:\/\/meet\.google\.com\/[a-z0-9-]{3,64}(?:[/?#].*)?$/i;
+const livekitJoinUrlRegex = /^(wss?:\/\/|https?:\/\/).+/i;
 
 const listMeetingsQuerySchema = z.object({
+  kind: z.enum(['session', 'room']).optional(),
   type: meetingTypeSchema.optional(),
   status: meetingStatusSchema.optional(),
   sprintId: uuidSchema.optional(),
@@ -27,7 +28,7 @@ const createMeetingSchema = z.object({
   description: z.string().max(20000).optional(),
   attendeeDeveloperIds: z.array(uuidSchema).max(200).optional(),
   createJoinUrl: z.boolean().optional(),
-  provider: z.enum(['google_meet']).optional(),
+  provider: z.enum(['livekit', 'zoom', 'teams']).optional(),
 });
 
 const updateMeetingSchema = z
@@ -57,24 +58,24 @@ const updateMeetingDescriptionSchema = z.object({
 
 const startMeetingSchema = z
   .object({
-    provider: z.enum(['google_meet', 'zoom', 'teams']).optional(),
+    provider: z.enum(['livekit', 'zoom', 'teams']).optional(),
     providerMeetingId: z.string().max(200).optional(),
     joinUrl: z.string().url().max(1200).optional(),
   })
   .superRefine((value, ctx) => {
-    const provider = value.provider || 'google_meet';
+    const provider = value.provider || 'livekit';
     const joinUrl = String(value.joinUrl || '').trim();
-    if (provider === 'google_meet' && joinUrl && !googleMeetJoinUrlRegex.test(joinUrl)) {
+    if (provider === 'livekit' && joinUrl && !livekitJoinUrlRegex.test(joinUrl)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['joinUrl'],
-        message: 'joinUrl must be a valid https://meet.google.com/... URL when provider is google_meet.',
+        message: 'joinUrl must be a valid ws://, wss://, or https:// URL when provider is livekit.',
       });
     }
   });
 
 const uploadMeetingTranscriptSchema = z.object({
-  sourceType: z.enum(['manual_upload', 'google_meet', 'zoom', 'teams', 'other']).optional(),
+  sourceType: z.enum(['manual_upload', 'livekit', 'zoom', 'teams', 'other']).optional(),
   fileName: z.string().max(260).optional(),
   mimeType: z.string().max(120).optional(),
   language: z.string().max(20).optional(),
@@ -98,6 +99,75 @@ const summarizeMeetingSchema = z.object({
   updateDescription: z.boolean().optional(),
 });
 
+const meetingRoomNameSchema = z
+  .string()
+  .min(3)
+  .max(180)
+  .regex(/^[a-zA-Z0-9._:-]+$/, 'roomName contains unsupported characters');
+
+const createMeetingRoomTokenSchema = z.object({
+  roomName: meetingRoomNameSchema,
+  participantName: z.string().min(1).max(120),
+});
+
+const createMeetingRoomSchema = z.object({
+  roomName: meetingRoomNameSchema,
+  meetingKind: z.enum(['normal', 'sprint_planner']).optional(),
+  normalCategory: z.enum(['daily_sprint', 'weekly_sprint', 'backlogs', 'business_meeting', 'retrospective']).optional(),
+  title: z.string().min(1).max(240).optional(),
+  description: z.string().max(4000).optional(),
+  scheduledFor: z.string().min(1).optional(),
+});
+
+const meetingRoomParamsSchema = z.object({
+  roomName: meetingRoomNameSchema,
+});
+
+const meetingRoomIdParamsSchema = z.object({
+  roomId: uuidSchema,
+});
+
+const saveMeetingRoomTranscriptSchema = z.object({
+  transcript: z.string().max(500000).optional().default(''),
+});
+
+const meetingRoomParticipantIdParamsSchema = z.object({
+  roomName: meetingRoomNameSchema,
+  participantId: z.string().uuid(),
+});
+
+const joinMeetingRoomSchema = z.object({
+  participantName: z.string().min(1).max(120),
+  identity: z.string().max(200).optional(),
+  role: z.string().min(1).max(40).optional(),
+});
+
+const leaveMeetingRoomSchema = z.object({
+  userId: z.string().min(1).max(120).optional(),
+});
+
+const updateMeetingRoomParticipantSchema = z
+  .object({
+    role: z.string().min(1).max(40).optional(),
+    status: z.enum(['active', 'left', 'removed']).optional(),
+    participationNotes: z.string().max(5000).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, { message: 'No participant fields to update' });
+
+const generateIndividualMeetingRoomSummarySchema = z.object({
+  participantId: z.string().uuid().optional(),
+  focus: z.string().max(800).optional(),
+});
+
+const listMeetingRoomMessagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+
+const createMeetingRoomMessageSchema = z.object({
+  message: z.string().min(1).max(5000),
+  participantName: z.string().min(1).max(120).optional(),
+});
+
 module.exports = {
   listMeetingsQuerySchema,
   meetingIdParamsSchema,
@@ -109,4 +179,16 @@ module.exports = {
   startMeetingSchema,
   uploadMeetingTranscriptSchema,
   summarizeMeetingSchema,
+  createMeetingRoomTokenSchema,
+  createMeetingRoomSchema,
+  meetingRoomParamsSchema,
+  meetingRoomIdParamsSchema,
+  saveMeetingRoomTranscriptSchema,
+  meetingRoomParticipantIdParamsSchema,
+  joinMeetingRoomSchema,
+  leaveMeetingRoomSchema,
+  updateMeetingRoomParticipantSchema,
+  generateIndividualMeetingRoomSummarySchema,
+  listMeetingRoomMessagesQuerySchema,
+  createMeetingRoomMessageSchema,
 };

@@ -1112,7 +1112,7 @@ CREATE TABLE meeting_sessions (
     sprint_id               UUID REFERENCES sprints(id) ON DELETE SET NULL,
     project_id              UUID REFERENCES projects(id) ON DELETE SET NULL,
     meeting_type            VARCHAR(30) NOT NULL CHECK (meeting_type IN ('daily', 'weekly', 'retrospective', 'business')),
-    video_provider          VARCHAR(30) NOT NULL DEFAULT 'none' CHECK (video_provider IN ('none', 'google_meet', 'zoom', 'teams')),
+    video_provider          VARCHAR(30) NOT NULL DEFAULT 'none' CHECK (video_provider IN ('none', 'livekit', 'zoom', 'teams')),
     provider_meeting_id     TEXT,
     join_url                TEXT,
     title                   VARCHAR(300) NOT NULL,
@@ -1168,7 +1168,7 @@ CREATE TABLE meeting_action_items (
 CREATE TABLE meeting_transcripts (
     id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     meeting_id              UUID NOT NULL REFERENCES meeting_sessions(id) ON DELETE CASCADE,
-    source_type             VARCHAR(30) NOT NULL DEFAULT 'manual_upload' CHECK (source_type IN ('manual_upload', 'google_meet', 'zoom', 'teams', 'other')),
+    source_type             VARCHAR(30) NOT NULL DEFAULT 'manual_upload' CHECK (source_type IN ('manual_upload', 'livekit', 'zoom', 'teams', 'other')),
     file_name               VARCHAR(260),
     mime_type               VARCHAR(120),
     transcript_text         TEXT NOT NULL,
@@ -1180,6 +1180,71 @@ CREATE TABLE meeting_transcripts (
     created_at              TIMESTAMP DEFAULT NOW(),
     updated_at              TIMESTAMP DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS meeting_rooms (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id                  TEXT NOT NULL,
+    room_name               TEXT NOT NULL,
+    created_by              TEXT NOT NULL,
+    meeting_kind            TEXT NOT NULL DEFAULT 'normal',
+    normal_category         TEXT NOT NULL DEFAULT 'daily_sprint',
+    title                   TEXT,
+    description             TEXT,
+    scheduled_for           TIMESTAMPTZ,
+    transcript              TEXT DEFAULT '',
+    summary                 TEXT DEFAULT '',
+    status                  TEXT DEFAULT 'active',
+    created_at              TIMESTAMPTZ DEFAULT NOW(),
+    ended_at                TIMESTAMPTZ,
+    UNIQUE (org_id, room_name)
+);
+
+CREATE TABLE IF NOT EXISTS meeting_room_participants (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    room_id                 UUID NOT NULL REFERENCES meeting_rooms(id) ON DELETE CASCADE,
+    org_id                  TEXT NOT NULL,
+    user_id                 TEXT NOT NULL,
+    participant_name        TEXT NOT NULL,
+    identity                TEXT,
+    role                    TEXT NOT NULL DEFAULT 'member',
+    status                  TEXT NOT NULL DEFAULT 'active',
+    joined_at               TIMESTAMPTZ DEFAULT NOW(),
+    left_at                 TIMESTAMPTZ,
+    last_seen_at            TIMESTAMPTZ DEFAULT NOW(),
+    participation_notes     TEXT DEFAULT '',
+    UNIQUE (room_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS meeting_room_individual_summaries (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    room_id                 UUID NOT NULL REFERENCES meeting_rooms(id) ON DELETE CASCADE,
+    org_id                  TEXT NOT NULL,
+    participant_id          UUID REFERENCES meeting_room_participants(id) ON DELETE CASCADE,
+    user_id                 TEXT NOT NULL,
+    participant_name        TEXT NOT NULL,
+    summary                 TEXT DEFAULT '',
+    action_items            TEXT DEFAULT '',
+    generated_at            TIMESTAMPTZ DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (room_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS meeting_room_messages (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    room_id                 UUID NOT NULL REFERENCES meeting_rooms(id) ON DELETE CASCADE,
+    org_id                  TEXT NOT NULL,
+    user_id                 TEXT NOT NULL,
+    participant_name        TEXT NOT NULL,
+    message                 TEXT NOT NULL,
+    created_at              TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_rooms_org ON meeting_rooms(org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meeting_rooms_status ON meeting_rooms(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meeting_room_participants_room ON meeting_room_participants(room_id, status, joined_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meeting_room_participants_org_user ON meeting_room_participants(org_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_meeting_room_individual_summaries_room ON meeting_room_individual_summaries(room_id, generated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meeting_room_messages_room ON meeting_room_messages(room_id, created_at ASC);
 
 CREATE UNIQUE INDEX uq_meeting_sessions_retrospective
     ON meeting_sessions(sprint_id, meeting_type)
