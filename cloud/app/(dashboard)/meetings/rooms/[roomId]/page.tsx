@@ -65,6 +65,7 @@ export default function MeetingRoomDetailPage() {
   const [roomId, setRoomId] = useState("");
   const [item, setItem] = useState<MeetingRoomDetail | null>(null);
   const [canManageMeetings, setCanManageMeetings] = useState(false);
+  const [showFullTranscript, setShowFullTranscript] = useState(false);
 
   const loadRoom = useCallback(async (id: string) => {
     setLoading(true);
@@ -139,7 +140,7 @@ export default function MeetingRoomDetailPage() {
       if (!resp.ok) {
         throw new Error(String(payload?.detail || payload?.error || "Failed to end meeting"));
       }
-      router.push("/");
+      router.push("/meetings");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to end meeting");
     } finally {
@@ -238,9 +239,21 @@ export default function MeetingRoomDetailPage() {
       </section>
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] p-4">
-        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Transcript</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-[var(--text-primary)]">Meeting Summary</h2>
+          <button
+            type="button"
+            onClick={() => setShowFullTranscript((prev) => !prev)}
+            className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1 text-xs text-[var(--text-primary)]"
+          >
+            {showFullTranscript ? "Hide full transcript" : "Show full transcript"}
+          </button>
+        </div>
+        <div className="mt-2 max-h-[260px] overflow-auto whitespace-pre-wrap rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-primary)]">
+          {item.summary || "Summary is not generated yet."}
+        </div>
         <div className="mt-2 max-h-[360px] overflow-auto whitespace-pre-wrap rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-primary)]">
-          {item.transcript || "Transcript is empty for this meeting."}
+          {showFullTranscript ? item.transcript || "Transcript is empty for this meeting." : "Full transcript is hidden. Use Show full transcript to view all converted text."}
         </div>
       </section>
 

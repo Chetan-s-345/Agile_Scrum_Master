@@ -29,13 +29,15 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
 
   useEffect(() => {
     if (!audioTrack) {
-      setIsTranscribing(false);
       return;
     }
 
     let closed = false;
     let recorder: MediaRecorder | null = null;
     let clonedTrack: MediaStreamTrack | null = null;
+    let bytesSent = 0;
+    let hasRetriedOnNoData = false;
+    let noDataTimer: ReturnType<typeof setTimeout> | null = null;
     let dgConnection: {
       on: (event: string, cb: (...args: unknown[]) => void) => void;
       sendMedia: (chunk: ArrayBufferLike | Blob | ArrayBufferView) => void;
@@ -44,8 +46,57 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
       close: () => void;
     } | null = null;
 
+    function clearNoDataTimer() {
+      if (!noDataTimer) return;
+      clearTimeout(noDataTimer);
+      noDataTimer = null;
+    }
+
+    function scheduleNoDataRecovery(restart: () => Promise<void>) {
+      clearNoDataTimer();
+      noDataTimer = setTimeout(() => {
+        if (closed || bytesSent > 0 || hasRetriedOnNoData) return;
+        hasRetriedOnNoData = true;
+        if (dgConnection) {
+          try {
+            dgConnection.sendCloseStream({ type: "CloseStream" });
+          } catch {
+            // no-op
+          }
+          dgConnection.close();
+          dgConnection = null;
+        }
+        void restart();
+      }, 10000);
+    }
+
+    async function fetchDeepgramKey() {
+      let attempt = 0;
+      let waitMs = 350;
+
+      while (attempt < 3) {
+        try {
+          const tokenResp = await fetch("/api/meetings/deepgram-token", { cache: "no-store" });
+          const tokenData = (await tokenResp.json().catch(() => null)) as DeepgramTokenResponse | null;
+          const key = String(tokenData?.key || "").trim();
+          if (tokenResp.ok && key) return key;
+        } catch {
+          // retry
+        }
+        attempt += 1;
+        if (attempt >= 3) break;
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        waitMs *= 2;
+      }
+
+      throw new Error("Deepgram token unavailable");
+    }
+
     async function start() {
       try {
+        clearNoDataTimer();
+        bytesSent = 0;
+
         const currentTrack = audioTrack;
         if (!currentTrack) {
           if (mountedRef.current && !closed) {
@@ -54,12 +105,7 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
           return;
         }
 
-        const tokenResp = await fetch("/api/meetings/deepgram-token", { cache: "no-store" });
-        const tokenData = (await tokenResp.json().catch(() => null)) as DeepgramTokenResponse | null;
-        const key = String(tokenData?.key || "").trim();
-        if (!tokenResp.ok || !key) {
-          throw new Error("Deepgram token unavailable");
-        }
+        const key = await fetchDeepgramKey();
 
         const deepgram = new DeepgramClient({ apiKey: key });
         const connection = await deepgram.listen.v1.connect({
@@ -67,7 +113,7 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
           model: "nova-2",
           language: "en",
           punctuate: "true",
-          interim_results: "false",
+          interim_results: "true",
         });
 
         dgConnection = connection as typeof dgConnection;
@@ -75,6 +121,7 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
         connection.on("open", () => {
           if (!mountedRef.current || closed) return;
           setIsTranscribing(true);
+          scheduleNoDataRecovery(start);
         });
 
         connection.on("message", (message: unknown) => {
@@ -82,6 +129,7 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
           if (payload?.type !== "Results") return;
           const text = String(payload?.channel?.alternatives?.[0]?.transcript || "").trim();
           if (!text || !payload?.is_final || !mountedRef.current || closed) return;
+          clearNoDataTimer();
 
           setTranscript((prev) => {
             if (!prev) return text;
@@ -111,6 +159,7 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
         recorder.ondataavailable = async (event) => {
           if (!event.data || event.data.size === 0 || !dgConnection || closed) return;
           const chunk = await event.data.arrayBuffer();
+          bytesSent += chunk.byteLength;
           dgConnection.sendMedia(chunk);
         };
 
@@ -126,6 +175,7 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
     return () => {
       closed = true;
       setIsTranscribing(false);
+      clearNoDataTimer();
 
       if (recorder && recorder.state !== "inactive") {
         recorder.stop();

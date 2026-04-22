@@ -53,7 +53,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Bad request", code: 400, detail: "roomName is required" }, { status: 400 });
   }
 
-  const transcriptValue = transcript || "Meeting ended without captured transcript.";
+  const transcriptValue = transcript;
+  const captureMeta = {
+    captured: Boolean(transcriptValue),
+    charCount: transcriptValue.length,
+    source: "deepgram-livekit",
+  };
 
   try {
     const primary = await postGatewayJson(
@@ -67,7 +72,10 @@ export async function POST(request: Request) {
     );
 
     if (primary.status >= 200 && primary.status < 300) {
-      return NextResponse.json(primary.payload, { status: primary.status });
+      if (primary.payload && typeof primary.payload === "object") {
+        return NextResponse.json({ ...(primary.payload as Record<string, unknown>), ...captureMeta }, { status: primary.status });
+      }
+      return NextResponse.json(captureMeta, { status: primary.status });
     }
 
     if (isUuid(roomName)) {
@@ -83,7 +91,10 @@ export async function POST(request: Request) {
       );
 
       if (fallback.status >= 200 && fallback.status < 300) {
-        return NextResponse.json(fallback.payload, { status: fallback.status });
+        if (fallback.payload && typeof fallback.payload === "object") {
+          return NextResponse.json({ ...(fallback.payload as Record<string, unknown>), ...captureMeta }, { status: fallback.status });
+        }
+        return NextResponse.json(captureMeta, { status: fallback.status });
       }
 
       return NextResponse.json(fallback.payload, { status: fallback.status });

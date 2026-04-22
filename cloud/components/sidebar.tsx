@@ -31,6 +31,7 @@ import {
   Trash2,
   UserRound,
   Users,
+  Workflow,
   Video,
   Zap,
 } from "lucide-react";
@@ -70,6 +71,8 @@ type SpacesResp = { spaces?: Space[]; archived?: Space[] };
 
 const mainLinks: LinkItem[] = [
   { label: "Overview", href: "/board", icon: UserRound },
+  { label: "Tasks", href: "/tasks", icon: Filter },
+  { label: "Sprint Planner", href: "/sprint-plan", icon: Workflow },
   { label: "Recent", href: "/sprints", icon: ChevronRight },
   { label: "Starred", href: "/reports", icon: Star },
 ];
@@ -84,7 +87,6 @@ const appPages: LinkItem[] = [
 ];
 
 const bottomLinks: LinkItem[] = [
-  { label: "Filters", href: "/tasks", icon: Filter },
   { label: "Meetings", href: "/meetings", icon: Video },
   { label: "Goals", href: "/goals", icon: Flag },
   { label: "Teams", href: "/teams", icon: Users },
@@ -588,7 +590,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 <Item
                   key={item.label}
                   item={item}
-                  active={item.label === "Overview" && pathname === "/board"}
+                  active={pathname === item.href || pathname.startsWith(`${item.href}/`)}
                   compact={collapsed}
                 />
               );
