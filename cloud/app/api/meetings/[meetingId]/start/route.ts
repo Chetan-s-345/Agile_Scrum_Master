@@ -15,7 +15,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ meetingId:
   };
 
   const body = {
-    provider: incoming?.provider || "daily",
+    provider: incoming?.provider || "livekit",
     joinUrl: incoming?.joinUrl,
     providerMeetingId: incoming?.providerMeetingId,
   };

@@ -9,6 +9,15 @@ const {
   startMeetingSchema,
   uploadMeetingTranscriptSchema,
   summarizeMeetingSchema,
+  createMeetingRoomTokenSchema,
+  createMeetingRoomSchema,
+  meetingRoomParamsSchema,
+  saveMeetingRoomTranscriptSchema,
+  meetingRoomParticipantIdParamsSchema,
+  joinMeetingRoomSchema,
+  leaveMeetingRoomSchema,
+  updateMeetingRoomParticipantSchema,
+  generateIndividualMeetingRoomSummarySchema,
 } = require('../validators/meetings.schemas');
 const { meetingsService } = require('../services/meetings.service');
 
@@ -33,6 +42,11 @@ async function listMeetings(req, res, next) {
   try {
     const parsed = listMeetingsQuerySchema.safeParse(req.query || {});
     if (!parsed.success) return validationError(res, parsed);
+
+    if (parsed.data.kind === 'room') {
+      const items = await meetingsService.listMeetingRooms(req);
+      return res.status(200).json({ items });
+    }
 
     const items = await meetingsService.list(req, parsed.data);
     return res.status(200).json({ items });
@@ -208,8 +222,187 @@ async function summarizeMeeting(req, res, next) {
   }
 }
 
+async function createMeetingRoomToken(req, res, next) {
+  try {
+    const parsed = createMeetingRoomTokenSchema.safeParse(req.body || {});
+    if (!parsed.success) return validationError(res, parsed);
+
+    const item = await meetingsService.createMeetingRoomToken(req, parsed.data);
+    return res.status(200).json(item);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function createMeetingRoom(req, res, next) {
+  try {
+    const parsed = createMeetingRoomSchema.safeParse(req.body || {});
+    if (!parsed.success) return validationError(res, parsed);
+
+    const item = await meetingsService.createMeetingRoom(req, parsed.data);
+    return res.status(201).json({ item });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function saveMeetingRoomTranscript(req, res, next) {
+  try {
+    const parsedParams = meetingRoomParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const parsed = saveMeetingRoomTranscriptSchema.safeParse(req.body || {});
+    if (!parsed.success) return validationError(res, parsed);
+
+    const result = await meetingsService.saveMeetingRoomTranscript(req, {
+      roomName: parsedParams.data.roomName,
+      transcript: parsed.data.transcript,
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function joinMeetingRoomParticipant(req, res, next) {
+  try {
+    const parsedParams = meetingRoomParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const parsed = joinMeetingRoomSchema.safeParse(req.body || {});
+    if (!parsed.success) return validationError(res, parsed);
+
+    const item = await meetingsService.joinMeetingRoomParticipant(req, {
+      roomName: parsedParams.data.roomName,
+      participantName: parsed.data.participantName,
+      identity: parsed.data.identity,
+      role: parsed.data.role,
+    });
+    return res.status(200).json({ item });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function listMeetingRoomParticipants(req, res, next) {
+  try {
+    const parsedParams = meetingRoomParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const items = await meetingsService.listMeetingRoomParticipants(req, parsedParams.data.roomName);
+    return res.status(200).json({ items });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function updateMeetingRoomParticipant(req, res, next) {
+  try {
+    const parsedParams = meetingRoomParticipantIdParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const parsed = updateMeetingRoomParticipantSchema.safeParse(req.body || {});
+    if (!parsed.success) return validationError(res, parsed);
+
+    const item = await meetingsService.updateMeetingRoomParticipant(
+      req,
+      parsedParams.data.roomName,
+      parsedParams.data.participantId,
+      parsed.data
+    );
+    return res.status(200).json({ item });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function removeMeetingRoomParticipant(req, res, next) {
+  try {
+    const parsedParams = meetingRoomParticipantIdParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const item = await meetingsService.removeMeetingRoomParticipant(
+      req,
+      parsedParams.data.roomName,
+      parsedParams.data.participantId
+    );
+    return res.status(200).json({ item });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function leaveMeetingRoomParticipant(req, res, next) {
+  try {
+    const parsedParams = meetingRoomParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const parsed = leaveMeetingRoomSchema.safeParse(req.body || {});
+    if (!parsed.success) return validationError(res, parsed);
+
+    const item = await meetingsService.leaveMeetingRoomParticipant(req, parsedParams.data.roomName, parsed.data);
+    return res.status(200).json({ item });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function generateIndividualMeetingRoomSummary(req, res, next) {
+  try {
+    const parsedParams = meetingRoomParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const parsed = generateIndividualMeetingRoomSummarySchema.safeParse(req.body || {});
+    if (!parsed.success) return validationError(res, parsed);
+
+    const item = await meetingsService.generateIndividualMeetingRoomSummary(req, {
+      roomName: parsedParams.data.roomName,
+      participantId: parsed.data.participantId,
+      focus: parsed.data.focus,
+    });
+    return res.status(200).json({ item });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function listIndividualMeetingRoomSummaries(req, res, next) {
+  try {
+    const parsedParams = meetingRoomParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const items = await meetingsService.listMeetingRoomIndividualSummaries(req, parsedParams.data.roomName);
+    return res.status(200).json({ items });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function endMeetingRoom(req, res, next) {
+  try {
+    const parsedParams = meetingRoomParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const item = await meetingsService.endMeetingRoom(req, parsedParams.data.roomName);
+    return res.status(200).json({ item });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 module.exports = {
   meetingsHealth,
+  createMeetingRoomToken,
+  createMeetingRoom,
+  joinMeetingRoomParticipant,
+  listMeetingRoomParticipants,
+  updateMeetingRoomParticipant,
+  removeMeetingRoomParticipant,
+  leaveMeetingRoomParticipant,
+  saveMeetingRoomTranscript,
+  generateIndividualMeetingRoomSummary,
+  listIndividualMeetingRoomSummaries,
+  endMeetingRoom,
   listMeetings,
   getMeeting,
   createMeeting,

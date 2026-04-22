@@ -12,7 +12,6 @@ import {
   Archive,
   BookOpen,
   Bot,
-  CalendarDays,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -32,6 +31,7 @@ import {
   Trash2,
   UserRound,
   Users,
+  Video,
   Zap,
 } from "lucide-react";
 
@@ -85,7 +85,7 @@ const appPages: LinkItem[] = [
 
 const bottomLinks: LinkItem[] = [
   { label: "Filters", href: "/tasks", icon: Filter },
-  { label: "Meetings", href: "/meetings/daily", icon: CalendarDays },
+  { label: "Meetings", href: "/meetings", icon: Video },
   { label: "Goals", href: "/goals", icon: Flag },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "More", href: "/settings", icon: Ellipsis },

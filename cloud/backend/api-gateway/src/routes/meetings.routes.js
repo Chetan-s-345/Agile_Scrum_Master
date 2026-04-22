@@ -8,6 +8,18 @@ const router = express.Router();
 router.get('/health', meetingsController.meetingsHealth);
 router.use(authMiddleware, orgDbMiddleware);
 
+router.post('/token', meetingsController.createMeetingRoomToken);
+router.post('/create', meetingsController.createMeetingRoom);
+router.post('/:roomName/participants/join', meetingsController.joinMeetingRoomParticipant);
+router.post('/:roomName/participants/leave', meetingsController.leaveMeetingRoomParticipant);
+router.get('/:roomName/participants', meetingsController.listMeetingRoomParticipants);
+router.patch('/:roomName/participants/:participantId', meetingsController.updateMeetingRoomParticipant);
+router.delete('/:roomName/participants/:participantId', meetingsController.removeMeetingRoomParticipant);
+router.post('/:roomName/transcript', meetingsController.saveMeetingRoomTranscript);
+router.post('/:roomName/summaries/individual', meetingsController.generateIndividualMeetingRoomSummary);
+router.get('/:roomName/summaries/individual', meetingsController.listIndividualMeetingRoomSummaries);
+router.post('/:roomName/end', meetingsController.endMeetingRoom);
+
 router.get('/', meetingsController.listMeetings);
 router.post('/', meetingsController.createMeeting);
 router.get('/:meetingId', meetingsController.getMeeting);

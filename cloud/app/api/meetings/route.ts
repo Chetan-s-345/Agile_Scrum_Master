@@ -6,6 +6,9 @@ export async function GET(request: Request) {
   if (!token) return NextResponse.json({ error: "Unauthorized", code: 401, detail: "Missing auth token" }, { status: 401 });
 
   const url = new URL(request.url);
+  if (!url.searchParams.get("kind")) {
+    url.searchParams.set("kind", "room");
+  }
   const qs = url.searchParams.toString();
   return proxyToApiGateway({
     upstreamPath: `/api/v1/meetings${qs ? `?${qs}` : ""}`,

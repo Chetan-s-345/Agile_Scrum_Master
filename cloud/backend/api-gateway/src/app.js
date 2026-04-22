@@ -50,7 +50,7 @@ const agentRoutes = require('./routes/agents.routes');
 const agentCommandRoutes = require('./routes/agent.routes');
 const sprintAutopilotRoutes = require('./routes/sprintAutopilot.routes');
 const { startAllAgents } = require('../server/agents');
-const { setIo, projectRoom } = require('./realtime/io');
+const { setIo, projectRoom, orgRoom } = require('./realtime/io');
 
 const app = express();
 const server = http.createServer(app);
@@ -64,6 +64,20 @@ const io = new Server(server, {
 setIo(io);
 
 io.on('connection', (socket) => {
+  socket.on('org:join', (orgPayload) => {
+    const raw = typeof orgPayload === 'object' && orgPayload !== null ? orgPayload.orgId : orgPayload;
+    const id = String(raw || '').trim();
+    if (!id) return;
+    socket.join(orgRoom(id));
+  });
+
+  socket.on('org:leave', (orgPayload) => {
+    const raw = typeof orgPayload === 'object' && orgPayload !== null ? orgPayload.orgId : orgPayload;
+    const id = String(raw || '').trim();
+    if (!id) return;
+    socket.leave(orgRoom(id));
+  });
+
   socket.on('project:join', (projectPayload) => {
     const raw = typeof projectPayload === 'object' && projectPayload !== null ? projectPayload.projectId : projectPayload;
     const id = String(raw || '').trim();

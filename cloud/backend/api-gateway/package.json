@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@bull-board/express": "^6.7.12",
+    "@deepgram/sdk": "^5.0.0",
     "@neondatabase/serverless": "^1.0.1",
     "axios": "^1.7.9",
     "bcryptjs": "^2.4.3",
@@ -32,6 +33,7 @@
     "helmet": "^8.1.0",
     "ioredis": "^5.5.0",
     "jsonwebtoken": "^9.0.2",
+    "livekit-server-sdk": "^2.15.1",
     "morgan": "^1.10.0",
     "node-cron": "^4.2.1",
     "pg": "^8.13.1",

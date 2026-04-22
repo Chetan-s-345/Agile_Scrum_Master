@@ -42,7 +42,7 @@ async function migrateTenant(orgId, connectionString) {
         sprint_id UUID REFERENCES sprints(id) ON DELETE SET NULL,
         project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
         meeting_type VARCHAR(30) NOT NULL CHECK (meeting_type IN ('daily', 'weekly', 'retrospective', 'business')),
-        video_provider VARCHAR(30) NOT NULL DEFAULT 'none' CHECK (video_provider IN ('none', 'daily', 'zoom', 'teams')),
+        video_provider VARCHAR(30) NOT NULL DEFAULT 'none' CHECK (video_provider IN ('none', 'livekit', 'zoom', 'teams')),
         provider_meeting_id TEXT,
         join_url TEXT,
         title VARCHAR(300) NOT NULL,
@@ -112,7 +112,7 @@ async function migrateTenant(orgId, connectionString) {
       CREATE TABLE IF NOT EXISTS meeting_transcripts (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         meeting_id UUID NOT NULL REFERENCES meeting_sessions(id) ON DELETE CASCADE,
-        source_type VARCHAR(30) NOT NULL DEFAULT 'manual_upload' CHECK (source_type IN ('manual_upload', 'daily', 'zoom', 'teams', 'other')),
+        source_type VARCHAR(30) NOT NULL DEFAULT 'manual_upload' CHECK (source_type IN ('manual_upload', 'livekit', 'zoom', 'teams', 'other')),
         file_name VARCHAR(260),
         mime_type VARCHAR(120),
         transcript_text TEXT NOT NULL,
@@ -139,6 +139,61 @@ async function migrateTenant(orgId, connectionString) {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_meeting_notes_meeting ON meeting_notes(meeting_id, created_at DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_meeting_action_items_meeting ON meeting_action_items(meeting_id, status)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_meeting_transcripts_meeting ON meeting_transcripts(meeting_id, created_at DESC)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS meeting_rooms (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id TEXT NOT NULL,
+        room_name TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        transcript TEXT DEFAULT '',
+        summary TEXT DEFAULT '',
+        status TEXT DEFAULT 'active',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        ended_at TIMESTAMPTZ,
+        UNIQUE (org_id, room_name)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS meeting_room_participants (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        room_id UUID NOT NULL REFERENCES meeting_rooms(id) ON DELETE CASCADE,
+        org_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        participant_name TEXT NOT NULL,
+        identity TEXT,
+        role TEXT NOT NULL DEFAULT 'member',
+        status TEXT NOT NULL DEFAULT 'active',
+        joined_at TIMESTAMPTZ DEFAULT NOW(),
+        left_at TIMESTAMPTZ,
+        last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+        participation_notes TEXT DEFAULT '',
+        UNIQUE (room_id, user_id)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS meeting_room_individual_summaries (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        room_id UUID NOT NULL REFERENCES meeting_rooms(id) ON DELETE CASCADE,
+        org_id TEXT NOT NULL,
+        participant_id UUID REFERENCES meeting_room_participants(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        participant_name TEXT NOT NULL,
+        summary TEXT DEFAULT '',
+        action_items TEXT DEFAULT '',
+        generated_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (room_id, user_id)
+      )
+    `);
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_meeting_rooms_org ON meeting_rooms(org_id, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_meeting_rooms_status ON meeting_rooms(status, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_meeting_room_participants_room ON meeting_room_participants(room_id, status, joined_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_meeting_room_participants_org_user ON meeting_room_participants(org_id, user_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_meeting_room_individual_summaries_room ON meeting_room_individual_summaries(room_id, generated_at DESC)`);
 
     await pool.query('COMMIT');
     return { orgId, ok: true };
