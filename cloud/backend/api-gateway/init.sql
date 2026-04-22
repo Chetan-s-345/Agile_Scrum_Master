@@ -1186,6 +1186,11 @@ CREATE TABLE IF NOT EXISTS meeting_rooms (
     org_id                  TEXT NOT NULL,
     room_name               TEXT NOT NULL,
     created_by              TEXT NOT NULL,
+    meeting_kind            TEXT NOT NULL DEFAULT 'normal',
+    normal_category         TEXT NOT NULL DEFAULT 'daily_sprint',
+    title                   TEXT,
+    description             TEXT,
+    scheduled_for           TIMESTAMPTZ,
     transcript              TEXT DEFAULT '',
     summary                 TEXT DEFAULT '',
     status                  TEXT DEFAULT 'active',
@@ -1224,11 +1229,22 @@ CREATE TABLE IF NOT EXISTS meeting_room_individual_summaries (
     UNIQUE (room_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS meeting_room_messages (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    room_id                 UUID NOT NULL REFERENCES meeting_rooms(id) ON DELETE CASCADE,
+    org_id                  TEXT NOT NULL,
+    user_id                 TEXT NOT NULL,
+    participant_name        TEXT NOT NULL,
+    message                 TEXT NOT NULL,
+    created_at              TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_meeting_rooms_org ON meeting_rooms(org_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_meeting_rooms_status ON meeting_rooms(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_meeting_room_participants_room ON meeting_room_participants(room_id, status, joined_at DESC);
 CREATE INDEX IF NOT EXISTS idx_meeting_room_participants_org_user ON meeting_room_participants(org_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_meeting_room_individual_summaries_room ON meeting_room_individual_summaries(room_id, generated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meeting_room_messages_room ON meeting_room_messages(room_id, created_at ASC);
 
 CREATE UNIQUE INDEX uq_meeting_sessions_retrospective
     ON meeting_sessions(sprint_id, meeting_type)

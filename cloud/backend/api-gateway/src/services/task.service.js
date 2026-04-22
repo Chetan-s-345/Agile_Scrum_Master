@@ -234,7 +234,7 @@ class TaskService {
     return { ok: true, changed: true, assigneeId: newAssigneeId };
   }
 
-  async updateStatus(jiraIssueKey, newStatusName, orgPool) {
+  async updateJiraStatus(jiraIssueKey, newStatusName, orgPool) {
     if (!orgPool) throw Object.assign(new Error('Org DB not provided'), { statusCode: 500 });
     const issueKey = String(jiraIssueKey || '').trim();
     if (!issueKey) return { ok: true, ignored: true, reason: 'missing_issue_key' };

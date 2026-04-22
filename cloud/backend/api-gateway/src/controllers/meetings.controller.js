@@ -12,12 +12,15 @@ const {
   createMeetingRoomTokenSchema,
   createMeetingRoomSchema,
   meetingRoomParamsSchema,
+  meetingRoomIdParamsSchema,
   saveMeetingRoomTranscriptSchema,
   meetingRoomParticipantIdParamsSchema,
   joinMeetingRoomSchema,
   leaveMeetingRoomSchema,
   updateMeetingRoomParticipantSchema,
   generateIndividualMeetingRoomSummarySchema,
+  listMeetingRoomMessagesQuerySchema,
+  createMeetingRoomMessageSchema,
 } = require('../validators/meetings.schemas');
 const { meetingsService } = require('../services/meetings.service');
 
@@ -246,6 +249,18 @@ async function createMeetingRoom(req, res, next) {
   }
 }
 
+async function getMeetingRoomById(req, res, next) {
+  try {
+    const parsedParams = meetingRoomIdParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const item = await meetingsService.getMeetingRoomById(req, parsedParams.data.roomId);
+    return res.status(200).json({ item });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function saveMeetingRoomTranscript(req, res, next) {
   try {
     const parsedParams = meetingRoomParamsSchema.safeParse(req.params || {});
@@ -390,16 +405,53 @@ async function endMeetingRoom(req, res, next) {
   }
 }
 
+async function listMeetingRoomMessages(req, res, next) {
+  try {
+    const parsedParams = meetingRoomParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const parsedQuery = listMeetingRoomMessagesQuerySchema.safeParse(req.query || {});
+    if (!parsedQuery.success) return validationError(res, parsedQuery);
+
+    const items = await meetingsService.listMeetingRoomMessages(req, parsedParams.data.roomName, parsedQuery.data.limit);
+    return res.status(200).json({ items });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function createMeetingRoomMessage(req, res, next) {
+  try {
+    const parsedParams = meetingRoomParamsSchema.safeParse(req.params || {});
+    if (!parsedParams.success) return validationError(res, parsedParams);
+
+    const parsed = createMeetingRoomMessageSchema.safeParse(req.body || {});
+    if (!parsed.success) return validationError(res, parsed);
+
+    const item = await meetingsService.createMeetingRoomMessage(req, {
+      roomName: parsedParams.data.roomName,
+      participantName: parsed.data.participantName,
+      message: parsed.data.message,
+    });
+    return res.status(201).json({ item });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 module.exports = {
   meetingsHealth,
   createMeetingRoomToken,
   createMeetingRoom,
+  getMeetingRoomById,
   joinMeetingRoomParticipant,
   listMeetingRoomParticipants,
   updateMeetingRoomParticipant,
   removeMeetingRoomParticipant,
   leaveMeetingRoomParticipant,
   saveMeetingRoomTranscript,
+  listMeetingRoomMessages,
+  createMeetingRoomMessage,
   generateIndividualMeetingRoomSummary,
   listIndividualMeetingRoomSummaries,
   endMeetingRoom,

@@ -252,6 +252,21 @@ function normalizeProvider(value) {
   return 'livekit';
 }
 
+function normalizeMeetingKind(value) {
+  const normalized = String(value || 'normal').trim().toLowerCase();
+  if (normalized === 'sprint_planner') return 'sprint_planner';
+  return 'normal';
+}
+
+function normalizeNormalCategory(value) {
+  const normalized = String(value || 'daily_sprint').trim().toLowerCase();
+  if (normalized === 'weekly_sprint') return 'weekly_sprint';
+  if (normalized === 'backlogs') return 'backlogs';
+  if (normalized === 'business_meeting') return 'business_meeting';
+  if (normalized === 'retrospective') return 'retrospective';
+  return 'daily_sprint';
+}
+
 async function ensureMeetingRoomsTable(orgPool) {
   await orgPool.query(
     `CREATE TABLE IF NOT EXISTS meeting_rooms (
@@ -259,6 +274,11 @@ async function ensureMeetingRoomsTable(orgPool) {
        org_id TEXT NOT NULL,
        room_name TEXT NOT NULL,
        created_by TEXT NOT NULL,
+       meeting_kind TEXT NOT NULL DEFAULT 'normal',
+       normal_category TEXT NOT NULL DEFAULT 'daily_sprint',
+       title TEXT,
+      description TEXT,
+       scheduled_for TIMESTAMPTZ,
        transcript TEXT DEFAULT '',
        summary TEXT DEFAULT '',
        status TEXT DEFAULT 'active',
@@ -267,6 +287,12 @@ async function ensureMeetingRoomsTable(orgPool) {
        UNIQUE(org_id, room_name)
      )`
   );
+
+  await orgPool.query(`ALTER TABLE meeting_rooms ADD COLUMN IF NOT EXISTS meeting_kind TEXT NOT NULL DEFAULT 'normal'`);
+  await orgPool.query(`ALTER TABLE meeting_rooms ADD COLUMN IF NOT EXISTS normal_category TEXT NOT NULL DEFAULT 'daily_sprint'`);
+  await orgPool.query(`ALTER TABLE meeting_rooms ADD COLUMN IF NOT EXISTS title TEXT`);
+  await orgPool.query(`ALTER TABLE meeting_rooms ADD COLUMN IF NOT EXISTS description TEXT`);
+  await orgPool.query(`ALTER TABLE meeting_rooms ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ`);
 
   await orgPool.query(
     `CREATE TABLE IF NOT EXISTS meeting_room_participants (
@@ -302,6 +328,18 @@ async function ensureMeetingRoomsTable(orgPool) {
      )`
   );
 
+    await orgPool.query(
+     `CREATE TABLE IF NOT EXISTS meeting_room_messages (
+       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+       room_id UUID NOT NULL REFERENCES meeting_rooms(id) ON DELETE CASCADE,
+       org_id TEXT NOT NULL,
+       user_id TEXT NOT NULL,
+       participant_name TEXT NOT NULL,
+       message TEXT NOT NULL,
+       created_at TIMESTAMPTZ DEFAULT NOW()
+      )`
+    );
+
   await orgPool.query(
     'CREATE INDEX IF NOT EXISTS idx_meeting_room_participants_room ON meeting_room_participants(room_id, status, joined_at DESC)'
   );
@@ -311,6 +349,7 @@ async function ensureMeetingRoomsTable(orgPool) {
   await orgPool.query(
     'CREATE INDEX IF NOT EXISTS idx_meeting_room_individual_summaries_room ON meeting_room_individual_summaries(room_id, generated_at DESC)'
   );
+  await orgPool.query('CREATE INDEX IF NOT EXISTS idx_meeting_room_messages_room ON meeting_room_messages(room_id, created_at ASC)');
 }
 
 function buildScrumSummaryPrompt(transcript) {
@@ -345,7 +384,13 @@ function buildIndividualSummaryPrompt(transcript, participantName, focus) {
     .join('\n');
 }
 
-async function summarizeMeetingRoomTranscript(transcript) {
+function getGroqModels() {
+  const configured = String(process.env.GROQ_MODEL || '').trim();
+  const candidates = [configured, 'llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'mixtral-8x7b-32768'].filter(Boolean);
+  return Array.from(new Set(candidates));
+}
+
+async function callGroqSummary({ prompt, maxTokens }) {
   const apiKey = String(process.env.GROQ_API_KEY || '').trim();
   if (!apiKey) {
     throw Object.assign(new Error('GROQ_API_KEY is not configured'), {
@@ -355,60 +400,63 @@ async function summarizeMeetingRoomTranscript(transcript) {
     });
   }
 
-  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'llama3-8b-8192',
-      temperature: 0.2,
-      max_tokens: 900,
-      messages: [{ role: 'user', content: buildScrumSummaryPrompt(transcript) }],
-    }),
-  });
+  const models = getGroqModels();
+  let lastDetail = 'Groq request failed';
 
-  const payload = await resp.json().catch(() => null);
-  if (!resp.ok) {
+  for (const model of models) {
+    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: 'You are an AI Scrum Master assistant. Respond in Markdown with clear sections.' },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+
+    const payload = await resp.json().catch(() => null);
+    if (resp.ok) {
+      const content = String(payload?.choices?.[0]?.message?.content || '').trim();
+      if (content) return content;
+      lastDetail = 'Groq returned an empty summary.';
+      continue;
+    }
+
     const detail = String(payload?.error?.message || payload?.message || `Groq request failed with ${resp.status}`);
-    throw Object.assign(new Error(detail), { statusCode: resp.status || 502, code: 'GROQ_SUMMARY_FAILED', detail });
+    lastDetail = detail;
+
+    const shouldTryNextModel = /model|not found|invalid|unsupported/i.test(detail);
+    if (!shouldTryNextModel) {
+      throw Object.assign(new Error(detail), { statusCode: resp.status || 502, code: 'GROQ_SUMMARY_FAILED', detail });
+    }
   }
 
-  return String(payload?.choices?.[0]?.message?.content || '').trim();
+  throw Object.assign(new Error(lastDetail), {
+    statusCode: 502,
+    code: 'GROQ_SUMMARY_FAILED',
+    detail: lastDetail,
+  });
+}
+
+async function summarizeMeetingRoomTranscript(transcript) {
+  return callGroqSummary({
+    prompt: buildScrumSummaryPrompt(transcript),
+    maxTokens: 900,
+  });
 }
 
 async function summarizeParticipantMeetingRoomTranscript(transcript, participantName, focus) {
-  const apiKey = String(process.env.GROQ_API_KEY || '').trim();
-  if (!apiKey) {
-    throw Object.assign(new Error('GROQ_API_KEY is not configured'), {
-      statusCode: 500,
-      code: 'GROQ_CONFIG_MISSING',
-      detail: 'Set GROQ_API_KEY to generate meeting summaries.',
-    });
-  }
-
-  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'llama3-8b-8192',
-      temperature: 0.2,
-      max_tokens: 700,
-      messages: [{ role: 'user', content: buildIndividualSummaryPrompt(transcript, participantName, focus) }],
-    }),
+  return callGroqSummary({
+    prompt: buildIndividualSummaryPrompt(transcript, participantName, focus),
+    maxTokens: 700,
   });
-
-  const payload = await resp.json().catch(() => null);
-  if (!resp.ok) {
-    const detail = String(payload?.error?.message || payload?.message || `Groq request failed with ${resp.status}`);
-    throw Object.assign(new Error(detail), { statusCode: resp.status || 502, code: 'GROQ_SUMMARY_FAILED', detail });
-  }
-
-  return String(payload?.choices?.[0]?.message?.content || '').trim();
 }
 
 function individualSummaryFallback(participantName) {
@@ -434,6 +482,11 @@ function mapMeetingRoomRow(row) {
     orgId: row.org_id,
     roomName: row.room_name,
     createdBy: row.created_by,
+    meetingKind: row.meeting_kind || 'normal',
+    normalCategory: row.normal_category || 'daily_sprint',
+    title: row.title || null,
+    description: row.description || null,
+    scheduledFor: row.scheduled_for || null,
     transcript: row.transcript || '',
     summary: row.summary || '',
     mySummary: row.my_summary || '',
@@ -461,6 +514,18 @@ function mapParticipantRow(row) {
   };
 }
 
+function mapMeetingRoomMessageRow(row) {
+  return {
+    id: row.id,
+    roomId: row.room_id,
+    orgId: row.org_id,
+    userId: row.user_id,
+    participantName: row.participant_name,
+    message: row.message,
+    createdAt: row.created_at,
+  };
+}
+
 function getMeetingDurationMinutes(scheduledStart, scheduledEnd) {
   const start = new Date(String(scheduledStart || ''));
   const end = new Date(String(scheduledEnd || ''));
@@ -477,6 +542,17 @@ function requireOrgDb(req) {
   const pool = req.orgDb;
   if (!pool) throw Object.assign(new Error('Org DB not attached'), { statusCode: 500, code: 'ORG_DB_MISSING' });
   return pool;
+}
+
+function requireMeetingAdmin(req) {
+  const role = String(req.user?.role || '').trim().toLowerCase();
+  if (role === 'owner' || role === 'admin') return;
+
+  throw Object.assign(new Error('Only organization admins can create or end meetings'), {
+    statusCode: 403,
+    code: 'MEETING_ADMIN_REQUIRED',
+    detail: 'This action requires owner or admin role.',
+  });
 }
 
 async function getActorMemberId(orgPool, userId) {
@@ -825,6 +901,7 @@ class MeetingsService {
   }
 
   async create(req, payload) {
+    requireMeetingAdmin(req);
     const orgPool = requireOrgDb(req);
     const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
     if (!actorMemberId) {
@@ -971,6 +1048,9 @@ class MeetingsService {
 
     if (patch.title !== undefined) addSet('title', String(patch.title));
     if (patch.status !== undefined) {
+      if (String(patch.status) === 'completed' || String(patch.status) === 'archived') {
+        requireMeetingAdmin(req);
+      }
       addSet('status', String(patch.status));
       if (String(patch.status) === 'in_progress') {
         sets.push('actual_start = COALESCE(actual_start, NOW())');
@@ -1195,6 +1275,7 @@ class MeetingsService {
   }
 
   async startMeeting(req, meetingId, payload) {
+    requireMeetingAdmin(req);
     const orgPool = requireOrgDb(req);
     const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
     if (!actorMemberId) throw Object.assign(new Error('Team member not found'), { statusCode: 403, code: 'TEAM_MEMBER_NOT_FOUND' });
@@ -1285,6 +1366,22 @@ class MeetingsService {
     const participantName = String(payload.participantName || '').trim();
     const identity = `${participantName}-${crypto.randomUUID().slice(0, 8)}`;
 
+    const orgPool = requireOrgDb(req);
+    await ensureMeetingRoomsTable(orgPool);
+
+    const orgId = String(req.user?.orgId || '').trim();
+    const roomResp = await orgPool.query(
+      `SELECT id, status FROM meeting_rooms WHERE org_id = $1 AND room_name = $2 LIMIT 1`,
+      [orgId, roomName]
+    );
+    const room = roomResp.rows[0] || null;
+    if (!room) {
+      throw Object.assign(new Error('Meeting room not found'), { statusCode: 404, code: 'MEETING_ROOM_NOT_FOUND' });
+    }
+    if (String(room.status || '').toLowerCase() === 'ended') {
+      throw Object.assign(new Error('Meeting room already ended'), { statusCode: 409, code: 'MEETING_ROOM_ENDED' });
+    }
+
     const token = new AccessToken(apiKey, apiSecret, {
       identity,
       name: participantName,
@@ -1306,12 +1403,19 @@ class MeetingsService {
   }
 
   async createMeetingRoom(req, payload) {
+    requireMeetingAdmin(req);
     const orgPool = requireOrgDb(req);
     await ensureMeetingRoomsTable(orgPool);
 
     const orgId = String(req.user?.orgId || '').trim();
     const createdBy = String(req.user?.userId || '').trim();
     const roomName = String(payload.roomName || '').trim();
+    const meetingKind = normalizeMeetingKind(payload.meetingKind);
+    const normalCategory = normalizeNormalCategory(payload.normalCategory);
+    const title = payload.title ? String(payload.title).trim() : null;
+    const description = payload.description ? String(payload.description).trim() : null;
+    const scheduledForRaw = String(payload.scheduledFor || '').trim();
+    const scheduledFor = scheduledForRaw ? new Date(scheduledForRaw) : null;
 
     if (!orgId || !createdBy) {
       throw Object.assign(new Error('Invalid token context for meeting room creation'), {
@@ -1320,13 +1424,22 @@ class MeetingsService {
       });
     }
 
+    if (scheduledFor && Number.isNaN(scheduledFor.getTime())) {
+      throw Object.assign(new Error('Invalid scheduledFor timestamp'), {
+        statusCode: 400,
+        code: 'MEETING_ROOM_SCHEDULE_INVALID',
+      });
+    }
+
     const resp = await orgPool.query(
-      `INSERT INTO meeting_rooms (org_id, room_name, created_by)
-       VALUES ($1, $2, $3)
+      `INSERT INTO meeting_rooms (org_id, room_name, created_by, meeting_kind, normal_category, title, description, scheduled_for)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (org_id, room_name)
-       DO UPDATE SET status = 'active', ended_at = NULL
-       RETURNING id, org_id, room_name, created_by, transcript, summary, status, created_at, ended_at`,
-      [orgId, roomName, createdBy]
+       DO UPDATE SET status = 'active', ended_at = NULL, meeting_kind = EXCLUDED.meeting_kind, normal_category = EXCLUDED.normal_category,
+                     title = COALESCE(EXCLUDED.title, meeting_rooms.title), description = COALESCE(EXCLUDED.description, meeting_rooms.description),
+                     scheduled_for = COALESCE(EXCLUDED.scheduled_for, meeting_rooms.scheduled_for)
+       RETURNING id, org_id, room_name, created_by, meeting_kind, normal_category, title, description, scheduled_for, transcript, summary, status, created_at, ended_at`,
+      [orgId, roomName, createdBy, meetingKind, normalCategory, title, description, scheduledFor]
     );
 
     const row = resp.rows[0] || null;
@@ -1664,6 +1777,11 @@ class MeetingsService {
               mr.org_id,
               mr.room_name,
               mr.created_by,
+              mr.meeting_kind,
+              mr.normal_category,
+              mr.title,
+              mr.description,
+              mr.scheduled_for,
               mr.transcript,
               mr.summary,
               mr.status,
@@ -1683,6 +1801,139 @@ class MeetingsService {
     return resp.rows.map((row) => mapMeetingRoomRow(row));
   }
 
+  async getMeetingRoomById(req, roomIdRaw) {
+    const orgPool = requireOrgDb(req);
+    await ensureMeetingRoomsTable(orgPool);
+
+    const orgId = String(req.user?.orgId || '').trim();
+    const userId = String(req.user?.userId || '').trim();
+    const roomId = String(roomIdRaw || '').trim();
+
+    const roomResp = await orgPool.query(
+      `SELECT mr.id,
+              mr.org_id,
+              mr.room_name,
+              mr.created_by,
+              mr.meeting_kind,
+              mr.normal_category,
+              mr.title,
+              mr.description,
+              mr.scheduled_for,
+              mr.transcript,
+              mr.summary,
+              mr.status,
+              mr.created_at,
+              mr.ended_at,
+              mis.summary AS my_summary,
+              mis.generated_at AS my_summary_generated_at
+       FROM meeting_rooms mr
+       LEFT JOIN meeting_room_individual_summaries mis
+         ON mis.room_id = mr.id
+        AND mis.user_id = $3
+       WHERE mr.org_id = $1
+         AND mr.id = $2
+       LIMIT 1`,
+      [orgId, roomId, userId]
+    );
+
+    const room = roomResp.rows[0] || null;
+    if (!room) {
+      throw Object.assign(new Error('Meeting room not found'), { statusCode: 404, code: 'MEETING_ROOM_NOT_FOUND' });
+    }
+
+    const [participantsResp, summariesResp] = await Promise.all([
+      orgPool.query(
+        `SELECT id, room_id, org_id, user_id, participant_name, identity, role, status, joined_at, left_at, last_seen_at, participation_notes
+         FROM meeting_room_participants
+         WHERE room_id = $1
+         ORDER BY joined_at ASC`,
+        [roomId]
+      ),
+      orgPool.query(
+        `SELECT id, room_id, participant_id, user_id, participant_name, summary, action_items, generated_at, updated_at
+         FROM meeting_room_individual_summaries
+         WHERE room_id = $1
+         ORDER BY generated_at DESC`,
+        [roomId]
+      ),
+    ]);
+
+    return {
+      ...mapMeetingRoomRow(room),
+      participants: participantsResp.rows.map((item) => mapParticipantRow(item)),
+      individualSummaries: summariesResp.rows.map((item) => ({
+        id: item.id,
+        roomId: item.room_id,
+        participantId: item.participant_id,
+        userId: item.user_id,
+        participantName: item.participant_name,
+        summary: item.summary || '',
+        actionItems: item.action_items || '',
+        generatedAt: item.generated_at,
+        updatedAt: item.updated_at,
+      })),
+    };
+  }
+
+  async listMeetingRoomMessages(req, roomNameRaw, limitRaw) {
+    const orgPool = requireOrgDb(req);
+    await ensureMeetingRoomsTable(orgPool);
+
+    const orgId = String(req.user?.orgId || '').trim();
+    const roomName = String(roomNameRaw || '').trim();
+    const limit = Number(limitRaw || 200);
+    const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 500)) : 200;
+
+    const roomResp = await orgPool.query(
+      `SELECT id FROM meeting_rooms WHERE org_id = $1 AND room_name = $2 LIMIT 1`,
+      [orgId, roomName]
+    );
+    const room = roomResp.rows[0] || null;
+    if (!room) throw Object.assign(new Error('Meeting room not found'), { statusCode: 404, code: 'MEETING_ROOM_NOT_FOUND' });
+
+    const resp = await orgPool.query(
+      `SELECT id, room_id, org_id, user_id, participant_name, message, created_at
+       FROM meeting_room_messages
+       WHERE room_id = $1
+       ORDER BY created_at ASC
+       LIMIT $2`,
+      [room.id, boundedLimit]
+    );
+
+    return resp.rows.map((item) => mapMeetingRoomMessageRow(item));
+  }
+
+  async createMeetingRoomMessage(req, payload) {
+    const orgPool = requireOrgDb(req);
+    await ensureMeetingRoomsTable(orgPool);
+
+    const orgId = String(req.user?.orgId || '').trim();
+    const userId = String(req.user?.userId || '').trim();
+    const roomName = String(payload.roomName || '').trim();
+    const participantName = String(payload.participantName || 'Team Member').trim() || 'Team Member';
+    const message = String(payload.message || '').trim();
+
+    const roomResp = await orgPool.query(
+      `SELECT id, status FROM meeting_rooms WHERE org_id = $1 AND room_name = $2 LIMIT 1`,
+      [orgId, roomName]
+    );
+    const room = roomResp.rows[0] || null;
+    if (!room) throw Object.assign(new Error('Meeting room not found'), { statusCode: 404, code: 'MEETING_ROOM_NOT_FOUND' });
+
+    if (String(room.status || '').toLowerCase() === 'ended') {
+      throw Object.assign(new Error('Meeting has already ended'), { statusCode: 409, code: 'MEETING_ROOM_ENDED' });
+    }
+
+    const insertResp = await orgPool.query(
+      `INSERT INTO meeting_room_messages (room_id, org_id, user_id, participant_name, message)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, room_id, org_id, user_id, participant_name, message, created_at`,
+      [room.id, orgId, userId, participantName, message]
+    );
+
+    return mapMeetingRoomMessageRow(insertResp.rows[0] || {});
+  }
+
   async saveMeetingRoomTranscript(req, payload) {
     const orgPool = requireOrgDb(req);
     await ensureMeetingRoomsTable(orgPool);
@@ -1690,23 +1941,28 @@ class MeetingsService {
     const orgId = String(req.user?.orgId || '').trim();
     const roomName = String(payload.roomName || '').trim();
     const transcript = String(payload.transcript || '').trim();
+    const normalizedTranscript = transcript || 'Meeting ended without captured transcript.';
 
     const updateResp = await orgPool.query(
       `UPDATE meeting_rooms
        SET transcript = $1
        WHERE org_id = $2 AND room_name = $3
        RETURNING id, room_name`,
-      [transcript, orgId, roomName]
+      [normalizedTranscript, orgId, roomName]
     );
 
     const room = updateResp.rows[0] || null;
     if (!room) throw Object.assign(new Error('Meeting room not found'), { statusCode: 404, code: 'MEETING_ROOM_NOT_FOUND' });
 
     let summary = '';
-    try {
-      summary = await summarizeMeetingRoomTranscript(transcript);
-    } catch {
-      summary = '## Summary\nUnable to generate summary from transcript right now.\n\n## Key Decisions\n- Not available.\n\n## Action Items (with owner if mentioned)\n- Not available.\n\n## Blockers\n- Not available.';
+    if (!transcript) {
+      summary = '## Summary\nMeeting ended successfully, but no transcript text was captured.\n\n## Key Decisions\n- Not available.\n\n## Action Items (with owner if mentioned)\n- Not available.\n\n## Blockers\n- Not available.';
+    } else {
+      try {
+        summary = await summarizeMeetingRoomTranscript(transcript);
+      } catch {
+        summary = '## Summary\nUnable to generate summary from transcript right now.\n\n## Key Decisions\n- Not available.\n\n## Action Items (with owner if mentioned)\n- Not available.\n\n## Blockers\n- Not available.';
+      }
     }
 
     await orgPool.query(
@@ -1727,6 +1983,7 @@ class MeetingsService {
   }
 
   async endMeetingRoom(req, roomNameRaw) {
+    requireMeetingAdmin(req);
     const orgPool = requireOrgDb(req);
     await ensureMeetingRoomsTable(orgPool);
 
@@ -1761,49 +2018,54 @@ class MeetingsService {
     );
 
     const transcript = String(row.transcript || '').trim();
-    const individualSummaries = [];
+    const individualSummaries = (
+      await Promise.all(
+        participantsResp.rows.map(async (participant) => {
+          let individualSummary = '';
+          if (!transcript) {
+            individualSummary = individualSummaryFallback(participant.participant_name);
+          } else {
+            try {
+              individualSummary = await summarizeParticipantMeetingRoomTranscript(
+                transcript,
+                participant.participant_name,
+                'Focus on responsibilities and next actions for this person.'
+              );
+            } catch {
+              individualSummary = individualSummaryFallback(participant.participant_name);
+            }
+          }
 
-    for (const participant of participantsResp.rows) {
-      let individualSummary = '';
-      if (!transcript) {
-        individualSummary = individualSummaryFallback(participant.participant_name);
-      } else {
-        try {
-          individualSummary = await summarizeParticipantMeetingRoomTranscript(transcript, participant.participant_name, 'Focus on responsibilities and next actions for this person.');
-        } catch {
-          individualSummary = individualSummaryFallback(participant.participant_name);
-        }
-      }
+          const summaryResp = await orgPool.query(
+            `INSERT INTO meeting_room_individual_summaries (room_id, org_id, participant_id, user_id, participant_name, summary, action_items)
+             VALUES ($1, $2, $3, $4, $5, $6, '')
+             ON CONFLICT (room_id, user_id)
+             DO UPDATE SET
+               participant_id = EXCLUDED.participant_id,
+               participant_name = EXCLUDED.participant_name,
+               summary = EXCLUDED.summary,
+               updated_at = NOW(),
+               generated_at = NOW()
+             RETURNING id, room_id, participant_id, user_id, participant_name, summary, action_items, generated_at, updated_at`,
+            [row.id, orgId, participant.id, participant.user_id, participant.participant_name, individualSummary]
+          );
 
-      const summaryResp = await orgPool.query(
-        `INSERT INTO meeting_room_individual_summaries (room_id, org_id, participant_id, user_id, participant_name, summary, action_items)
-         VALUES ($1, $2, $3, $4, $5, $6, '')
-         ON CONFLICT (room_id, user_id)
-         DO UPDATE SET
-           participant_id = EXCLUDED.participant_id,
-           participant_name = EXCLUDED.participant_name,
-           summary = EXCLUDED.summary,
-           updated_at = NOW(),
-           generated_at = NOW()
-         RETURNING id, room_id, participant_id, user_id, participant_name, summary, action_items, generated_at, updated_at`,
-        [row.id, orgId, participant.id, participant.user_id, participant.participant_name, individualSummary]
-      );
-
-      const item = summaryResp.rows[0] || null;
-      if (item) {
-        individualSummaries.push({
-          id: item.id,
-          roomId: item.room_id,
-          participantId: item.participant_id,
-          userId: item.user_id,
-          participantName: item.participant_name,
-          summary: item.summary || '',
-          actionItems: item.action_items || '',
-          generatedAt: item.generated_at,
-          updatedAt: item.updated_at,
-        });
-      }
-    }
+          const item = summaryResp.rows[0] || null;
+          if (!item) return null;
+          return {
+            id: item.id,
+            roomId: item.room_id,
+            participantId: item.participant_id,
+            userId: item.user_id,
+            participantName: item.participant_name,
+            summary: item.summary || '',
+            actionItems: item.action_items || '',
+            generatedAt: item.generated_at,
+            updatedAt: item.updated_at,
+          };
+        })
+      )
+    ).filter(Boolean);
 
     const actorUserId = String(req.user?.userId || '').trim();
     const myIndividualSummary = individualSummaries.find((item) => item.userId === actorUserId) || null;

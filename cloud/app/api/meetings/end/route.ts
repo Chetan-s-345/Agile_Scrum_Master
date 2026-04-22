@@ -21,5 +21,6 @@ export async function POST(request: Request) {
     upstreamPath: `/api/v1/meetings/${encodeURIComponent(roomName)}/end`,
     method: "POST",
     token,
+    timeoutMs: 120000,
   });
 }

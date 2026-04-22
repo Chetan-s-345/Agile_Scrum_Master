@@ -112,14 +112,23 @@ const createMeetingRoomTokenSchema = z.object({
 
 const createMeetingRoomSchema = z.object({
   roomName: meetingRoomNameSchema,
+  meetingKind: z.enum(['normal', 'sprint_planner']).optional(),
+  normalCategory: z.enum(['daily_sprint', 'weekly_sprint', 'backlogs', 'business_meeting', 'retrospective']).optional(),
+  title: z.string().min(1).max(240).optional(),
+  description: z.string().max(4000).optional(),
+  scheduledFor: z.string().min(1).optional(),
 });
 
 const meetingRoomParamsSchema = z.object({
   roomName: meetingRoomNameSchema,
 });
 
+const meetingRoomIdParamsSchema = z.object({
+  roomId: uuidSchema,
+});
+
 const saveMeetingRoomTranscriptSchema = z.object({
-  transcript: z.string().min(1).max(500000),
+  transcript: z.string().max(500000).optional().default(''),
 });
 
 const meetingRoomParticipantIdParamsSchema = z.object({
@@ -150,6 +159,15 @@ const generateIndividualMeetingRoomSummarySchema = z.object({
   focus: z.string().max(800).optional(),
 });
 
+const listMeetingRoomMessagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+
+const createMeetingRoomMessageSchema = z.object({
+  message: z.string().min(1).max(5000),
+  participantName: z.string().min(1).max(120).optional(),
+});
+
 module.exports = {
   listMeetingsQuerySchema,
   meetingIdParamsSchema,
@@ -164,10 +182,13 @@ module.exports = {
   createMeetingRoomTokenSchema,
   createMeetingRoomSchema,
   meetingRoomParamsSchema,
+  meetingRoomIdParamsSchema,
   saveMeetingRoomTranscriptSchema,
   meetingRoomParticipantIdParamsSchema,
   joinMeetingRoomSchema,
   leaveMeetingRoomSchema,
   updateMeetingRoomParticipantSchema,
   generateIndividualMeetingRoomSummarySchema,
+  listMeetingRoomMessagesQuerySchema,
+  createMeetingRoomMessageSchema,
 };

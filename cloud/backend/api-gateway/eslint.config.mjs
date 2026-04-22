@@ -1,11 +1,11 @@
 import js from '@eslint/js';
 
-export default [
+const config = [
   {
     ignores: ['node_modules', 'dist', '.next', 'coverage'],
   },
   {
-    files: ['src/**/*.js'],
+    files: ['src/**/*.js', 'scripts/**/*.js', 'db/**/*.js'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'commonjs',
@@ -15,6 +15,12 @@ export default [
         Buffer: 'readonly',
         __dirname: 'readonly',
         __filename: 'readonly',
+        fetch: 'readonly',
+        URL: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
       },
     },
     rules: {
@@ -24,4 +30,19 @@ export default [
       'no-process-exit': 'off',
     },
   },
+  {
+    files: ['src/**/__tests__/**/*.js', 'src/**/*.test.js'],
+    languageOptions: {
+      globals: {
+        describe: 'readonly',
+        test: 'readonly',
+        expect: 'readonly',
+        beforeEach: 'readonly',
+        afterEach: 'readonly',
+        jest: 'readonly',
+      },
+    },
+  },
 ];
+
+export default config;

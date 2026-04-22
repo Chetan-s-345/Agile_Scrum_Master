@@ -49,14 +49,6 @@ function extractText(contentBlocks) {
     .join('');
 }
 
-function toToolResultBlock(toolUseId, result) {
-  return {
-    type: 'tool_result',
-    tool_use_id: String(toolUseId),
-    content: JSON.stringify(result || {}),
-  };
-}
-
 async function callGroqMessages(apiKey, payload) {
   const resp = await axios({
     method: 'POST',
@@ -197,7 +189,7 @@ async function chat(req, res, next) {
     const groqApiKey = process.env.GROQ_API_KEY;
     if (!safe(groqApiKey)) return jsonError(res, 500, 'Server error', 'GROQ_API_KEY is not configured.');
 
-    const messages = [...trimmedHistory, { role: 'user', content: message }];
+    const messages = [{ role: 'system', content: systemPrompt }, ...trimmedHistory, { role: 'user', content: message }];
     const tools = getToolDefinitions();
     const firstResponse = await callGroqMessages(groqApiKey, {
       model: 'llama3-8b-8192',

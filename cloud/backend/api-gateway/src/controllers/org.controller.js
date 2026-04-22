@@ -12,7 +12,6 @@ const { NeonProjectManager } = require('../config/neon');
 const { emailService } = require('../services/email.service');
 const {
   listActivePlans,
-  createCheckoutForOrg,
   getActivePlanBySlug,
 } = require('../services/payments/payment.service');
 const { computeDiscountedAmount } = require('../services/payments/billing.logic');
@@ -29,9 +28,6 @@ const {
   acceptInvitationSchema,
   createOrgSchema,
   provisionDbSchema,
-  billingCheckoutSchema,
-  couponValidateSchema,
-  billingConfirmSchema,
   billingApplyCouponSchema,
   billingCreateSubscriptionSchema,
   billingConfirmPaymentSchema,
@@ -1182,20 +1178,6 @@ async function validateBillingCoupon(req, res, next) {
       deprecated: true,
       replacement: '/api/v1/org/billing/apply-coupon',
     });
-
-    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
-
-    const parsed = couponValidateSchema.safeParse(req.body || {});
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
-
-    const normalizedPlan = String(parsed.data.planSlug || '').trim().toLowerCase();
-    const result = await validateCouponForPlanDb(parsed.data.couponCode, normalizedPlan);
-
-    if (!result.valid) {
-      return res.status(400).json({ valid: false, error: result.reason || 'Invalid coupon' });
-    }
-
-    return res.status(200).json({ valid: true, coupon: result.coupon });
   } catch (err) {
     return next(err);
   }
@@ -1506,24 +1488,6 @@ async function billingCheckout(req, res, next) {
       deprecated: true,
       replacement: '/api/v1/org/billing/create-subscription',
     });
-
-    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
-    if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
-
-    const parsed = billingCheckoutSchema.safeParse(req.body || {});
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
-
-    const checkout = await createCheckoutForOrg({
-      orgId: String(req.user.orgId),
-      actorUserId: String(req.user.userId || ''),
-      planSlug: parsed.data.planSlug,
-      billingCycle: parsed.data.billingCycle,
-      couponCode: parsed.data.couponCode,
-      successUrl: parsed.data.successUrl,
-      cancelUrl: parsed.data.cancelUrl,
-    });
-
-    return res.status(200).json(checkout);
   } catch (err) {
     return next(err);
   }
@@ -1535,69 +1499,6 @@ async function billingConfirm(req, res, next) {
       error: 'Deprecated endpoint. Use POST /api/v1/org/billing/confirm-payment instead.',
       deprecated: true,
       replacement: '/api/v1/org/billing/confirm-payment',
-    });
-
-    if (!req.user?.orgId) return res.status(400).json({ error: 'Missing orgId in token' });
-    if (!requireRole(req, ['owner', 'admin'])) return res.status(403).json({ error: 'Forbidden' });
-
-    const parsed = billingConfirmSchema.safeParse(req.body || {});
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid input' });
-
-    const normalizedPlanSlug = String(parsed.data.planSlug || '').trim().toLowerCase();
-    const normalizedCycle = String(parsed.data.billingCycle || 'monthly').trim().toLowerCase();
-    const normalizedCoupon = parsed.data.couponCode ? String(parsed.data.couponCode).trim().toUpperCase() : null;
-
-    const plan = await getActivePlanBySlug(normalizedPlanSlug);
-    if (!plan) return res.status(400).json({ error: `Invalid plan: ${normalizedPlanSlug || '<empty>'}` });
-    if (String(plan.slug) === 'free') {
-      return res.status(400).json({ error: 'Free plan does not require confirmation.' });
-    }
-
-    const orgId = String(req.user.orgId);
-
-    const subscription = await db.transaction(db.universalPool, async (client) => {
-      await client.query(
-        "UPDATE subscriptions SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, NOW()) WHERE org_id = $1 AND status <> 'cancelled'",
-        [orgId]
-      );
-
-      const periodEndInterval = normalizedCycle === 'yearly' ? "1 year" : "1 month";
-      const providerSubId = parsed.data.provider === 'stripe' && parsed.data.providerSessionId ? parsed.data.providerSessionId : null;
-      const insertResp = await client.query(
-        `INSERT INTO subscriptions (
-           org_id, plan_id, status, billing_cycle,
-           current_period_start, current_period_end,
-           trial_start, trial_end,
-           provider, provider_subscription_id,
-           base_amount, discount_amount, final_amount,
-           coupon_id, currency
-         ) VALUES (
-           $1, $2, 'active', $3,
-           NOW(), (NOW() + INTERVAL '${periodEndInterval}'),
-           NULL, NULL,
-           'stripe', $4,
-           0, 0, 0,
-           NULL, 'USD'
-         )
-         RETURNING id, status, billing_cycle, current_period_start, current_period_end, trial_end`,
-        [orgId, plan.id, normalizedCycle, providerSubId]
-      );
-
-      await client.query(
-        "UPDATE organizations SET plan_id = $1, plan_status = 'active', trial_ends_at = NULL, updated_at = NOW() WHERE id = $2",
-        [plan.id, orgId]
-      );
-
-      // Keep an audit trail in universal DB if desired later; for now return the subscription row.
-      return insertResp.rows[0];
-    });
-
-    return res.status(200).json({
-      ok: true,
-      plan: { slug: plan.slug, name: plan.name },
-      billingCycle: normalizedCycle,
-      couponCode: normalizedCoupon,
-      subscription,
     });
   } catch (err) {
     return next(err);

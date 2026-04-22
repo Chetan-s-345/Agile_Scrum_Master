@@ -35,7 +35,8 @@ export function MeetingSummary({
   const [copied, setCopied] = useState(false);
 
   const durationText = useMemo(() => formatDuration(startedAt, endedAt), [startedAt, endedAt]);
-  const normalizedSummary = summary.trim() || "No summary available yet.";
+  const hasEnded = Boolean(endedAt);
+  const normalizedSummary = summary.trim() || (hasEnded ? "No summary available yet." : "Summary becomes available after meeting ends.");
   const normalizedTranscript = transcript.trim() || "No transcript captured.";
   const normalizedIndividualSummary = String(individualSummary || "").trim();
 
@@ -53,7 +54,7 @@ export function MeetingSummary({
     <div className="space-y-4 rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-base font-semibold text-[var(--text-primary)]">AI Scrum Summary</h3>
+          <h3 className="text-base font-semibold text-[var(--text-primary)]">Meeting Summary</h3>
           <p className="text-xs text-[var(--text-muted)]">{durationText}</p>
         </div>
         <button

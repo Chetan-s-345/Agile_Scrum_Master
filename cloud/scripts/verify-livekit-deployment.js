@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 /**
  * Deployment verification script for LiveKit + Deepgram migration
  * 
@@ -13,8 +15,8 @@
  *   - File structure in place
  */
 
-const fs = require('fs');
-const path = require('path');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const CHECKS = [];
 let PASS_COUNT = 0;
