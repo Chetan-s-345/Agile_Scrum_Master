@@ -134,7 +134,6 @@ router.patch('/alerts/:alertId/acknowledge', async (req, res, next) => {
 
     const bodySchema = z.object({
       actionTaken: z.string().min(1).optional(),
-      confirmMove: z.boolean().optional(),
     });
     const parsedBody = bodySchema.safeParse(req.body || {});
     if (!parsedBody.success) {
@@ -142,7 +141,7 @@ router.patch('/alerts/:alertId/acknowledge', async (req, res, next) => {
     }
 
     const { alertId } = parsedParams.data;
-    const { actionTaken, confirmMove } = parsedBody.data;
+    const { actionTaken } = parsedBody.data;
 
     const orgPool = req.orgDb;
     const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
@@ -154,58 +153,17 @@ router.patch('/alerts/:alertId/acknowledge', async (req, res, next) => {
     const alert = alertResp.rows[0];
     if (!alert) return res.status(404).json({ error: 'Alert not found' });
 
-    let moved = false;
-    let movedToSprintId = null;
+    await orgPool.query(
+      `UPDATE delay_alerts
+       SET acknowledged = TRUE,
+           acknowledged_by = $2,
+           acknowledged_at = NOW(),
+           action_taken = COALESCE($3, action_taken)
+       WHERE id = $1`,
+      [String(alertId), actorMemberId, actionTaken || null]
+    );
 
-    await orgPool.query('BEGIN');
-    try {
-      if (confirmMove && String(alert.suggestion_action) === 'move_to_next_sprint' && alert.target_task_id) {
-        const sprintResp = await orgPool.query('SELECT id, project_id, end_date FROM sprints WHERE id = $1', [String(alert.sprint_id)]);
-        const sprint = sprintResp.rows[0];
-        if (sprint) {
-          const nextResp = await orgPool.query(
-            `SELECT id
-             FROM sprints
-             WHERE project_id = $1
-               AND status = 'planning'
-               AND start_date > $2::date
-             ORDER BY start_date ASC
-             LIMIT 1`,
-            [String(sprint.project_id), String(sprint.end_date)]
-          );
-          const nextSprint = nextResp.rows[0];
-          if (nextSprint) {
-            await orgPool.query(
-              `UPDATE tasks SET sprint_id = $2, updated_at = NOW() WHERE id = $1`,
-              [String(alert.target_task_id), String(nextSprint.id)]
-            );
-            moved = true;
-            movedToSprintId = String(nextSprint.id);
-          }
-        }
-      }
-
-      await orgPool.query(
-        `UPDATE delay_alerts
-         SET acknowledged = TRUE,
-             acknowledged_by = $2,
-             acknowledged_at = NOW(),
-             action_taken = COALESCE($3, action_taken)
-         WHERE id = $1`,
-        [String(alertId), actorMemberId, actionTaken || null]
-      );
-
-      await orgPool.query('COMMIT');
-    } catch (err) {
-      try {
-        await orgPool.query('ROLLBACK');
-      } catch {
-        // ignore
-      }
-      throw err;
-    }
-
-    return res.status(200).json({ ok: true, moved, movedToSprintId });
+    return res.status(200).json({ ok: true, moved: false, movedToSprintId: null });
   } catch (err) {
     return next(err);
   }

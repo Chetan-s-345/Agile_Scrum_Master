@@ -9,7 +9,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useUIStore } from "@/lib/ui-store";
 import {
   Activity,
-  AppWindow,
   Archive,
   BookOpen,
   Bot,
@@ -26,16 +25,13 @@ import {
   Flag,
   GitBranch,
   Grid3X3,
-  ListTodo,
   PanelsTopLeft,
   Pencil,
   Plus,
-  ShieldAlert,
   Star,
   Trash2,
   UserRound,
   Users,
-  Workflow,
   Zap,
 } from "lucide-react";
 

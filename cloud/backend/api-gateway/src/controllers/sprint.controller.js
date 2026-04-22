@@ -75,6 +75,18 @@ async function startSprint(req, res, next) {
   }
 }
 
+async function scheduleSprintMeetings(req, res, next) {
+  try {
+    const parsedId = uuidSchema.safeParse(req.params.sprintId);
+    if (!parsedId.success) return res.status(400).json({ error: 'Invalid sprintId' });
+
+    const result = await sprintService.scheduleMeetings(req, parsedId.data);
+    return res.status(200).json(result);
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function completeSprint(req, res, next) {
   try {
     const parsedId = uuidSchema.safeParse(req.params.sprintId);
@@ -160,6 +172,7 @@ module.exports = {
   listSprints,
   createSprint,
   planSprint,
+  scheduleSprintMeetings,
   startSprint,
   completeSprint,
   archiveSprint,

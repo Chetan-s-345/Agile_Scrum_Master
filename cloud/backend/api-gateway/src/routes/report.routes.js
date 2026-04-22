@@ -8,5 +8,7 @@ const router = express.Router();
 router.use(authMiddleware, orgDbMiddleware);
 
 router.get('/', reportController.listReports);
+router.get('/:sprintId', reportController.getSprintReport);
+router.get('/:sprintId/export.csv', reportController.exportSprintReportCsv);
 
 module.exports = router;

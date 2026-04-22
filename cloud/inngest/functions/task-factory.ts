@@ -53,6 +53,26 @@ type TaskUpdatedData = EventBase & {
   changedFields?: string[];
 };
 
+type MeetingCompletedData = {
+  orgId?: string | null;
+  projectId?: string | null;
+  sprintId?: string | null;
+  meetingId?: string;
+  meetingType?: string | null;
+  title?: string | null;
+  source?: string | null;
+};
+
+type MeetingTaskCreatedData = EventBase & {
+  sprintId?: string;
+  meetingId?: string;
+  taskId?: string;
+  title?: string;
+  assigneeId?: string | null;
+  priority?: string | null;
+  storyPoints?: number;
+};
+
 const OPENAI_BASE_URL = String(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "");
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
 const VECTOR_DIMENSIONS = Number(process.env.VECTOR_DIMENSIONS || "1536");
@@ -1237,6 +1257,74 @@ export const customAgentRunObserved = inngest.createFunction(
       createdTasks: Number(data.createdTasks || 0),
       assignedTasks: Number(data.assignedTasks || 0),
     };
+  }
+);
+
+export const meetingCompletedObserved = inngest.createFunction(
+  { id: "meeting-completed-observed", name: "Meeting Completed Observed" },
+  { event: "meeting/completed" },
+  async ({ event }) => {
+    const data = (event.data || {}) as MeetingCompletedData;
+    const orgId = String(data.orgId || "").trim();
+    const meetingId = String(data.meetingId || "").trim();
+    if (!orgId || !meetingId) {
+      return { observed: false, reason: "missing_org_or_meeting" };
+    }
+
+    const orgPool = await getTenantPool(orgId);
+    const projectId = String(data.projectId || "").trim() || null;
+
+    await logAction(orgPool, {
+      projectId: projectId || undefined,
+      action: "meeting_completed_observed",
+      entityType: "meeting",
+      entityId: meetingId,
+      payload: {
+        sprintId: data.sprintId || null,
+        source: data.source || null,
+        meetingType: data.meetingType || null,
+        title: data.title || null,
+      },
+      result: { observed: true },
+    });
+    await trackRun(orgPool, "meeting-completed-observed", "completed");
+    return { observed: true, meetingId, projectId };
+  }
+);
+
+export const meetingTaskCreatedObserved = inngest.createFunction(
+  { id: "meeting-task-created-observed", name: "Meeting Task Created Observed" },
+  { event: "meeting/task.created" },
+  async ({ event }) => {
+    const data = (event.data || {}) as MeetingTaskCreatedData;
+    const orgId = String(data.orgId || "").trim();
+    const projectId = String(data.projectId || "").trim();
+    const meetingId = String(data.meetingId || "").trim();
+    const taskId = String(data.taskId || "").trim();
+    if (!orgId || !projectId || !meetingId || !taskId) {
+      return { observed: false, reason: "missing_required_fields" };
+    }
+
+    const orgPool = await getTenantPool(orgId);
+
+    await logAction(orgPool, {
+      projectId,
+      action: "meeting_generated_task_observed",
+      entityType: "task",
+      entityId: taskId,
+      payload: {
+        meetingId,
+        sprintId: data.sprintId || null,
+        title: data.title || null,
+        assigneeId: data.assigneeId || null,
+        priority: data.priority || null,
+        storyPoints: Number(data.storyPoints || 0),
+      },
+      result: { observed: true },
+    });
+
+    await trackRun(orgPool, "meeting-task-created-observed", "completed");
+    return { observed: true, taskId, meetingId, projectId };
   }
 );
 

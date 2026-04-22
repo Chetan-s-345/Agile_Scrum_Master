@@ -6,6 +6,7 @@ const { logger } = require('../middleware/logger');
 const { getQueues, pingRedis } = require('../services/queue.service');
 const { handleJiraWebhookEvent } = require('../services/jiraWebhookHandlerService');
 const { sendInngestEvent } = require('../services/inngestEvent.service');
+const { enqueuePostMeetingJob } = require('../jobs/post-meeting.job');
 
 function timingSafeEqual(a, b) {
   const aBuf = Buffer.from(String(a || ''), 'utf8');
@@ -276,7 +277,107 @@ async function jiraWebhook(req, res) {
   return res.status(200).json({ ok: true, handled, result: handlerResult });
 }
 
+function parseRawJsonBody(req) {
+  if (Buffer.isBuffer(req.body)) {
+    const text = req.body.toString('utf8');
+    return text ? JSON.parse(text) : {};
+  }
+
+  if (typeof req.body === 'object' && req.body !== null) return req.body;
+  return {};
+}
+
+function extractMeetingIdFromDailyPayload(payload) {
+  const roomName =
+    safeText(payload?.room) ||
+    safeText(payload?.room_name) ||
+    safeText(payload?.payload?.room) ||
+    safeText(payload?.payload?.room_name) ||
+    safeText(payload?.data?.room);
+
+  if (!roomName) return null;
+  return roomName.startsWith('meeting-') ? roomName.slice('meeting-'.length) : roomName;
+}
+
+async function resolveOrgIdForMeeting(meetingId) {
+  const orgsResp = await db.universalPool.query(
+    `SELECT id, db_connection_string
+     FROM organizations
+     WHERE db_connection_string IS NOT NULL`
+  );
+
+  for (const org of orgsResp.rows || []) {
+    try {
+      const orgId = String(org.id);
+      const orgPool = await db.getOrgPool(orgId);
+      const foundResp = await orgPool.query(
+        `SELECT id
+         FROM meeting_sessions
+         WHERE id = $1
+         LIMIT 1`,
+        [String(meetingId)]
+      );
+      if (foundResp.rows.length) return orgId;
+    } catch {
+      // Best-effort org resolution across tenants.
+    }
+  }
+
+  return null;
+}
+
+async function dailyWebhook(req, res) {
+  let payload = {};
+  try {
+    payload = parseRawJsonBody(req);
+  } catch {
+    return res.status(400).json({ error: 'Invalid JSON payload' });
+  }
+
+  const eventName =
+    safeText(payload?.event) ||
+    safeText(payload?.type) ||
+    safeText(payload?.payload?.event) ||
+    safeText(payload?.payload?.type);
+
+  if (eventName !== 'meeting-ended') {
+    return res.status(200).json({ ok: true, ignored: true, reason: 'unsupported_event' });
+  }
+
+  const meetingId = extractMeetingIdFromDailyPayload(payload);
+  if (!meetingId) {
+    return res.status(200).json({ ok: true, ignored: true, reason: 'missing_meeting_id' });
+  }
+
+  const providedOrgId = String(req.query?.orgId || req.get('x-org-id') || '').trim() || null;
+  const orgId = providedOrgId || (await resolveOrgIdForMeeting(meetingId));
+
+  try {
+    await sendInngestEvent('meeting/completed', {
+      orgId,
+      meetingId,
+      source: 'daily-webhook',
+      rawEvent: eventName,
+    });
+  } catch (err) {
+    logger.warn({ err, meetingId, orgId }, 'Failed to dispatch Daily meeting completion event to Inngest');
+  }
+
+  try {
+    await enqueuePostMeetingJob({
+      orgId,
+      meetingId,
+      source: 'daily-webhook',
+    });
+  } catch (err) {
+    logger.warn({ err, meetingId }, 'Failed to enqueue post-meeting job from Daily webhook');
+  }
+
+  return res.status(200).json({ ok: true });
+}
+
 module.exports = {
   githubWebhook,
   jiraWebhook,
+  dailyWebhook,
 };

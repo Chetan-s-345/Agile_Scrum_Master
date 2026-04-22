@@ -1,15 +1,17 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { CalendarDays, FileText, Loader2, NotebookPen, PlayCircle, RefreshCw, Sparkles, Trash2, Upload, Users } from "lucide-react";
 
-type MeetingType = "daily" | "weekly" | "retrospective" | "business";
+type MeetingType = "planning" | "daily" | "review" | "retro";
 type MeetingStatus = "scheduled" | "in_progress" | "completed" | "archived";
 type FilterValue = "all" | MeetingStatus;
 
 type MeetingItem = {
   id: string;
+  sprintId?: string | null;
+  projectId?: string | null;
   title: string;
   type: MeetingType;
   status: MeetingStatus;
@@ -41,6 +43,16 @@ type MeetingActionItem = {
   source?: string;
 };
 
+type MeetingDbActionItem = {
+  id: string;
+  title: string;
+  detail?: string | null;
+  status: string;
+  source?: string | null;
+  assigneeName?: string | null;
+  dueDate?: string | null;
+};
+
 type MeetingTranscript = {
   id: string;
   sourceType: string;
@@ -63,15 +75,14 @@ type MeetingDetail = MeetingItem & {
   aiDecisions?: string | null;
   aiRisks?: string | null;
   aiActionItems?: MeetingActionItem[];
+  actionItems?: MeetingDbActionItem[];
+  createdAt?: string;
+  updatedAt?: string;
   notes?: MeetingNote[];
   attendees?: MeetingAttendee[];
 };
 
-type CreateProvisioningWarning = {
-  code?: string;
-  detail?: string;
-  hint?: string | null;
-};
+type MeetingPaneTab = "overview" | "transcript" | "summary" | "actions";
 
 type DeveloperItem = {
   id: string;
@@ -81,19 +92,16 @@ type DeveloperItem = {
 };
 
 type MeetingsListResponse = { items?: MeetingItem[]; error?: string };
-type MeetingDetailResponse = {
-  item?: MeetingDetail & { provisioningWarning?: CreateProvisioningWarning };
-  error?: string;
-};
+type MeetingDetailResponse = { item?: MeetingDetail; error?: string };
 type DevelopersResponse = { items?: DeveloperItem[]; error?: string };
 type MeetingTranscriptsResponse = { items?: MeetingTranscript[]; error?: string };
 type ApiErrorPayload = { error?: string; detail?: string; hint?: string; code?: string | number };
 
 const MEETING_TYPES: Array<{ id: MeetingType; label: string; route: string }> = [
+  { id: "planning", label: "Planning", route: "/meetings/weekly" },
   { id: "daily", label: "Daily", route: "/meetings/daily" },
-  { id: "weekly", label: "Weekly", route: "/meetings/weekly" },
-  { id: "retrospective", label: "Retrospective", route: "/meetings/retrospective" },
-  { id: "business", label: "Business", route: "/meetings/business" },
+  { id: "review", label: "Review", route: "/meetings/business" },
+  { id: "retro", label: "Retro", route: "/meetings/retrospective" },
 ];
 
 const STATUS_FILTERS: Array<{ id: FilterValue; label: string }> = [
@@ -104,12 +112,10 @@ const STATUS_FILTERS: Array<{ id: FilterValue; label: string }> = [
   { id: "archived", label: "Archived" },
 ];
 
-const GOOGLE_MEET_URL_REGEX = /^https:\/\/meet\.google\.com\/[a-z0-9-]{3,64}(?:[/?#].*)?$/i;
-
 function typeFromPath(pathname: string): MeetingType {
-  if (pathname.endsWith("/meetings/weekly")) return "weekly";
-  if (pathname.endsWith("/meetings/retrospective")) return "retrospective";
-  if (pathname.endsWith("/meetings/business")) return "business";
+  if (pathname.endsWith("/meetings/weekly")) return "planning";
+  if (pathname.endsWith("/meetings/retrospective")) return "retro";
+  if (pathname.endsWith("/meetings/business")) return "review";
   return "daily";
 }
 
@@ -154,10 +160,6 @@ function normalizeError(payload: unknown, fallback: string): string {
   return fallback;
 }
 
-function isValidGoogleMeetJoinUrl(value: string): boolean {
-  return GOOGLE_MEET_URL_REGEX.test(value.trim());
-}
-
 function MeetingsPageContent() {
   const router = useRouter();
   const pathname = usePathname();
@@ -179,9 +181,12 @@ function MeetingsPageContent() {
   const [savingTranscript, setSavingTranscript] = useState(false);
   const [summarizingMeeting, setSummarizingMeeting] = useState(false);
   const [transcriptsLoading, setTranscriptsLoading] = useState(false);
+  const [schedulingSprint, setSchedulingSprint] = useState(false);
+  const [assigningTasks, setAssigningTasks] = useState(false);
+  const [activeMeetingTab, setActiveMeetingTab] = useState<MeetingPaneTab>("overview");
+  const [autoSummarizeOnTranscriptUpload, setAutoSummarizeOnTranscriptUpload] = useState(true);
 
   const [error, setError] = useState<string | null>(null);
-  const [warning, setWarning] = useState<string | null>(null);
   const [meetings, setMeetings] = useState<MeetingItem[]>([]);
   const [developers, setDevelopers] = useState<DeveloperItem[]>([]);
   const [selectedMeetingId, setSelectedMeetingId] = useState<string>("");
@@ -211,7 +216,7 @@ function MeetingsPageContent() {
     setActiveType(typeFromPath(pathname || ""));
   }, [pathname]);
 
-  const refreshMeetings = async (preferId?: string) => {
+  const refreshMeetings = useCallback(async (preferId?: string) => {
     const requestId = ++meetingsRequestRef.current;
     meetingsAbortRef.current?.abort();
     const controller = new AbortController();
@@ -234,9 +239,7 @@ function MeetingsPageContent() {
       const items = Array.isArray(payload?.items) ? payload.items : [];
       setMeetings(items);
 
-      const nextSelected =
-        items.find((item) => item.id === (preferId || selectedMeetingId))?.id || items[0]?.id || "";
-      setSelectedMeetingId(nextSelected);
+      setSelectedMeetingId((prev) => items.find((item) => item.id === (preferId || prev))?.id || items[0]?.id || "");
     } catch (err) {
       if (controller.signal.aborted || requestId !== meetingsRequestRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load meetings");
@@ -248,7 +251,7 @@ function MeetingsPageContent() {
         setListLoading(false);
       }
     }
-  };
+  }, [activeType, statusFilter]);
 
   const refreshMeetingDetail = async (meetingId: string) => {
     if (!meetingId) {
@@ -369,15 +372,24 @@ function MeetingsPageContent() {
 
   useEffect(() => {
     void refreshMeetings();
-  }, [activeType, statusFilter]);
+  }, [refreshMeetings]);
 
   useEffect(() => {
     void refreshMeetingDetail(selectedMeetingId);
+    setActiveMeetingTab("overview");
   }, [selectedMeetingId]);
 
   useEffect(() => {
     void refreshTranscripts(selectedMeetingId);
   }, [selectedMeetingId]);
+
+  useEffect(() => {
+    if (!assigningTasks) return;
+    const items = selectedMeeting?.aiActionItems || [];
+    if (selectedMeeting?.status === "completed" && items.length > 0) {
+      setAssigningTasks(false);
+    }
+  }, [assigningTasks, selectedMeeting?.status, selectedMeeting?.aiActionItems]);
 
   const filteredMeetings = useMemo(() => {
     const q = meetingSearch.trim().toLowerCase();
@@ -405,7 +417,6 @@ function MeetingsPageContent() {
 
     setCreating(true);
     setError(null);
-    setWarning(null);
     try {
       const response = await fetch("/api/meetings", {
         method: "POST",
@@ -415,7 +426,7 @@ function MeetingsPageContent() {
           title: newTitle.trim(),
           scheduledStart: newDateTime,
           createJoinUrl: true,
-          provider: "google_meet",
+          provider: "daily",
         }),
       });
 
@@ -423,17 +434,10 @@ function MeetingsPageContent() {
       if (!response.ok) throw new Error(normalizeError(payload, "Failed to create meeting"));
 
       const createdId = payload?.item?.id || "";
-      const provisioningWarning = payload?.item?.provisioningWarning;
       setNewTitle("");
       setNewDateTime("");
       await refreshMeetings(createdId);
-
-      if (provisioningWarning?.detail) {
-        const hint = provisioningWarning?.hint ? ` ${provisioningWarning.hint}` : "";
-        setWarning(`Meeting was scheduled, but auto Meet link failed: ${provisioningWarning.detail}${hint}`);
-      }
     } catch (err) {
-      setWarning(null);
       setError(err instanceof Error ? err.message : "Failed to create meeting");
     } finally {
       setCreating(false);
@@ -457,10 +461,40 @@ function MeetingsPageContent() {
       const updated = payload?.item || null;
       setSelectedMeeting(updated);
       setMeetings((prev) => prev.map((item) => (item.id === selectedMeetingId ? { ...item, status } : item)));
+
+      if (status === "completed") {
+        setAssigningTasks(true);
+        setTimeout(() => {
+          void refreshMeetingDetail(selectedMeetingId);
+          setAssigningTasks(false);
+        }, 12000);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update status");
     } finally {
       setSavingStatus(false);
+    }
+  };
+
+  const scheduleSprintAutoMeetings = async () => {
+    const sprintId = selectedMeeting?.sprintId;
+    if (!sprintId) return;
+
+    setSchedulingSprint(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/sprints/${encodeURIComponent(sprintId)}/schedule-meetings`, {
+        method: "POST",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(normalizeError(payload, "Failed to auto-schedule sprint meetings"));
+
+      await refreshMeetings(selectedMeetingId);
+      await refreshMeetingDetail(selectedMeetingId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to auto-schedule sprint meetings");
+    } finally {
+      setSchedulingSprint(false);
     }
   };
 
@@ -623,42 +657,16 @@ function MeetingsPageContent() {
     setStartingMeeting(true);
     setError(null);
     try {
-      const callStartMeeting = async (body: Record<string, unknown>) =>
-        fetch(`/api/meetings/${encodeURIComponent(selectedMeetingId)}/start`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-
-      let response = await callStartMeeting({
-        provider: "google_meet",
+      const response = await fetch(`/api/meetings/${encodeURIComponent(selectedMeetingId)}/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "daily",
         joinUrl: selectedMeeting?.joinUrl || undefined,
         providerMeetingId: selectedMeeting?.providerMeetingId || undefined,
+        }),
       });
-      let payload = (await response.json().catch(() => null)) as (MeetingDetailResponse & ApiErrorPayload) | null;
-
-      if (!response.ok) {
-        const code = String(payload?.code || "").toUpperCase();
-        const detail = `${String(payload?.detail || "")} ${String(payload?.error || "")}`.toLowerCase();
-        const isGoogleMeetProvisionFailure = code.startsWith("GOOGLE_MEET_");
-        const isGatewayTimeout = response.status === 504 || response.status === 502;
-        const looksLikeMeetFailure =
-          detail.includes("google meet") || detail.includes("join url") || detail.includes("timeout");
-
-        if (isGoogleMeetProvisionFailure || isGatewayTimeout || looksLikeMeetFailure) {
-          const manualJoinUrl = window.prompt(
-            "Auto Google Meet link failed. Paste a manual Google Meet URL to start this meeting, or Cancel to keep the error."
-          );
-          if (manualJoinUrl) {
-            const candidateUrl = manualJoinUrl.trim();
-            if (!isValidGoogleMeetJoinUrl(candidateUrl)) {
-              throw new Error("Manual URL must be a valid https://meet.google.com/... link.");
-            }
-            response = await callStartMeeting({ provider: "google_meet", joinUrl: candidateUrl });
-            payload = (await response.json().catch(() => null)) as (MeetingDetailResponse & ApiErrorPayload) | null;
-          }
-        }
-      }
+      const payload = (await response.json().catch(() => null)) as (MeetingDetailResponse & ApiErrorPayload) | null;
 
       if (!response.ok) throw new Error(normalizeError(payload, "Failed to start meeting"));
 
@@ -716,6 +724,10 @@ function MeetingsPageContent() {
       setTranscriptDraft("");
       setTranscriptFileName("");
       await refreshTranscripts(selectedMeetingId);
+      if (autoSummarizeOnTranscriptUpload) {
+        await summarizeMeeting();
+        setActiveMeetingTab("summary");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to upload transcript");
     } finally {
@@ -982,9 +994,56 @@ function MeetingsPageContent() {
                   ) : (
                     <span className="text-xs text-[var(--text-secondary)]">No join link yet.</span>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => void scheduleSprintAutoMeetings()}
+                    disabled={schedulingSprint || !selectedMeeting.sprintId}
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--border)] px-2 text-xs disabled:opacity-60"
+                  >
+                    {schedulingSprint ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CalendarDays className="h-3.5 w-3.5" />}
+                    Sprint auto-schedule
+                  </button>
+                  {selectedMeeting.sprintId ? (
+                    <a
+                      href={`/board?sprintId=${encodeURIComponent(selectedMeeting.sprintId)}`}
+                      className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--border)] px-2 text-xs"
+                    >
+                      Open sprint board
+                    </a>
+                  ) : null}
                 </div>
+                {assigningTasks ? (
+                  <div className="mt-3 inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    AI is assigning tasks...
+                  </div>
+                ) : null}
               </div>
 
+              <div className="flex flex-wrap gap-2">
+                {([
+                  { id: "overview", label: "Overview" },
+                  { id: "transcript", label: "Transcript" },
+                  { id: "summary", label: "Summary" },
+                  { id: "actions", label: "Actions" },
+                ] as Array<{ id: MeetingPaneTab; label: string }>).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveMeetingTab(tab.id)}
+                    className={`rounded-md border px-3 py-1.5 text-xs font-semibold ${
+                      activeMeetingTab === tab.id
+                        ? "border-[var(--accent-blue)] bg-[var(--accent-blue)]/10 text-[var(--text-primary)]"
+                        : "border-[var(--border)] text-[var(--text-secondary)]"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {activeMeetingTab === "overview" ? (
+                <>
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
                   <div className="flex items-center justify-between gap-2">
@@ -1105,7 +1164,11 @@ function MeetingsPageContent() {
                 </div>
               </div>
 
-              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
+                </>
+              ) : null}
+
+              {activeMeetingTab === "transcript" ? (
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-semibold text-[var(--text-primary)]">Meeting transcript</p>
                   <button
@@ -1118,6 +1181,16 @@ function MeetingsPageContent() {
                     Generate summary
                   </button>
                 </div>
+
+                <label className="mt-2 inline-flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+                  <input
+                    type="checkbox"
+                    checked={autoSummarizeOnTranscriptUpload}
+                    onChange={(event) => setAutoSummarizeOnTranscriptUpload(event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Auto-generate summary after transcript upload
+                </label>
 
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <label className="inline-flex h-8 cursor-pointer items-center gap-1 rounded-md border border-[var(--border)] px-2 text-xs">
@@ -1167,8 +1240,11 @@ function MeetingsPageContent() {
                     <p className="text-xs text-[var(--text-secondary)]">No transcripts uploaded yet.</p>
                   )}
                 </div>
-              </div>
+                </div>
+              ) : null}
 
+              {activeMeetingTab === "summary" ? (
+                <>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                 <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-3">
                   <p className="text-xs font-semibold text-[var(--text-primary)]">AI Summary</p>
@@ -1185,7 +1261,21 @@ function MeetingsPageContent() {
               </div>
 
               <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
+                <div className="mb-2 flex items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-[var(--text-primary)]">AI Action Items</p>
+                  <button
+                    type="button"
+                    onClick={() => void summarizeMeeting()}
+                    disabled={summarizingMeeting}
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--border-strong)] px-2 text-xs disabled:opacity-60"
+                  >
+                    {summarizingMeeting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    Refresh summary
+                  </button>
+                </div>
+                <p className="text-[11px] text-[var(--text-secondary)]">
+                  Last updated: {formatDateTime(selectedMeeting.updatedAt || selectedMeeting.scheduledStart)}
+                </p>
                 {(selectedMeeting.aiActionItems || []).length ? (
                   <ul className="mt-2 space-y-1 text-sm text-[var(--text-secondary)]">
                     {(selectedMeeting.aiActionItems || []).map((item) => (
@@ -1196,12 +1286,68 @@ function MeetingsPageContent() {
                   <p className="mt-2 text-xs text-[var(--text-secondary)]">No AI action items yet.</p>
                 )}
               </div>
+
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
+                <p className="text-sm font-semibold text-[var(--text-primary)]">Summary History</p>
+                {(selectedMeeting.notes || []).filter((note) => note.isAiGenerated).length ? (
+                  <div className="mt-2 space-y-2">
+                    {(selectedMeeting.notes || [])
+                      .filter((note) => note.isAiGenerated)
+                      .slice(0, 8)
+                      .map((note) => (
+                        <div key={note.id} className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-2">
+                          <p className="text-[11px] text-[var(--text-secondary)]">{formatDateTime(note.createdAt)}</p>
+                          <p className="mt-1 whitespace-pre-wrap text-xs text-[var(--text-secondary)]">{note.content}</p>
+                        </div>
+                      ))}
+                  </div>
+                ) : (
+                  <p className="mt-2 text-xs text-[var(--text-secondary)]">No AI summary history yet.</p>
+                )}
+              </div>
+                </>
+              ) : null}
+
+              {activeMeetingTab === "actions" ? (
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
+                    <p className="text-sm font-semibold text-[var(--text-primary)]">Structured Action Items</p>
+                    {(selectedMeeting.actionItems || []).length ? (
+                      <div className="mt-2 space-y-2">
+                        {(selectedMeeting.actionItems || []).map((item) => (
+                          <div key={item.id} className="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-2">
+                            <p className="text-sm font-semibold text-[var(--text-primary)]">{item.title}</p>
+                            {item.detail ? <p className="mt-1 text-xs text-[var(--text-secondary)]">{item.detail}</p> : null}
+                            <p className="mt-1 text-[11px] text-[var(--text-secondary)]">
+                              Status: {item.status} {item.assigneeName ? `• Owner: ${item.assigneeName}` : ""}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-xs text-[var(--text-secondary)]">No structured action items yet.</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
+                    <p className="text-sm font-semibold text-[var(--text-primary)]">AI Generated Action Titles</p>
+                    {(selectedMeeting.aiActionItems || []).length ? (
+                      <ul className="mt-2 space-y-1 text-sm text-[var(--text-secondary)]">
+                        {(selectedMeeting.aiActionItems || []).map((item) => (
+                          <li key={item.id}>- {item.title}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-2 text-xs text-[var(--text-secondary)]">No AI action titles yet.</p>
+                    )}
+                  </div>
+                </div>
+              ) : null}
             </div>
           )}
         </section>
       </div>
 
-      {warning ? <div className="rounded-md border border-[#7a5b1f] bg-[#2f2411] px-3 py-2 text-sm text-[#f3d39b]">{warning}</div> : null}
       {error ? <div className="rounded-md border border-[#5a1f1f] bg-[#2a1616] px-3 py-2 text-sm text-[#f3b6b6]">{error}</div> : null}
     </div>
   );

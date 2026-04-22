@@ -57,15 +57,14 @@ function toToolResultBlock(toolUseId, result) {
   };
 }
 
-async function callAnthropicMessages(apiKey, payload) {
+async function callGroqMessages(apiKey, payload) {
   const resp = await axios({
     method: 'POST',
-    url: 'https://api.anthropic.com/v1/messages',
+    url: 'https://api.groq.com/openai/v1/chat/completions',
     timeout: 120_000,
     headers: {
       'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
+      'Authorization': `Bearer ${apiKey}`,
     },
     data: payload,
     validateStatus: () => true,
@@ -73,7 +72,7 @@ async function callAnthropicMessages(apiKey, payload) {
 
   if (resp.status >= 400) {
     const detail = safe(resp.data?.error?.message || resp.data?.message || JSON.stringify(resp.data));
-    throw Object.assign(new Error(detail || 'Anthropic request failed'), { statusCode: resp.status || 502 });
+    throw Object.assign(new Error(detail || 'Groq request failed'), { statusCode: resp.status || 502 });
   }
 
   return resp.data || {};
@@ -195,55 +194,57 @@ async function chat(req, res, next) {
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && safe(m.content))
       .map((m) => ({ role: m.role, content: safe(m.content) }));
 
-    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-    if (!safe(anthropicApiKey)) return jsonError(res, 500, 'Server error', 'ANTHROPIC_API_KEY is not configured.');
+    const groqApiKey = process.env.GROQ_API_KEY;
+    if (!safe(groqApiKey)) return jsonError(res, 500, 'Server error', 'GROQ_API_KEY is not configured.');
 
     const messages = [...trimmedHistory, { role: 'user', content: message }];
     const tools = getToolDefinitions();
-    const firstResponse = await callAnthropicMessages(anthropicApiKey, {
-      model: 'claude-sonnet-4-20250514',
+    const firstResponse = await callGroqMessages(groqApiKey, {
+      model: 'llama3-8b-8192',
       max_tokens: 2000,
-      stream: false,
-      system: systemPrompt,
+      temperature: 0.7,
       messages,
       tools,
     });
 
     let finalText = extractText(firstResponse.content);
-    if (firstResponse.stop_reason === 'tool_use') {
-      const toolUses = (Array.isArray(firstResponse.content) ? firstResponse.content : []).filter((b) => b?.type === 'tool_use');
+    if (firstResponse.choices?.[0]?.message?.tool_calls?.length) {
+      const toolCalls = firstResponse.choices[0].message.tool_calls;
       const toolResults = [];
 
-      for (const block of toolUses) {
+      for (const toolCall of toolCalls) {
         const result = await executeActionWithPolicy(req.orgDb, {
           projectId,
           userId: String(req.user?.userId || ''),
           executionMode,
           agentId,
-        }, String(block.name), block.input || {});
+        }, String(toolCall.function.name), JSON.parse(toolCall.function.arguments || '{}'));
 
         if (result?.type === 'confirmation_required') {
           return res.status(200).json(result);
         }
 
-        toolResults.push(toToolResultBlock(block.id, result));
+        toolResults.push({
+          tool_call_id: toolCall.id,
+          role: 'tool',
+          content: JSON.stringify(result || {}),
+        });
       }
 
       const secondMessages = [
         ...messages,
-        { role: 'assistant', content: firstResponse.content },
-        { role: 'user', content: toolResults },
+        firstResponse.choices[0].message,
+        ...toolResults,
       ];
 
-      const secondResponse = await callAnthropicMessages(anthropicApiKey, {
-        model: 'claude-sonnet-4-20250514',
+      const secondResponse = await callGroqMessages(groqApiKey, {
+        model: 'llama3-8b-8192',
         max_tokens: 2000,
-        stream: false,
-        system: systemPrompt,
+        temperature: 0.7,
         messages: secondMessages,
         tools,
       });
-      finalText = extractText(secondResponse.content);
+      finalText = extractText(secondResponse.choices?.[0]?.message || {});
     }
 
     setSseHeaders(res);

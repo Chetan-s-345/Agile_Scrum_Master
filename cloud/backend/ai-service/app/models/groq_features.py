@@ -35,3 +35,10 @@ class RiskNarratorRequest(BaseModel):
     sprint_name: str | None = None
     health: dict[str, Any] = Field(default_factory=dict)
     audience: Literal["engineering", "product", "stakeholders"] = "stakeholders"
+
+
+class MeetingSummarizerRequest(BaseModel):
+    meeting_title: str | None = None
+    meeting_type: str | None = None
+    transcript: str
+    notes: list[str] = Field(default_factory=list)

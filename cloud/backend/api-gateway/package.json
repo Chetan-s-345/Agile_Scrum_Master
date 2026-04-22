@@ -16,6 +16,7 @@
     "migrate:meetings-lifecycle": "node db/migrations/add_meetings_lifecycle.js",
     "migrate:teams-rbac": "node db/migrations/add_teams_rbac_scores.js",
     "reset:all-data": "node scripts/reset-all-data.js --yes",
+    "lint": "eslint src --ext .js",
     "test": "jest"
   },
   "dependencies": {
@@ -32,6 +33,7 @@
     "ioredis": "^5.5.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
+    "node-cron": "^4.2.1",
     "pg": "^8.13.1",
     "socket.io": "^4.8.3",
     "stripe": "^18.3.0",
@@ -40,6 +42,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "eslint": "^9.0.0",
     "jest": "^29.7.0",
     "nodemon": "^3.1.9",
     "supertest": "^7.0.0"

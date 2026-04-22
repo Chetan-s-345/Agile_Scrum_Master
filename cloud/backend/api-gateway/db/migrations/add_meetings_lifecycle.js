@@ -42,7 +42,7 @@ async function migrateTenant(orgId, connectionString) {
         sprint_id UUID REFERENCES sprints(id) ON DELETE SET NULL,
         project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
         meeting_type VARCHAR(30) NOT NULL CHECK (meeting_type IN ('daily', 'weekly', 'retrospective', 'business')),
-        video_provider VARCHAR(30) NOT NULL DEFAULT 'none' CHECK (video_provider IN ('none', 'google_meet', 'zoom', 'teams')),
+        video_provider VARCHAR(30) NOT NULL DEFAULT 'none' CHECK (video_provider IN ('none', 'daily', 'zoom', 'teams')),
         provider_meeting_id TEXT,
         join_url TEXT,
         title VARCHAR(300) NOT NULL,
@@ -112,7 +112,7 @@ async function migrateTenant(orgId, connectionString) {
       CREATE TABLE IF NOT EXISTS meeting_transcripts (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         meeting_id UUID NOT NULL REFERENCES meeting_sessions(id) ON DELETE CASCADE,
-        source_type VARCHAR(30) NOT NULL DEFAULT 'manual_upload' CHECK (source_type IN ('manual_upload', 'google_meet', 'zoom', 'teams', 'other')),
+        source_type VARCHAR(30) NOT NULL DEFAULT 'manual_upload' CHECK (source_type IN ('manual_upload', 'daily', 'zoom', 'teams', 'other')),
         file_name VARCHAR(260),
         mime_type VARCHAR(120),
         transcript_text TEXT NOT NULL,

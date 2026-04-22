@@ -12,6 +12,7 @@ router.get('/', meetingsController.listMeetings);
 router.post('/', meetingsController.createMeeting);
 router.get('/:meetingId', meetingsController.getMeeting);
 router.patch('/:meetingId', meetingsController.updateMeeting);
+router.put('/:meetingId', meetingsController.updateMeeting);
 router.delete('/:meetingId', meetingsController.deleteMeeting);
 router.post('/:meetingId/attendees', meetingsController.setMeetingAttendees);
 router.get('/:meetingId/notes', meetingsController.listMeetingNotes);

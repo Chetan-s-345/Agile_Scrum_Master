@@ -20,7 +20,9 @@ const { startSprintMonitoringWorker } = require('./workers/sprintMonitoring.work
 const { startJiraSyncWorker } = require('./workers/jiraSync.worker');
 const { startWebhookProcessingWorker } = require('./workers/webhookProcessing.worker');
 const { startPrMetricsWorker } = require('./workers/prMetrics.worker');
+const { startPostMeetingWorker } = require('./workers/post-meeting.worker');
 const { startWebhookRetryWorker } = require('./jobs/webhookRetryWorker');
+const { startSprintSchedulerJob } = require('./jobs/sprint-scheduler.job');
 const { pingRedis } = require('./services/queue.service');
 
 const authRoutes = require('./routes/auth.routes');
@@ -161,6 +163,12 @@ server.listen(env.PORT, () => {
     ensureRepeatableJobs().catch((err) => {
       logger.error({ err }, 'Failed to ensure repeatable jobs');
     });
+
+    try {
+      startSprintSchedulerJob();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start sprint scheduler cron job');
+    }
   }
 
   if (env.ENABLE_WORKERS) {
@@ -192,6 +200,12 @@ server.listen(env.PORT, () => {
       startWebhookRetryWorker();
     } catch (err) {
       logger.error({ err }, 'Failed to start webhook retry worker');
+    }
+
+    try {
+      startPostMeetingWorker();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start post-meeting worker');
     }
 
     try {

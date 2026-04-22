@@ -1,9 +1,9 @@
 const { z } = require('zod');
 
 const uuidSchema = z.string().uuid();
-const meetingTypeSchema = z.enum(['daily', 'weekly', 'retrospective', 'business']);
+const meetingTypeSchema = z.enum(['daily', 'planning', 'review', 'retro', 'weekly', 'retrospective', 'business']);
 const meetingStatusSchema = z.enum(['scheduled', 'in_progress', 'completed', 'archived']);
-const googleMeetJoinUrlRegex = /^https:\/\/meet\.google\.com\/[a-z0-9-]{3,64}(?:[/?#].*)?$/i;
+const dailyJoinUrlRegex = /^https:\/\/[a-z0-9-]+\.daily\.co\/[a-z0-9-]+(?:[/?#].*)?$/i;
 
 const listMeetingsQuerySchema = z.object({
   type: meetingTypeSchema.optional(),
@@ -27,7 +27,7 @@ const createMeetingSchema = z.object({
   description: z.string().max(20000).optional(),
   attendeeDeveloperIds: z.array(uuidSchema).max(200).optional(),
   createJoinUrl: z.boolean().optional(),
-  provider: z.enum(['google_meet']).optional(),
+  provider: z.enum(['daily', 'zoom', 'teams']).optional(),
 });
 
 const updateMeetingSchema = z
@@ -57,24 +57,24 @@ const updateMeetingDescriptionSchema = z.object({
 
 const startMeetingSchema = z
   .object({
-    provider: z.enum(['google_meet', 'zoom', 'teams']).optional(),
+    provider: z.enum(['daily', 'zoom', 'teams']).optional(),
     providerMeetingId: z.string().max(200).optional(),
     joinUrl: z.string().url().max(1200).optional(),
   })
   .superRefine((value, ctx) => {
-    const provider = value.provider || 'google_meet';
+    const provider = value.provider || 'daily';
     const joinUrl = String(value.joinUrl || '').trim();
-    if (provider === 'google_meet' && joinUrl && !googleMeetJoinUrlRegex.test(joinUrl)) {
+    if (provider === 'daily' && joinUrl && !dailyJoinUrlRegex.test(joinUrl)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['joinUrl'],
-        message: 'joinUrl must be a valid https://meet.google.com/... URL when provider is google_meet.',
+        message: 'joinUrl must be a valid https://*.daily.co/... URL when provider is daily.',
       });
     }
   });
 
 const uploadMeetingTranscriptSchema = z.object({
-  sourceType: z.enum(['manual_upload', 'google_meet', 'zoom', 'teams', 'other']).optional(),
+  sourceType: z.enum(['manual_upload', 'daily', 'zoom', 'teams', 'other']).optional(),
   fileName: z.string().max(260).optional(),
   mimeType: z.string().max(120).optional(),
   language: z.string().max(20).optional(),
