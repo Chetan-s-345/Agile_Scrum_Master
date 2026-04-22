@@ -1,5 +1,5 @@
 const express = require('express');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const axios = require('axios');
 
 const { authMiddleware } = require('../middleware/auth');
@@ -261,6 +261,134 @@ async function ensureCustomAgentsTables(orgPool) {
       PRIMARY KEY (agent_id, project_id)
     )`
   );
+
+  await orgPool.query(
+    `CREATE TABLE IF NOT EXISTS custom_agent_commit_memory (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      source_sha TEXT,
+      source_title TEXT,
+      source_details TEXT,
+      source_at TIMESTAMPTZ,
+      fingerprint TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`
+  );
+
+  await orgPool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_agent_commit_memory_unique
+     ON custom_agent_commit_memory (project_id, agent_id, fingerprint)`
+  );
+
+  await orgPool.query(
+    `CREATE INDEX IF NOT EXISTS idx_custom_agent_commit_memory_recent
+     ON custom_agent_commit_memory (project_id, agent_id, created_at DESC)`
+  );
+}
+
+function normalizeSignalText(value) {
+  return safe(value).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function buildCommitFingerprint(signal) {
+  const sha = normalizeSignalText(signal?.sha);
+  const title = normalizeSignalText(signal?.title);
+  const details = normalizeSignalText(signal?.details).slice(0, 600);
+  const payload = sha ? `sha:${sha}` : `title:${title}|details:${details}`;
+  return createHash('sha256').update(payload).digest('hex');
+}
+
+function extractCommitSignalsForMemory(signals) {
+  const rows = Array.isArray(signals) ? signals : [];
+  const unique = [];
+  const seen = new Set();
+
+  for (const signal of rows) {
+    const eventType = normalizeSignalText(signal?.eventType);
+    if (eventType === 'manual-intent') continue;
+
+    const hasCommitContext = Boolean(safe(signal?.sha) || safe(signal?.title) || safe(signal?.details));
+    if (!hasCommitContext) continue;
+
+    const fingerprint = buildCommitFingerprint(signal);
+    if (!fingerprint || seen.has(fingerprint)) continue;
+
+    seen.add(fingerprint);
+    unique.push({
+      fingerprint,
+      sha: safe(signal?.sha) || null,
+      title: safe(signal?.title) || null,
+      details: safe(signal?.details) || null,
+      at: signal?.at ? new Date(signal.at).toISOString() : null,
+    });
+
+    if (unique.length >= 10) break;
+  }
+
+  return unique;
+}
+
+async function listKnownCommitFingerprints(orgPool, projectId, agentId, fingerprints) {
+  const keys = (Array.isArray(fingerprints) ? fingerprints : []).map((item) => String(item || '')).filter(Boolean);
+  if (!keys.length) return new Set();
+
+  const resp = await orgPool.query(
+    `SELECT fingerprint
+     FROM custom_agent_commit_memory
+     WHERE project_id = $1
+       AND agent_id = $2
+       AND fingerprint = ANY($3::text[])`,
+    [String(projectId), String(agentId), keys]
+  );
+
+  return new Set((resp.rows || []).map((row) => String(row.fingerprint || '')));
+}
+
+async function upsertCommitMemory(orgPool, projectId, agentId, entries) {
+  const rows = Array.isArray(entries) ? entries : [];
+  let saved = 0;
+
+  for (const entry of rows) {
+    if (!safe(entry?.fingerprint)) continue;
+    await orgPool.query(
+      `INSERT INTO custom_agent_commit_memory (
+         id, project_id, agent_id, source_sha, source_title, source_details, source_at, fingerprint, created_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+       ON CONFLICT (project_id, agent_id, fingerprint) DO UPDATE
+       SET source_sha = EXCLUDED.source_sha,
+           source_title = EXCLUDED.source_title,
+           source_details = EXCLUDED.source_details,
+           source_at = COALESCE(EXCLUDED.source_at, custom_agent_commit_memory.source_at),
+           created_at = NOW()`,
+      [
+        randomUUID(),
+        String(projectId),
+        String(agentId),
+        entry.sha ? String(entry.sha) : null,
+        entry.title ? String(entry.title) : null,
+        entry.details ? String(entry.details) : null,
+        entry.at ? String(entry.at) : null,
+        String(entry.fingerprint),
+      ]
+    );
+    saved += 1;
+  }
+
+  await orgPool.query(
+    `DELETE FROM custom_agent_commit_memory
+     WHERE id IN (
+       SELECT id
+       FROM custom_agent_commit_memory
+       WHERE project_id = $1
+         AND agent_id = $2
+       ORDER BY created_at DESC
+       OFFSET 10
+     )`,
+    [String(projectId), String(agentId)]
+  );
+
+  return saved;
 }
 
 async function listCustomAgentsForProject(orgPool, projectId) {
@@ -1262,21 +1390,16 @@ router.post('/:agentId/run', async (req, res, next) => {
     const assignmentFailures = [];
     const githubIssues = [];
     const githubIssueErrors = [];
+    const commitMemory = {
+      checked: false,
+      totalSignals: 0,
+      newSignals: 0,
+      saved: 0,
+      skippedAsRepeated: false,
+    };
     let monitoringEmail = null;
 
-    if ((role === 'task-generator' || role === 'custom') && !sprintId) {
-      const start = new Date();
-      const end = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-      const createdSprint = await executeActionWithPolicy(req.orgDb, context, 'create_sprint', {
-        name: `Auto Sprint ${start.toISOString().slice(0, 10)}`,
-        startDate: start.toISOString().slice(0, 10),
-        endDate: end.toISOString().slice(0, 10),
-        goal: `Auto sprint generated for ${customAgent.name}`,
-      });
-      sprintId = safe(createdSprint?.sprintId || createdSprint?.id);
-    }
-
-    if ((role === 'task-generator' || role === 'custom') && sprintId) {
+    if (role === 'task-generator' || role === 'custom') {
       const dbSignals = await getRepoSignals(req.orgDb, projectId, githubRepo, 24);
       let repoSignals = dbSignals;
       if (!repoSignals.length && githubRepo) {
@@ -1285,6 +1408,68 @@ router.post('/:agentId/run', async (req, res, next) => {
         } catch {
           repoSignals = [];
         }
+      }
+
+      await ensureCustomAgentsTables(req.orgDb);
+      const commitSignals = extractCommitSignalsForMemory(repoSignals);
+      commitMemory.checked = true;
+      commitMemory.totalSignals = commitSignals.length;
+
+      if (commitSignals.length) {
+        const fingerprints = commitSignals.map((item) => item.fingerprint);
+        const known = await listKnownCommitFingerprints(req.orgDb, projectId, agentId, fingerprints);
+        const unseen = commitSignals.filter((item) => !known.has(item.fingerprint));
+        commitMemory.newSignals = unseen.length;
+
+        try {
+          commitMemory.saved = await upsertCommitMemory(req.orgDb, projectId, agentId, unseen);
+        } catch {
+          // Commit memory persistence is best-effort and must not disrupt successful runs.
+          commitMemory.saved = 0;
+        }
+
+        if (!unseen.length) {
+          commitMemory.skippedAsRepeated = true;
+          await insertAgentDecision(req.orgDb, {
+            agentType: agentId,
+            projectId,
+            actionDescription: 'Custom agent run skipped (no new commit context)',
+            reasoning: { source: 'manual-run', actor: String(req.user?.userId || ''), prompt },
+            dataUsed: {
+              role,
+              prompt,
+              commitMemory,
+            },
+            status: 'executed',
+            resolvedBy: String(req.user?.userId || ''),
+            resolutionType: 'auto-executed',
+          });
+
+          return res.status(200).json({
+            success: true,
+            createdTasks,
+            assignedTasks,
+            assignmentFailures,
+            monitoringEmail,
+            githubIssues,
+            githubIssueErrors,
+            githubRepo: githubRepo || null,
+            commitMemory,
+            detail: 'Run skipped: no new commit context found in the latest signals, so repeated sprint/task generation was prevented.',
+          });
+        }
+      }
+
+      if (!sprintId) {
+        const start = new Date();
+        const end = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+        const createdSprint = await executeActionWithPolicy(req.orgDb, context, 'create_sprint', {
+          name: `Auto Sprint ${start.toISOString().slice(0, 10)}`,
+          startDate: start.toISOString().slice(0, 10),
+          endDate: end.toISOString().slice(0, 10),
+          goal: `Auto sprint generated for ${customAgent.name}`,
+        });
+        sprintId = safe(createdSprint?.sprintId || createdSprint?.id);
       }
 
       if (!repoSignals.length) {
@@ -1566,6 +1751,7 @@ router.post('/:agentId/run', async (req, res, next) => {
       dataUsed: {
         role,
         prompt,
+        commitMemory,
         createdTasks: createdTasks.length,
         assignedTasks: assignedTasks.length,
         assignmentFailures: assignmentFailures.length,
@@ -1585,6 +1771,7 @@ router.post('/:agentId/run', async (req, res, next) => {
       githubIssues,
       githubIssueErrors,
       githubRepo: githubRepo || null,
+      commitMemory,
       detail: `Run complete. Created ${createdTasks.length} task(s), assigned ${assignedTasks.length} task(s), assignment failures ${assignmentFailures.length}, mirrored ${githubIssues.length} issue(s) to GitHub${monitoringEmail?.attempted ? ', and processed monitoring email alerts' : ''}.`,
     });
   } catch (err) {

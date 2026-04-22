@@ -1395,6 +1395,8 @@ class MeetingsService {
       roomJoin: true,
       room: roomName,
       canPublish: true,
+      canPublishData: true,
+      canPublishSources: ['camera', 'microphone', 'screen_share'],
       canSubscribe: true,
     });
 
@@ -1941,26 +1943,31 @@ class MeetingsService {
     const orgId = String(req.user?.orgId || '').trim();
     const roomName = String(payload.roomName || '').trim();
     const transcript = String(payload.transcript || '').trim();
-    const normalizedTranscript = transcript || 'Meeting ended without captured transcript.';
 
     const updateResp = await orgPool.query(
       `UPDATE meeting_rooms
-       SET transcript = $1
+       SET transcript = CASE WHEN $1 <> '' THEN $1 ELSE transcript END
        WHERE org_id = $2 AND room_name = $3
-       RETURNING id, room_name`,
-      [normalizedTranscript, orgId, roomName]
+       RETURNING id, room_name, transcript`,
+      [transcript, orgId, roomName]
     );
 
     const room = updateResp.rows[0] || null;
     if (!room) throw Object.assign(new Error('Meeting room not found'), { statusCode: 404, code: 'MEETING_ROOM_NOT_FOUND' });
 
+    const effectiveTranscript = String(room.transcript || '').trim();
     let summary = '';
-    if (!transcript) {
+    let summaryEngine = 'fallback-no-transcript';
+    let groqUsed = false;
+    if (!effectiveTranscript) {
       summary = '## Summary\nMeeting ended successfully, but no transcript text was captured.\n\n## Key Decisions\n- Not available.\n\n## Action Items (with owner if mentioned)\n- Not available.\n\n## Blockers\n- Not available.';
     } else {
       try {
-        summary = await summarizeMeetingRoomTranscript(transcript);
+        summary = await summarizeMeetingRoomTranscript(effectiveTranscript);
+        summaryEngine = 'groq';
+        groqUsed = true;
       } catch {
+        summaryEngine = 'fallback-groq-error';
         summary = '## Summary\nUnable to generate summary from transcript right now.\n\n## Key Decisions\n- Not available.\n\n## Action Items (with owner if mentioned)\n- Not available.\n\n## Blockers\n- Not available.';
       }
     }
@@ -1979,7 +1986,14 @@ class MeetingsService {
       orgId,
     });
 
-    return { summary };
+    return {
+      summary,
+      captured: Boolean(transcript),
+      charCount: transcript.length,
+      summaryEngine,
+      groqUsed,
+      transcriptPersisted: Boolean(effectiveTranscript),
+    };
   }
 
   async endMeetingRoom(req, roomNameRaw) {

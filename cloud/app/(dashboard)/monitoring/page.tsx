@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import {
@@ -53,6 +54,7 @@ type AlertsResp = { items: AlertItem[]; error?: string };
 type BurnoutResp = { items: Array<{ developerId: string; name: string; consecutiveOverSprints: number; avgOverloadPct: number; alertLevel: string }> };
 
 type CapacityItem = {
+  developerId?: string;
   name: string;
   role?: string | null;
   maxSprintCapacity: number;
@@ -471,7 +473,12 @@ export default function MonitoringPage() {
                     {capacity.items.map((c) => (
                       <tr key={c.name} className="border-t border-slate-200 dark:border-zinc-800">
                         <td className="px-3 py-3 text-slate-900 dark:text-white font-semibold">
-                          {c.name}
+                          <Link
+                            href={`/monitoring/developers/${encodeURIComponent(c.developerId || c.name)}`}
+                            className="hover:underline"
+                          >
+                            {c.name}
+                          </Link>
                           {c.burnoutRiskFlag ? <span className="ml-2 text-xs text-red-700 dark:text-red-300">risk</span> : null}
                         </td>
                         <td className="px-3 py-3 text-slate-700 dark:text-slate-200">{c.role || "—"}</td>
