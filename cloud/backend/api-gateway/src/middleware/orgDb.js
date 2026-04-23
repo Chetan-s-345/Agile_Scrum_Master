@@ -4,6 +4,56 @@ const { db } = require('../config/database');
 const schemaInitCache = new Map(); // orgId -> { tenantOk: bool, meetingsOk: bool, timestamp }
 const schemaInitInFlight = new Map(); // orgId -> Promise<void>
 const SCHEMA_CACHE_TTL = 3600000; // 1 hour
+const profileSyncCache = new Map(); // orgId -> timestamp
+const profileSyncInFlight = new Map(); // orgId -> Promise<void>
+const PROFILE_SYNC_TTL = 300000; // 5 minutes
+
+function isRetryableConnectionError(err) {
+  const code = String(err?.code || '').toUpperCase();
+  const message = String(err?.message || '').toLowerCase();
+  return (
+    code === 'ETIMEDOUT' ||
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ENETUNREACH' ||
+    code === 'EHOSTUNREACH' ||
+    code === '08003' ||
+    code === '08006' ||
+    code === '57P01' ||
+    code === '57P02' ||
+    code === '57P03' ||
+    message.includes('timeout') ||
+    message.includes('timedout') ||
+    message.includes('connection terminated') ||
+    message.includes('server closed the connection unexpectedly') ||
+    message.includes('connection reset') ||
+    message.includes('cannot use a pool after calling end on the pool')
+  );
+}
+
+async function withOrgPoolRetry(orgId, pool, operation) {
+  try {
+    const result = await operation(pool);
+    return { pool, result };
+  } catch (err) {
+    if (!isRetryableConnectionError(err)) throw err;
+
+    console.warn(`Transient org DB error for org ${orgId}. Recreating tenant pool and retrying once.`, err?.code || err?.message || err);
+
+    schemaInitCache.delete(String(orgId));
+    schemaInitInFlight.delete(String(orgId));
+
+    try {
+      await db.releaseOrgPool(orgId);
+    } catch {
+      // ignore release errors and attempt fresh pool acquisition
+    }
+
+    const freshPool = await db.getOrgPool(orgId);
+    const result = await operation(freshPool);
+    return { pool: freshPool, result };
+  }
+}
 
 function mapTokenRoleToTenantRole(role) {
   const r = String(role || '').trim().toLowerCase();
@@ -62,7 +112,12 @@ async function ensureSchemasOnceForOrg(orgId, pool) {
   const initPromise = (async () => {
     const startTime = Date.now();
     await ensureTenantSchema(pool);
-    await ensureMeetingsSchema(pool);
+    // Meetings tables are only required for routes under the meetings surface.
+    // Keep auth/projects/tasks available even when older tenant DBs have not been migrated yet.
+    const requestPath = String(pool?.__lastRequestPath || '').toLowerCase();
+    if (requestPath.includes('/meetings') || requestPath.includes('/meeting')) {
+      await ensureMeetingsSchema(pool);
+    }
     schemaInitCache.set(orgId, {
       tenantOk: true,
       meetingsOk: true,
@@ -119,6 +174,50 @@ async function ensureTeamMember({ orgPool, userId, tokenRole }) {
   return String(after.rows[0].id);
 }
 
+async function ensureDeveloperProfiles(orgPool) {
+  await orgPool.query(
+    `INSERT INTO developer_profiles (member_id, primary_role)
+     SELECT
+       tm.id,
+       CASE
+         WHEN tm.role = 'qa' THEN 'QA'
+         WHEN tm.role = 'designer' THEN 'Designer'
+         WHEN tm.role = 'manager' THEN 'Manager'
+         ELSE 'Fullstack'
+       END
+     FROM team_members tm
+     LEFT JOIN developer_profiles dp ON dp.member_id = tm.id
+     WHERE tm.is_active = TRUE
+       AND tm.role <> 'viewer'
+       AND dp.id IS NULL
+     ON CONFLICT (member_id) DO NOTHING`
+  );
+}
+
+async function ensureDeveloperProfilesOnceForOrg(orgId, pool) {
+  const now = Date.now();
+  const lastSyncedAt = profileSyncCache.get(String(orgId));
+  if (lastSyncedAt && now - Number(lastSyncedAt) < PROFILE_SYNC_TTL) return;
+
+  const inFlight = profileSyncInFlight.get(String(orgId));
+  if (inFlight) {
+    await inFlight;
+    return;
+  }
+
+  const syncPromise = (async () => {
+    await ensureDeveloperProfiles(pool);
+    profileSyncCache.set(String(orgId), Date.now());
+  })();
+
+  profileSyncInFlight.set(String(orgId), syncPromise);
+  try {
+    await syncPromise;
+  } finally {
+    profileSyncInFlight.delete(String(orgId));
+  }
+}
+
 async function ensureDefaultProject({ orgPool, actorMemberId, tokenRole }) {
   const role = String(tokenRole || '').trim().toLowerCase();
   if (!['owner', 'admin'].includes(role)) return;
@@ -166,6 +265,7 @@ async function orgDbMiddleware(req, res, next) {
     let pool;
     try {
       pool = await db.getOrgPool(orgId);
+      pool.__lastRequestPath = String(req.originalUrl || req.url || '');
     } catch (poolError) {
       const poolMsg = String(poolError?.message || poolError);
       console.error('getOrgPool failed for orgId:', orgId, 'error:', poolError);
@@ -176,12 +276,14 @@ async function orgDbMiddleware(req, res, next) {
       });
     }
 
-    req.orgDb = pool;
-    req.orgQuery = (sql, params) => pool.query(sql, params);
-
     // One-time schema check per org (cached + de-duped for concurrent requests).
     try {
-      await ensureSchemasOnceForOrg(String(orgId), pool);
+      const out = await withOrgPoolRetry(String(orgId), pool, async (candidatePool) => {
+        candidatePool.__lastRequestPath = String(req.originalUrl || req.url || '');
+        await ensureSchemasOnceForOrg(String(orgId), candidatePool);
+        return null;
+      });
+      pool = out.pool;
     } catch (schemaError) {
       schemaInitCache.delete(String(orgId)); // invalidate cache on error
       schemaInitInFlight.delete(String(orgId));
@@ -196,11 +298,16 @@ async function orgDbMiddleware(req, res, next) {
 
     let actorMemberId;
     try {
-      actorMemberId = await ensureTeamMember({
-        orgPool: pool,
-        userId: req?.user?.userId,
-        tokenRole: req?.user?.role,
+      const out = await withOrgPoolRetry(String(orgId), pool, async (candidatePool) => {
+        candidatePool.__lastRequestPath = String(req.originalUrl || req.url || '');
+        return ensureTeamMember({
+          orgPool: candidatePool,
+          userId: req?.user?.userId,
+          tokenRole: req?.user?.role,
+        });
       });
+      pool = out.pool;
+      actorMemberId = out.result;
     } catch (memberError) {
       const memberMsg = String(memberError?.message || memberError);
       console.error('ensureTeamMember failed for userId:', req?.user?.userId, 'error:', memberError);
@@ -212,7 +319,31 @@ async function orgDbMiddleware(req, res, next) {
     }
 
     req.actorMemberId = actorMemberId;
-    await ensureDefaultProject({ orgPool: pool, actorMemberId, tokenRole: req?.user?.role });
+
+    try {
+      const out = await withOrgPoolRetry(String(orgId), pool, async (candidatePool) => {
+        candidatePool.__lastRequestPath = String(req.originalUrl || req.url || '');
+        await ensureDeveloperProfilesOnceForOrg(String(orgId), candidatePool);
+        return null;
+      });
+      pool = out.pool;
+    } catch (profileSyncError) {
+      console.warn('ensureDeveloperProfiles skipped due failure:', profileSyncError?.message || profileSyncError);
+    }
+
+    try {
+      const out = await withOrgPoolRetry(String(orgId), pool, async (candidatePool) => {
+        candidatePool.__lastRequestPath = String(req.originalUrl || req.url || '');
+        await ensureDefaultProject({ orgPool: candidatePool, actorMemberId, tokenRole: req?.user?.role });
+        return null;
+      });
+      pool = out.pool;
+    } catch (defaultProjectError) {
+      console.warn('ensureDefaultProject skipped due transient or non-critical failure:', defaultProjectError?.message || defaultProjectError);
+    }
+
+    req.orgDb = pool;
+    req.orgQuery = (sql, params) => pool.query(sql, params);
 
     return next();
   } catch (err) {

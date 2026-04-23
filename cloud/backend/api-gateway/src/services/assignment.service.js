@@ -57,7 +57,7 @@ class AssignmentService {
   async getCandidates(orgPool, { techTags, storyPoints, sprintId, excludeDeveloperId }) {
     const sprint = await this.getSprintDates(orgPool, sprintId);
 
-    const withTechResp = await orgPool.query(
+    const candidateResp = await orgPool.query(
       `SELECT
          dp.id,
          dp.tech_stack,
@@ -69,68 +69,41 @@ class AssignmentService {
          tm.full_name
        FROM developer_profiles dp
        JOIN team_members tm ON tm.id = dp.member_id
-       WHERE dp.availability_status = 'available'
-         AND (dp.tech_stack @> $1::text[])
-         ${excludeDeveloperId ? 'AND dp.id <> $4' : ''}
+       WHERE tm.is_active = TRUE
+         AND dp.availability_status = 'available'
+         ${excludeDeveloperId ? 'AND dp.id <> $1' : ''}
        ORDER BY (dp.merit_score * dp.assignment_weight) DESC`,
-      excludeDeveloperId
-        ? [techTags || [], storyPoints, String(sprintId), String(excludeDeveloperId)]
-        : [techTags || [], storyPoints, String(sprintId)]
+      excludeDeveloperId ? [String(excludeDeveloperId)] : []
     );
 
-    let baseRows = withTechResp.rows || [];
-    let totalCandidates = baseRows.length;
-    let filteredByTech = 0;
+    const baseRows = candidateResp.rows || [];
+    const totalCandidates = baseRows.length;
 
-    if (!baseRows.length) {
-      const fallbackResp = await orgPool.query(
-        `SELECT
-           dp.id,
-           dp.tech_stack,
-           dp.merit_score,
-           dp.assignment_weight,
-           dp.current_sprint_load,
-           dp.max_sprint_capacity,
-           dp.availability_status,
-           tm.full_name
-         FROM developer_profiles dp
-         JOIN team_members tm ON tm.id = dp.member_id
-         WHERE dp.availability_status = 'available'
-           ${excludeDeveloperId ? 'AND dp.id <> $1' : ''}
-         ORDER BY (dp.merit_score * dp.assignment_weight) DESC`,
-        excludeDeveloperId ? [String(excludeDeveloperId)] : []
-      );
-      baseRows = fallbackResp.rows || [];
-      totalCandidates = baseRows.length;
-      filteredByTech = totalCandidates;
-    }
+    const hasTechRequirements = Array.isArray(techTags) && techTags.length > 0;
+    const filteredByTech = hasTechRequirements
+      ? baseRows.filter((dev) => computeTechMatchScore(techTags, dev.tech_stack) <= 0).length
+      : 0;
 
-    // Availability filter: capacity + leave overlap
+    // Availability filter: capacity + leave overlap.
+    // Use one leave-range query to avoid N+1 round-trips under load.
+    const leaveResp = await orgPool.query(
+      `SELECT DISTINCT developer_id
+       FROM developer_availability
+       WHERE start_date <= $2::date
+         AND end_date >= $1::date`,
+      [sprint.startDate, sprint.endDate]
+    );
+    const unavailableIds = new Set((leaveResp.rows || []).map((row) => String(row.developer_id)));
+
     const remaining = [];
     let filteredByAvailability = 0;
-
     for (const dev of baseRows) {
       const currentLoad = Number(dev.current_sprint_load || 0);
       const maxCap = Number(dev.max_sprint_capacity || 0);
-      if (currentLoad + Number(storyPoints) > maxCap) {
+      if (currentLoad + Number(storyPoints) > maxCap || unavailableIds.has(String(dev.id))) {
         filteredByAvailability++;
         continue;
       }
-
-      const leaveResp = await orgPool.query(
-        `SELECT 1
-         FROM developer_availability
-         WHERE developer_id = $1
-           AND start_date <= $3::date
-           AND end_date >= $2::date
-         LIMIT 1`,
-        [String(dev.id), sprint.startDate, sprint.endDate]
-      );
-      if (leaveResp.rows.length) {
-        filteredByAvailability++;
-        continue;
-      }
-
       remaining.push(dev);
     }
 
@@ -140,7 +113,9 @@ class AssignmentService {
         const techMatchScore = computeTechMatchScore(techTags, dev.tech_stack);
         const workloadScore = computeWorkloadScore(dev.current_sprint_load, dev.max_sprint_capacity, storyPoints);
         const availabilityScore = 100;
-        const finalRankingScore = Math.round(Number(dev.merit_score) * Number(dev.assignment_weight) * 100) / 100;
+        const meritComponent = Number(dev.merit_score) * Number(dev.assignment_weight);
+        const finalRankingScore =
+          Math.round((meritComponent * 0.6 + techMatchScore * 0.25 + workloadScore * 0.15) * 100) / 100;
         return {
           developer: {
             id: dev.id,

@@ -114,6 +114,19 @@ async function linkedRepos(orgPool) {
     if (parsed) merged.add(parsed.fullName);
   }
 
+  const activeIntegrationRows = await orgPool.query(
+    `SELECT TRIM(github_org) AS github_org, TRIM(repo_name) AS repo_name
+     FROM github_integration
+     WHERE is_active = TRUE
+       AND github_org IS NOT NULL AND TRIM(github_org) <> ''
+       AND repo_name IS NOT NULL AND TRIM(repo_name) <> ''`
+  );
+
+  for (const row of activeIntegrationRows.rows) {
+    const parsed = parseRepo(`${row.github_org}/${row.repo_name}`);
+    if (parsed) merged.add(parsed.fullName);
+  }
+
   try {
     const goalRepoRows = await orgPool.query(
       `SELECT TRIM(gr.full_name) AS full_name
@@ -625,6 +638,99 @@ class GithubActivityService {
     } catch (err) {
       throw errorFromGithub(err);
     }
+  }
+
+  async createIssue(req, payload) {
+    const { orgPool, gh } = await this._context(req);
+
+    const title = safe(payload?.title);
+    if (!title) throw Object.assign(new Error('title is required'), { statusCode: 400 });
+
+    const body = safe(payload?.body) || undefined;
+    const labels = Array.isArray(payload?.labels)
+      ? payload.labels.map((x) => safe(x)).filter(Boolean).slice(0, 10)
+      : [];
+
+    const ownerIn = safe(payload?.owner);
+    const repoIn = safe(payload?.repo);
+    let fullRepo = ownerIn && repoIn ? `${ownerIn}/${repoIn}` : '';
+
+    const projectId = safe(payload?.projectId);
+    if (!fullRepo && projectId) {
+      const projectResp = await orgPool.query(
+        `SELECT TRIM(github_repo) AS github_repo
+         FROM projects
+         WHERE id = $1
+         LIMIT 1`,
+        [String(projectId)]
+      );
+      fullRepo = safe(projectResp.rows[0]?.github_repo);
+    }
+
+    if (!fullRepo) {
+      const repos = await linkedRepos(orgPool);
+      fullRepo = safe(repos[0]);
+    }
+
+    const parsedRepo = parseRepo(fullRepo);
+    if (!parsedRepo) {
+      throw Object.assign(new Error('No linked GitHub repository found for this project/org'), {
+        statusCode: 400,
+        code: 'GITHUB_REPO_NOT_CONFIGURED',
+      });
+    }
+
+    const assignees = [];
+    const developerId = safe(payload?.developerId);
+    if (developerId) {
+      const ghUserResp = await orgPool.query(
+        `SELECT TRIM(tm.github_username) AS github_username
+         FROM developer_profiles dp
+         JOIN team_members tm ON tm.id = dp.member_id
+         WHERE dp.id = $1
+         LIMIT 1`,
+        [String(developerId)]
+      );
+      const ghUsername = safe(ghUserResp.rows[0]?.github_username);
+      if (ghUsername) assignees.push(ghUsername);
+    }
+
+    let created;
+    try {
+      const resp = await gh.post(`/repos/${parsedRepo.owner}/${parsedRepo.repo}/issues`, {
+        title,
+        body,
+        labels,
+        ...(assignees.length ? { assignees } : {}),
+      });
+      created = resp.data || {};
+    } catch (err) {
+      throw errorFromGithub(err);
+    }
+
+    const taskId = safe(payload?.taskId);
+    if (taskId) {
+      await orgPool.query(
+        `UPDATE tasks
+         SET github_issue_number = $2,
+             github_issue_url = $3,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [String(taskId), Number(created?.number || 0) || null, safe(created?.html_url) || null]
+      );
+    }
+
+    return {
+      issue: {
+        id: created?.id || null,
+        number: Number(created?.number || 0) || null,
+        title: safe(created?.title) || title,
+        url: safe(created?.url) || null,
+        htmlUrl: safe(created?.html_url) || null,
+        repo: parsedRepo.fullName,
+        assignees,
+      },
+    };
   }
 }
 

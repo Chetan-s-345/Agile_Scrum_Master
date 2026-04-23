@@ -100,15 +100,19 @@ function riskBadgeTone(level: string) {
 }
 
 async function fetchJson<T>(url: string): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const resp = await fetch(url, { cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
   try {
-    data = text ? (JSON.parse(text) as T) : null;
+    const resp = await fetch(url, { cache: "no-store" });
+    const text = await resp.text().catch(() => "");
+    let data: T | null = null;
+    try {
+      data = text ? (JSON.parse(text) as T) : null;
+    } catch {
+      data = null;
+    }
+    return { ok: resp.ok, status: resp.status, data };
   } catch {
-    data = null;
+    return { ok: false, status: 503, data: null };
   }
-  return { ok: resp.ok, status: resp.status, data };
 }
 
 export default function ReportsPage() {

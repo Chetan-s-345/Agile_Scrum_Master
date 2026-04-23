@@ -91,6 +91,20 @@ function firstAgentHint(agentId) {
   return catalog?.runtimeHints?.[0] || '';
 }
 
+async function probeHttpHealth(url) {
+  const endpoint = safe(url);
+  if (!endpoint) return false;
+  try {
+    const resp = await axios.get(endpoint, {
+      timeout: 1200,
+      validateStatus: () => true,
+    });
+    return resp.status >= 200 && resp.status < 500;
+  } catch {
+    return false;
+  }
+}
+
 async function ensureAgentRunsStatusTable(orgPool) {
   await orgPool.query(
     `CREATE TABLE IF NOT EXISTS agent_runs (
@@ -668,6 +682,40 @@ async function fetchSignalsFromGithubApi(orgPool, githubRepo, limit) {
   })).filter((item) => item.title);
 }
 
+async function resolveProjectGithubRepo(orgPool, projectId) {
+  const projectResp = await orgPool.query(
+    `SELECT TRIM(github_repo) AS github_repo
+     FROM projects
+     WHERE id = $1
+     LIMIT 1`,
+    [String(projectId)]
+  );
+  const configured = safe(projectResp.rows[0]?.github_repo || '');
+  if (configured && configured.includes('/')) return configured;
+
+  const repoResp = await orgPool.query(
+    `SELECT TRIM(gr.full_name) AS full_name
+     FROM github_repos gr
+     LEFT JOIN github_integration gi ON gi.id = gr.owner_connection_id
+     WHERE (gi.is_active = TRUE OR gi.id IS NULL)
+       AND COALESCE(gr.full_name, '') <> ''
+     ORDER BY gr.updated_at DESC NULLS LAST, gr.created_at DESC
+     LIMIT 1`
+  );
+  const fallback = safe(repoResp.rows[0]?.full_name || '');
+  if (!fallback || !fallback.includes('/')) return '';
+
+  await orgPool.query(
+    `UPDATE projects
+     SET github_repo = $2, updated_at = NOW()
+     WHERE id = $1
+       AND (github_repo IS NULL OR TRIM(github_repo) = '')`,
+    [String(projectId), fallback]
+  );
+
+  return fallback;
+}
+
 function parseLlmDrafts(rawText) {
   const text = safe(rawText);
   if (!text) return [];
@@ -1067,7 +1115,7 @@ router.get('/:agentId/stats', async (req, res, next) => {
         [projectId, agentId]
       ),
       req.orgDb.query(
-        `SELECT constraints
+        `SELECT constraints, context_memo
          FROM agent_configs
          WHERE project_id = $1 AND agent_type = $2
          LIMIT 1`,
@@ -1118,6 +1166,7 @@ router.get('/:agentId/stats', async (req, res, next) => {
     const actionAgg = actionAggResp.rows[0] || {};
     const decisionAgg = decisionAggResp.rows[0] || {};
     const constraints = cfgResp.rows[0]?.constraints || {};
+    const contextMemo = safe(cfgResp.rows[0]?.context_memo || '');
     const createdTasksByAgent = (createdTasksResp.rows || []).map((row) => ({
       id: String(row.id || ''),
       title: String(row.title || ''),
@@ -1262,7 +1311,13 @@ router.get('/:agentId/stats', async (req, res, next) => {
     const assignments = [...assignmentDedup.values()].slice(0, 30);
     const inngestEndpoint = getInngestEventEndpoint();
     const isProduction = safe(process.env.NODE_ENV).toLowerCase() === 'production';
-    const aiServiceEndpoint = safe(process.env.AI_SERVICE_URL) || (isProduction ? '' : 'http://127.0.0.1:8000');
+    const aiServiceBaseUrl = safe(process.env.AI_SERVICE_URL) || (isProduction ? '' : 'http://127.0.0.1:8000');
+    const aiServiceHealthUrl = aiServiceBaseUrl ? `${aiServiceBaseUrl.replace(/\/+$/, '')}/health` : '';
+
+    const [aiServiceConfigured, inngestConfigured] = await Promise.all([
+      probeHttpHealth(aiServiceHealthUrl),
+      probeHttpHealth(inngestEndpoint),
+    ]);
 
     let ragMigrationReady = false;
     let ragMigrationDetail = 'not-checked';
@@ -1297,10 +1352,10 @@ router.get('/:agentId/stats', async (req, res, next) => {
         executedDecisions: Number(decisionAgg.executed_decisions || 0),
         failedDecisions: Number(decisionAgg.failed_decisions || 0),
         ragEnabled: Boolean(constraints?.ragEnabled),
-        promptTemplateDefined: Boolean(safe(constraints?.promptTemplate)),
-        aiServiceConfigured: Boolean(aiServiceEndpoint),
-        aiServiceEndpoint: aiServiceEndpoint || 'missing',
-        inngestConfigured: Boolean(inngestEndpoint),
+        promptTemplateDefined: Boolean(safe(constraints?.promptTemplate) || contextMemo),
+        aiServiceConfigured,
+        aiServiceEndpoint: aiServiceHealthUrl || 'missing',
+        inngestConfigured,
         inngestEndpoint: inngestEndpoint ? 'configured' : 'missing',
         ragMigrationReady,
         ragMigrationDetail,
@@ -1337,12 +1392,14 @@ router.post('/:agentId/run', async (req, res, next) => {
       [projectId, agentId]
     );
     const cfgConstraints = parseJsonish(cfgResp.rows[0]?.constraints);
-    const prompt = safe(cfgResp.rows[0]?.context_memo || req.body?.promptTemplate || customAgent.name);
+    const operatorPrompt = safe(req.body?.description || req.body?.promptTemplate || req.body?.prompt);
+    const prompt = safe(operatorPrompt || cfgResp.rows[0]?.context_memo || customAgent.name);
     const role = safe(customAgent.role || 'custom');
+    const quickMode = Boolean(req.body?.quickMode);
     const requestedTaskCountRaw = Number(req.body?.taskCount);
     const requestedTaskCount = Number.isFinite(requestedTaskCountRaw)
-      ? Math.max(2, Math.min(8, Math.floor(requestedTaskCountRaw)))
-      : 3;
+      ? Math.max(1, Math.min(quickMode ? 3 : 8, Math.floor(requestedTaskCountRaw)))
+      : (quickMode ? 1 : 3);
 
     const sprintResp = await req.orgDb.query(
       `SELECT id
@@ -1362,7 +1419,6 @@ router.post('/:agentId/run', async (req, res, next) => {
       agentId,
     };
 
-    const selectedDataSources = toTextArray(customAgent.data_sources).map((item) => item.toLowerCase());
     const selectedActions = toTextArray(customAgent.actions).map((item) => item.toLowerCase());
     const notificationTargets = [
       ...toTextArray(cfgConstraints?.notificationTargets),
@@ -1371,19 +1427,8 @@ router.post('/:agentId/run', async (req, res, next) => {
       .map((value) => safe(value).toLowerCase())
       .filter((value) => value.includes('@'));
 
-    const projectGithubResp = await req.orgDb.query(
-      `SELECT TRIM(github_repo) AS github_repo
-       FROM projects
-       WHERE id = $1
-       LIMIT 1`,
-      [projectId]
-    );
-    const githubRepo = safe(projectGithubResp.rows[0]?.github_repo || '');
-    const shouldMirrorToGithub =
-      Boolean(githubRepo) &&
-      ((role === 'task-generator' || role === 'custom') ||
-        selectedDataSources.some((item) => item.includes('github')) ||
-        selectedActions.some((item) => item.includes('github')));
+    const githubRepo = await resolveProjectGithubRepo(req.orgDb, projectId);
+    const shouldMirrorToGithub = Boolean(githubRepo);
 
     const createdTasks = [];
     const assignedTasks = [];
@@ -1430,33 +1475,6 @@ router.post('/:agentId/run', async (req, res, next) => {
 
         if (!unseen.length) {
           commitMemory.skippedAsRepeated = true;
-          await insertAgentDecision(req.orgDb, {
-            agentType: agentId,
-            projectId,
-            actionDescription: 'Custom agent run skipped (no new commit context)',
-            reasoning: { source: 'manual-run', actor: String(req.user?.userId || ''), prompt },
-            dataUsed: {
-              role,
-              prompt,
-              commitMemory,
-            },
-            status: 'executed',
-            resolvedBy: String(req.user?.userId || ''),
-            resolutionType: 'auto-executed',
-          });
-
-          return res.status(200).json({
-            success: true,
-            createdTasks,
-            assignedTasks,
-            assignmentFailures,
-            monitoringEmail,
-            githubIssues,
-            githubIssueErrors,
-            githubRepo: githubRepo || null,
-            commitMemory,
-            detail: 'Run skipped: no new commit context found in the latest signals, so repeated sprint/task generation was prevented.',
-          });
         }
       }
 
@@ -1488,16 +1506,18 @@ router.post('/:agentId/run', async (req, res, next) => {
       }
 
       let drafts = [];
-      try {
-        drafts = await generateDraftsWithLlm({
-          prompt,
-          taskCount: requestedTaskCount,
-          signals: repoSignals,
-          githubRepo,
-          agentName: customAgent.name,
-        });
-      } catch {
-        drafts = [];
+      if (!quickMode) {
+        try {
+          drafts = await generateDraftsWithLlm({
+            prompt,
+            taskCount: requestedTaskCount,
+            signals: repoSignals,
+            githubRepo,
+            agentName: customAgent.name,
+          });
+        } catch {
+          drafts = [];
+        }
       }
 
       if (!drafts.length) {
@@ -1552,6 +1572,27 @@ router.post('/:agentId/run', async (req, res, next) => {
         createdTasks.push({ ...createdTask, githubIssue });
         draftIdx += 1;
       }
+
+      if (shouldMirrorToGithub && githubIssues.length === 0) {
+        try {
+          const summaryIssue = await executeActionWithPolicy(req.orgDb, context, 'create_github_issue', {
+            title: `Demo agent run: ${safe(customAgent.name) || 'Custom Agent'} (${new Date().toISOString().slice(0, 10)})`,
+            body: [
+              `Project: ${projectId}`,
+              `Agent: ${safe(customAgent.name) || agentId}`,
+              `Prompt: ${safe(prompt).slice(0, 500) || 'none'}`,
+              `Created tasks: ${createdTasks.length}`,
+            ].join('\n'),
+            labels: ['ai-agent', 'task', 'demo'],
+          });
+          if (summaryIssue?.url) githubIssues.push(summaryIssue);
+        } catch (err) {
+          githubIssueErrors.push({
+            title: 'Demo run summary issue',
+            detail: safe(err?.message) || 'Failed to create fallback GitHub issue.',
+          });
+        }
+      }
     }
 
     if (role === 'assignment' || role === 'custom') {
@@ -1559,6 +1600,7 @@ router.post('/:agentId/run', async (req, res, next) => {
         .map((row) => safe(row?.taskId || row?.id))
         .filter(Boolean);
 
+      const assignmentBatchSize = quickMode ? 3 : 8;
       const unassignedResp = await req.orgDb.query(
         `SELECT id, sprint_id, story_points, tech_tags, priority
          FROM tasks
@@ -1566,8 +1608,8 @@ router.post('/:agentId/run', async (req, res, next) => {
            AND COALESCE(status, 'todo') IN ('todo','in_progress')
            AND assignee_id IS NULL
          ORDER BY created_at ASC
-         LIMIT 8`,
-        [projectId]
+         LIMIT $2`,
+        [projectId, assignmentBatchSize]
       );
 
       const queueById = new Map();
@@ -1591,7 +1633,7 @@ router.post('/:agentId/run', async (req, res, next) => {
         }
       }
 
-      const queue = [...queueById.values()].slice(0, 8);
+      const queue = [...queueById.values()].slice(0, assignmentBatchSize);
       let lastDeveloperId = '';
 
       for (const row of queue) {
@@ -1646,7 +1688,7 @@ router.post('/:agentId/run', async (req, res, next) => {
       }
     }
 
-    if (role === 'monitoring' || selectedActions.some((item) => item.includes('alert') || item.includes('email'))) {
+    if (!quickMode && (role === 'monitoring' || selectedActions.some((item) => item.includes('alert') || item.includes('email')))) {
       const monitoringAggResp = await req.orgDb.query(
         `SELECT
            COUNT(*)::int FILTER (WHERE status = 'blocked') AS blocked_count,
@@ -1732,15 +1774,26 @@ router.post('/:agentId/run', async (req, res, next) => {
     }
 
     try {
-      await sendInngestEvent('agent/custom.run', {
-        orgId: String(req.user?.orgId || ''),
-        projectId,
-        agentId,
-        createdTasks: createdTasks.length,
-        assignedTasks: assignedTasks.length,
-      });
+      if (!quickMode) {
+        await sendInngestEvent('agent/custom.run', {
+          orgId: String(req.user?.orgId || ''),
+          projectId,
+          agentId,
+          createdTasks: createdTasks.length,
+          assignedTasks: assignedTasks.length,
+        });
+      }
     } catch {
       // Do not fail manual runs when event forwarding is unavailable.
+    }
+
+    if (shouldMirrorToGithub && githubIssues.length === 0) {
+      return jsonError(
+        res,
+        502,
+        'GitHub issue creation failed',
+        'Demo mode requires at least one GitHub issue per run. Connect a valid repository and token, then retry.'
+      );
     }
 
     await insertAgentDecision(req.orgDb, {
@@ -1750,6 +1803,7 @@ router.post('/:agentId/run', async (req, res, next) => {
       reasoning: { source: 'manual-run', actor: String(req.user?.userId || ''), prompt },
       dataUsed: {
         role,
+        quickMode,
         prompt,
         commitMemory,
         createdTasks: createdTasks.length,
@@ -1772,7 +1826,7 @@ router.post('/:agentId/run', async (req, res, next) => {
       githubIssueErrors,
       githubRepo: githubRepo || null,
       commitMemory,
-      detail: `Run complete. Created ${createdTasks.length} task(s), assigned ${assignedTasks.length} task(s), assignment failures ${assignmentFailures.length}, mirrored ${githubIssues.length} issue(s) to GitHub${monitoringEmail?.attempted ? ', and processed monitoring email alerts' : ''}.`,
+      detail: `Run complete${quickMode ? ' (quick mode)' : ''}. Created ${createdTasks.length} task(s), assigned ${assignedTasks.length} task(s), assignment failures ${assignmentFailures.length}, mirrored ${githubIssues.length} issue(s) to GitHub${monitoringEmail?.attempted ? ', and processed monitoring email alerts' : ''}.`,
     });
   } catch (err) {
     return next(err);

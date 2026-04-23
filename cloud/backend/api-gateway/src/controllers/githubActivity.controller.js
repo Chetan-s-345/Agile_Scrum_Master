@@ -73,6 +73,30 @@ async function importIssue(req, res, next) {
   }
 }
 
+async function createIssue(req, res, next) {
+  try {
+    const payload = z
+      .object({
+        title: z.string().min(1),
+        body: z.string().optional(),
+        labels: z.array(z.string().min(1)).optional(),
+        projectId: z.string().uuid().optional(),
+        owner: z.string().min(1).optional(),
+        repo: z.string().min(1).optional(),
+        taskId: z.string().uuid().optional(),
+        developerId: z.string().uuid().optional(),
+      })
+      .safeParse(req.body || {});
+
+    if (!payload.success) return badRequest(res, 'Validation error', payload.error.flatten());
+
+    const data = await githubActivityService.createIssue(req, payload.data);
+    return res.status(201).json(data);
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function linkTask(req, res, next) {
   try {
     const parsed = idSchema.safeParse(req.params.id);
@@ -107,6 +131,7 @@ module.exports = {
   issues,
   workflows,
   branches,
+  createIssue,
   importIssue,
   linkTask,
   deleteBranch,

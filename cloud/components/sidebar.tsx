@@ -157,15 +157,19 @@ function Item({
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
   try {
-    data = text ? (JSON.parse(text) as T) : null;
+    const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
+    const text = await resp.text().catch(() => "");
+    let data: T | null = null;
+    try {
+      data = text ? (JSON.parse(text) as T) : null;
+    } catch {
+      data = null;
+    }
+    return { ok: resp.ok, status: resp.status, data };
   } catch {
-    data = null;
+    return { ok: false, status: 503, data: null };
   }
-  return { ok: resp.ok, status: resp.status, data };
 }
 
 function SortableSpaceRow({
@@ -383,15 +387,18 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   const loadSpaces = useCallback(async () => {
     setLoadingSpaces(true);
-    const [spacesResp, githubResp] = await Promise.all([
-      fetchJson<SpacesResp>("/api/spaces"),
-      fetchJson<{ connected?: boolean }>("/api/integrations/github/status"),
-    ]);
+    try {
+      const [spacesResp, githubResp] = await Promise.all([
+        fetchJson<SpacesResp>("/api/spaces"),
+        fetchJson<{ connected?: boolean }>("/api/integrations/github/status"),
+      ]);
 
-    setSpaces(Array.isArray(spacesResp.data?.spaces) ? spacesResp.data!.spaces : []);
-    setArchivedSpaces(Array.isArray(spacesResp.data?.archived) ? spacesResp.data!.archived : []);
-    setGithubConnected(Boolean(githubResp.data?.connected));
-    setLoadingSpaces(false);
+      setSpaces(Array.isArray(spacesResp.data?.spaces) ? spacesResp.data!.spaces : []);
+      setArchivedSpaces(Array.isArray(spacesResp.data?.archived) ? spacesResp.data!.archived : []);
+      setGithubConnected(Boolean(githubResp.data?.connected));
+    } finally {
+      setLoadingSpaces(false);
+    }
   }, []);
 
   useEffect(() => {
