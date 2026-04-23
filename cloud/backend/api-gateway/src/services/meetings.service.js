@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { AccessToken } = require('livekit-server-sdk');
+const { AccessToken, TrackSource } = require('livekit-server-sdk');
 
 const { env } = require('../config/env');
 const { db } = require('../config/database');
@@ -1396,7 +1396,7 @@ class MeetingsService {
       room: roomName,
       canPublish: true,
       canPublishData: true,
-      canPublishSources: ['camera', 'microphone', 'screen_share'],
+      canPublishSources: [TrackSource.CAMERA, TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE],
       canSubscribe: true,
     });
 
@@ -2014,69 +2014,97 @@ class MeetingsService {
     const row = resp.rows[0] || null;
     if (!row) throw Object.assign(new Error('Meeting room not found'), { statusCode: 404, code: 'MEETING_ROOM_NOT_FOUND' });
 
-    await orgPool.query(
-      `UPDATE meeting_room_participants
-       SET status = CASE WHEN status = 'active' THEN 'left' ELSE status END,
-           left_at = CASE WHEN status = 'active' THEN COALESCE(left_at, NOW()) ELSE left_at END,
-           last_seen_at = NOW()
-       WHERE room_id = $1`,
-      [row.id]
-    );
+    try {
+      await orgPool.query(
+        `UPDATE meeting_room_participants
+         SET status = CASE WHEN status = 'active' THEN 'left' ELSE status END,
+             left_at = CASE WHEN status = 'active' THEN COALESCE(left_at, NOW()) ELSE left_at END,
+             last_seen_at = NOW()
+         WHERE room_id = $1`,
+        [row.id]
+      );
+    } catch (participantUpdateErr) {
+      console.warn('meeting.end.participant_status_update_failed', {
+        roomId: String(row.id),
+        orgId,
+        message: String(participantUpdateErr?.message || participantUpdateErr),
+      });
+    }
 
-    const participantsResp = await orgPool.query(
-      `SELECT id, user_id, participant_name
-       FROM meeting_room_participants
-       WHERE room_id = $1
-       ORDER BY joined_at ASC`,
-      [row.id]
-    );
+    let participantsResp = { rows: [] };
+    try {
+      participantsResp = await orgPool.query(
+        `SELECT id, user_id, participant_name
+         FROM meeting_room_participants
+         WHERE room_id = $1
+         ORDER BY joined_at ASC`,
+        [row.id]
+      );
+    } catch (participantsLoadErr) {
+      console.warn('meeting.end.participants_load_failed', {
+        roomId: String(row.id),
+        orgId,
+        message: String(participantsLoadErr?.message || participantsLoadErr),
+      });
+    }
 
     const transcript = String(row.transcript || '').trim();
     const individualSummaries = (
       await Promise.all(
-        participantsResp.rows.map(async (participant) => {
-          let individualSummary = '';
-          if (!transcript) {
-            individualSummary = individualSummaryFallback(participant.participant_name);
-          } else {
-            try {
-              individualSummary = await summarizeParticipantMeetingRoomTranscript(
-                transcript,
-                participant.participant_name,
-                'Focus on responsibilities and next actions for this person.'
-              );
-            } catch {
+        (Array.isArray(participantsResp.rows) ? participantsResp.rows : []).map(async (participant) => {
+          try {
+            let individualSummary = '';
+            if (!transcript) {
               individualSummary = individualSummaryFallback(participant.participant_name);
+            } else {
+              try {
+                individualSummary = await summarizeParticipantMeetingRoomTranscript(
+                  transcript,
+                  participant.participant_name,
+                  'Focus on responsibilities and next actions for this person.'
+                );
+              } catch {
+                individualSummary = individualSummaryFallback(participant.participant_name);
+              }
             }
+
+            const summaryResp = await orgPool.query(
+              `INSERT INTO meeting_room_individual_summaries (room_id, org_id, participant_id, user_id, participant_name, summary, action_items)
+               VALUES ($1, $2, $3, $4, $5, $6, '')
+               ON CONFLICT (room_id, user_id)
+               DO UPDATE SET
+                 participant_id = EXCLUDED.participant_id,
+                 participant_name = EXCLUDED.participant_name,
+                 summary = EXCLUDED.summary,
+                 updated_at = NOW(),
+                 generated_at = NOW()
+               RETURNING id, room_id, participant_id, user_id, participant_name, summary, action_items, generated_at, updated_at`,
+              [row.id, orgId, participant.id, participant.user_id, participant.participant_name, individualSummary]
+            );
+
+            const item = summaryResp.rows[0] || null;
+            if (!item) return null;
+            return {
+              id: item.id,
+              roomId: item.room_id,
+              participantId: item.participant_id,
+              userId: item.user_id,
+              participantName: item.participant_name,
+              summary: item.summary || '',
+              actionItems: item.action_items || '',
+              generatedAt: item.generated_at,
+              updatedAt: item.updated_at,
+            };
+          } catch (participantSummaryErr) {
+            console.warn('meeting.end.participant_summary_failed', {
+              roomId: String(row.id),
+              orgId,
+              participantId: String(participant?.id || ''),
+              userId: String(participant?.user_id || ''),
+              message: String(participantSummaryErr?.message || participantSummaryErr),
+            });
+            return null;
           }
-
-          const summaryResp = await orgPool.query(
-            `INSERT INTO meeting_room_individual_summaries (room_id, org_id, participant_id, user_id, participant_name, summary, action_items)
-             VALUES ($1, $2, $3, $4, $5, $6, '')
-             ON CONFLICT (room_id, user_id)
-             DO UPDATE SET
-               participant_id = EXCLUDED.participant_id,
-               participant_name = EXCLUDED.participant_name,
-               summary = EXCLUDED.summary,
-               updated_at = NOW(),
-               generated_at = NOW()
-             RETURNING id, room_id, participant_id, user_id, participant_name, summary, action_items, generated_at, updated_at`,
-            [row.id, orgId, participant.id, participant.user_id, participant.participant_name, individualSummary]
-          );
-
-          const item = summaryResp.rows[0] || null;
-          if (!item) return null;
-          return {
-            id: item.id,
-            roomId: item.room_id,
-            participantId: item.participant_id,
-            userId: item.user_id,
-            participantName: item.participant_name,
-            summary: item.summary || '',
-            actionItems: item.action_items || '',
-            generatedAt: item.generated_at,
-            updatedAt: item.updated_at,
-          };
         })
       )
     ).filter(Boolean);

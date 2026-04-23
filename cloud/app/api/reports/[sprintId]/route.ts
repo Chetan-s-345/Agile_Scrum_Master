@@ -11,5 +11,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ spr
     upstreamPath: `/api/v1/reports/${encodeURIComponent(sprintId)}`,
     method: "GET",
     token,
+    timeoutMs: 45000,
   });
 }

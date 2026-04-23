@@ -99,6 +99,7 @@ router.get('/overview', controller.overview);
 router.get('/commits', controller.commits);
 router.get('/pull-requests', controller.pullRequests);
 router.get('/issues', controller.issues);
+router.post('/issues', controller.createIssue);
 router.get('/workflows', controller.workflows);
 router.get('/branches', controller.branches);
 router.post('/issues/:id/import', controller.importIssue);

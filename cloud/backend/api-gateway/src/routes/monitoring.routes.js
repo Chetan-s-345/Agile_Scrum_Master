@@ -214,13 +214,26 @@ router.get('/capacity', async (req, res, next) => {
     const orgPool = req.orgDb;
 
     const resp = await orgPool.query(
-      `SELECT full_name, primary_role, max_sprint_capacity, current_sprint_load, remaining_capacity, utilization_pct, merit_score, burnout_risk_flag
-       FROM v_team_capacity
-       ORDER BY remaining_capacity DESC`,
+      `SELECT
+         dp.id AS developer_id,
+         tm.full_name,
+         dp.primary_role,
+         dp.max_sprint_capacity,
+         dp.current_sprint_load,
+         (dp.max_sprint_capacity - dp.current_sprint_load) AS remaining_capacity,
+         ROUND((dp.current_sprint_load::DECIMAL / NULLIF(dp.max_sprint_capacity, 0)) * 100, 2) AS utilization_pct,
+         dp.merit_score,
+         dp.burnout_risk_flag,
+         dp.availability_status
+       FROM developer_profiles dp
+       JOIN team_members tm ON tm.id = dp.member_id
+       WHERE tm.is_active = TRUE
+       ORDER BY (dp.max_sprint_capacity - dp.current_sprint_load) DESC, tm.full_name ASC`,
       []
     );
 
     const items = (resp.rows || []).map((r) => ({
+      developerId: r.developer_id,
       name: r.full_name,
       role: r.primary_role,
       maxSprintCapacity: Number(r.max_sprint_capacity || 0),
@@ -229,6 +242,7 @@ router.get('/capacity', async (req, res, next) => {
       utilizationPct: Number(r.utilization_pct || 0),
       meritScore: Number(r.merit_score || 0),
       burnoutRiskFlag: Boolean(r.burnout_risk_flag),
+      availabilityStatus: String(r.availability_status || 'available'),
     }));
 
     const totals = items.reduce(

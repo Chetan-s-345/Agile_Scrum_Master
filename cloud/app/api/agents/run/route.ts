@@ -21,5 +21,6 @@ export async function POST(request: Request) {
     method: "POST",
     token,
     body,
+    timeoutMs: 120000,
   });
 }

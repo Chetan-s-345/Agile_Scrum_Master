@@ -817,14 +817,21 @@ class AuthService {
     const user = userResp.rows[0];
     if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
 
-    const membershipsResp = await db.universalPool.query(
-      `SELECT o.id AS org_id, o.name AS org_name, o.slug AS org_slug, om.role, om.joined_at
-       FROM org_members om
-       JOIN organizations o ON o.id = om.org_id
-       WHERE om.user_id = $1 AND om.is_active = TRUE
-       ORDER BY o.created_at ASC`,
-      [String(userId)]
-    );
+    let membershipsResp;
+    try {
+      membershipsResp = await db.universalPool.query(
+        `SELECT o.id AS org_id, o.name AS org_name, o.slug AS org_slug, om.role, om.joined_at
+         FROM org_members om
+         JOIN organizations o ON o.id = om.org_id
+         WHERE om.user_id = $1 AND om.is_active = TRUE
+         ORDER BY o.created_at ASC`,
+        [String(userId)]
+      );
+    } catch (err) {
+      const code = String(err?.code || '');
+      if (code !== '42P01') throw err;
+      membershipsResp = { rows: [] };
+    }
 
     return {
       user: {

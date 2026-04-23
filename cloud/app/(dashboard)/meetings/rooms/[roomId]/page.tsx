@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import type { IndividualMeetingSummary, MeetingRoomItem, MeetingRoomParticipant } from "@/components/meetings/types";
 
 type AuthMeResponse = {
@@ -31,6 +31,10 @@ type EndMeetingResponse = {
   item?: MeetingRoomDetail;
   error?: string;
   detail?: string;
+};
+
+type LoadRoomOptions = {
+  silent?: boolean;
 };
 
 function labelMeetingKind(value?: string) {
@@ -67,8 +71,10 @@ export default function MeetingRoomDetailPage() {
   const [canManageMeetings, setCanManageMeetings] = useState(false);
   const [showFullTranscript, setShowFullTranscript] = useState(false);
 
-  const loadRoom = useCallback(async (id: string) => {
-    setLoading(true);
+  const loadRoom = useCallback(async (id: string, options?: LoadRoomOptions) => {
+    if (!options?.silent) {
+      setLoading(true);
+    }
     setError("");
     try {
       const resp = await fetch(`/api/meetings/rooms/${encodeURIComponent(id)}`, { cache: "no-store" });
@@ -81,7 +87,9 @@ export default function MeetingRoomDetailPage() {
       setItem(null);
       setError(err instanceof Error ? err.message : "Failed to load meeting page");
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -125,6 +133,7 @@ export default function MeetingRoomDetailPage() {
   const participants = useMemo(() => item?.participants || [], [item]);
   const summaries = useMemo(() => item?.individualSummaries || [], [item]);
 
+
   const endMeeting = useCallback(async () => {
     if (!item?.roomName || !canManageMeetings || item.status !== "active") return;
 
@@ -147,6 +156,25 @@ export default function MeetingRoomDetailPage() {
       setEnding(false);
     }
   }, [canManageMeetings, item?.roomName, item?.status, router]);
+
+  const refreshTranscript = useCallback(() => {
+    if (!roomId) return;
+    void loadRoom(roomId, { silent: true });
+  }, [loadRoom, roomId]);
+
+  useEffect(() => {
+    if (!showFullTranscript || !roomId || item?.status !== "active") {
+      return;
+    }
+
+    const id = window.setInterval(() => {
+      void loadRoom(roomId, { silent: true });
+    }, 2000); // Refresh every 2 seconds when transcript is visible and meeting is active
+
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [item?.status, loadRoom, roomId, showFullTranscript]);
 
   if (loading) {
     return (
@@ -195,6 +223,13 @@ export default function MeetingRoomDetailPage() {
           >
             Join Meeting
           </Link>
+          <button
+            type="button"
+            onClick={() => setShowFullTranscript(true)}
+            className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)]"
+          >
+            View Full Live Transcript
+          </button>
           {canManageMeetings && item.status === "active" ? (
             <button
               type="button"
@@ -241,21 +276,52 @@ export default function MeetingRoomDetailPage() {
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] p-4">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-[var(--text-primary)]">Meeting Summary</h2>
-          <button
-            type="button"
-            onClick={() => setShowFullTranscript((prev) => !prev)}
-            className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1 text-xs text-[var(--text-primary)]"
-          >
-            {showFullTranscript ? "Hide full transcript" : "Show full transcript"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={refreshTranscript}
+              className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1 text-xs text-[var(--text-primary)]"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Refresh
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowFullTranscript((prev) => !prev)}
+              className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1 text-xs text-[var(--text-primary)]"
+            >
+              {showFullTranscript ? "Hide full transcript" : "Show full transcript"}
+            </button>
+          </div>
         </div>
         <div className="mt-2 max-h-[260px] overflow-auto whitespace-pre-wrap rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-primary)]">
           {item.summary || "Summary is not generated yet."}
         </div>
-        <div className="mt-2 max-h-[360px] overflow-auto whitespace-pre-wrap rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-primary)]">
-          {showFullTranscript ? item.transcript || "Transcript is empty for this meeting." : "Full transcript is hidden. Use Show full transcript to view all converted text."}
-        </div>
+        {!showFullTranscript ? (
+          <div className="mt-2 rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-muted)]">
+            Full transcript is hidden. Use View Full Live Transcript to show everything spoken in this meeting.
+          </div>
+        ) : null}
       </section>
+
+      {showFullTranscript ? (
+        <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-[var(--text-primary)]">Full Live Transcript</h2>
+            <button
+              type="button"
+              onClick={() => setShowFullTranscript(false)}
+              className="rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] px-2.5 py-1 text-xs text-[var(--text-primary)]"
+            >
+              Hide Transcript
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-[var(--text-muted)]">This updates automatically every 2 seconds while the meeting is active.</p>
+          <div className="mt-2 max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-sm text-[var(--text-primary)]">
+            {item.transcript || "Transcript is empty for this meeting."}
+          </div>
+        </section>
+      ) : null}
 
       <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] p-4">
         <h2 className="text-sm font-semibold text-[var(--text-primary)]">Individual Summaries ({summaries.length})</h2>

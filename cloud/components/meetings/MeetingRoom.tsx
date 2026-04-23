@@ -349,6 +349,24 @@ export function MeetingRoom({ roomName, participantName, canEndMeeting = false, 
     };
   }, [activeRoom]);
 
+  // Auto-save transcript every 30 seconds while meeting is active
+  useEffect(() => {
+    if (!transcript.trim() || !activeRoom) return;
+
+    const intervalId = setInterval(() => {
+      console.log("[Auto-Save] Persisting transcript to backend...");
+      fetch("/api/meetings/transcript", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomName, transcript: transcript.trim() }),
+      }).catch((err) => {
+        console.warn("[Auto-Save] Failed to persist:", err instanceof Error ? err.message : String(err));
+      });
+    }, 30000); // Every 30 seconds
+
+    return () => clearInterval(intervalId);
+  }, [roomName, transcript, activeRoom]);
+
   const saveFullTranscript = useCallback(
     async (allowEmpty: boolean) => {
       setSaveTranscriptBusy(true);
@@ -412,6 +430,7 @@ export function MeetingRoom({ roomName, participantName, canEndMeeting = false, 
     try {
       let summaryFromSave = "";
       let transcriptWarning = "";
+      // Auto-save transcript on meeting end
       const saveResult = await saveFullTranscript(true);
       summaryFromSave = saveResult.summary;
       transcriptWarning = saveResult.warning;
@@ -613,8 +632,13 @@ export function MeetingRoom({ roomName, participantName, canEndMeeting = false, 
 
             {sidebarTab === "transcript" ? (
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="mb-2 text-xs text-slate-300">
-                  {isTranscribing ? "Microphone transcription connected" : "Waiting for microphone track"}
+                <div className="mb-2 space-y-1">
+                  <div className={`text-xs font-medium px-2 py-1 rounded ${isTranscribing ? "border border-green-500/40 bg-green-500/10 text-green-200" : "border border-amber-500/40 bg-amber-500/10 text-amber-200"}`}>
+                    {isTranscribing ? "🟢 Deepgram connected" : "🟡 Connecting to Deepgram..."}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {isTranscribing ? "Audio is being transcribed in real-time" : "Waiting for microphone track to publish..."}
+                  </div>
                 </div>
                 <div className="mb-2 rounded-md border border-white/15 bg-black/35 p-2">
                   <div className="mb-1 flex items-center justify-between gap-2">
@@ -641,6 +665,9 @@ export function MeetingRoom({ roomName, participantName, canEndMeeting = false, 
                   >
                     {showFullTranscript ? "Hide transcript" : "Show transcript"}
                   </button>
+                  <span className="text-[11px] text-slate-400">
+                    {hasTranscript ? `${transcript.length} chars` : "No text captured"}
+                  </span>
                 </div>
                 {transcriptSaveMessage ? <p className="mb-2 text-xs text-slate-300">{transcriptSaveMessage}</p> : null}
                 <div className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-md border border-white/15 bg-black/40 p-3 text-xs leading-relaxed text-slate-100">

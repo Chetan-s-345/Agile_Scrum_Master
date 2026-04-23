@@ -7,15 +7,37 @@ function poolFromConnectionString(connectionString, { max } = {}) {
   return new Pool({
     connectionString,
     max,
+    connectionTimeoutMillis: 8000,
     idleTimeoutMillis: 30000,
     ssl: { rejectUnauthorized: false },
   });
+}
+
+function isRetryableConnectError(err) {
+  const code = String(err?.code || '').toUpperCase();
+  const message = String(err?.message || '').toLowerCase();
+  return (
+    code === 'ETIMEDOUT' ||
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ENETUNREACH' ||
+    code === 'EHOSTUNREACH' ||
+    message.includes('timedout') ||
+    message.includes('timeout') ||
+    message.includes('connection terminated') ||
+    message.includes('could not connect')
+  );
+}
+
+async function probePool(pool) {
+  await pool.query('SELECT 1');
 }
 
 class DatabasePoolManager {
   constructor() {
     this.universalPool = poolFromConnectionString(env.UNIVERSAL_DATABASE_URL, { max: 20 });
     this.orgPools = new Map();
+    this.orgPoolEndTimers = new Map();
     this._orgColumns = null;
   }
 
@@ -35,6 +57,12 @@ class DatabasePoolManager {
 
   async getOrgPool(orgId) {
     const key = String(orgId);
+    const pendingEnd = this.orgPoolEndTimers.get(key);
+    if (pendingEnd) {
+      clearTimeout(pendingEnd);
+      this.orgPoolEndTimers.delete(key);
+    }
+
     const existing = this.orgPools.get(key);
     if (existing) return existing;
 
@@ -67,17 +95,61 @@ class DatabasePoolManager {
       });
     }
 
+    const fallbackConnRaw = String(process.env.FALLBACK_TENANT_DATABASE_URL || '').trim();
+    const fallbackConn = normalizeTenantDbConnectionString(fallbackConnRaw || env.UNIVERSAL_DATABASE_URL);
+    const allowFallback = String(env.NODE_ENV || '').toLowerCase() !== 'production' && Boolean(fallbackConn);
+
     const pool = poolFromConnectionString(normalizedConn, { max: 10 });
-    this.orgPools.set(key, pool);
-    return pool;
+    try {
+      await probePool(pool);
+      this.orgPools.set(key, pool);
+      return pool;
+    } catch (err) {
+      try {
+        await pool.end();
+      } catch {
+        // ignore
+      }
+
+      if (!allowFallback || !fallbackConn || fallbackConn === normalizedConn || !isRetryableConnectError(err)) {
+        throw err;
+      }
+
+      logger.warn(
+        {
+          orgId: key,
+          code: err?.code,
+          message: err?.message,
+        },
+        'org_db.primary_connection_failed_using_fallback'
+      );
+
+      const fallbackPool = poolFromConnectionString(fallbackConn, { max: 10 });
+      await probePool(fallbackPool);
+      this.orgPools.set(key, fallbackPool);
+      return fallbackPool;
+    }
   }
 
-  async releaseOrgPool(orgId) {
+  async releaseOrgPool(orgId, options = {}) {
     const key = String(orgId);
     const pool = this.orgPools.get(key);
     if (!pool) return;
-    await pool.end();
     this.orgPools.delete(key);
+
+    const graceMsRaw = Number(options?.graceMs);
+    const graceMs = Number.isFinite(graceMsRaw) && graceMsRaw >= 0 ? graceMsRaw : 15000;
+
+    const timer = setTimeout(async () => {
+      this.orgPoolEndTimers.delete(key);
+      try {
+        await pool.end();
+      } catch {
+        // ignore end errors for stale pools
+      }
+    }, graceMs);
+
+    this.orgPoolEndTimers.set(key, timer);
   }
 
   async query(pool, sql, params) {

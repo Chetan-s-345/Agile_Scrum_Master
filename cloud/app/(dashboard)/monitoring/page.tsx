@@ -57,6 +57,7 @@ type CapacityItem = {
   developerId?: string;
   name: string;
   role?: string | null;
+  availabilityStatus?: string;
   maxSprintCapacity: number;
   currentSprintLoad: number;
   remainingCapacity: number;
@@ -463,6 +464,7 @@ export default function MonitoringPage() {
                     <tr>
                       <th className="text-left px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Developer</th>
                       <th className="text-left px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Role</th>
+                      <th className="text-left px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Status</th>
                       <th className="text-right px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Capacity</th>
                       <th className="text-right px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Load</th>
                       <th className="text-right px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Remaining</th>
@@ -471,7 +473,7 @@ export default function MonitoringPage() {
                   </thead>
                   <tbody>
                     {capacity.items.map((c) => (
-                      <tr key={c.name} className="border-t border-slate-200 dark:border-zinc-800">
+                      <tr key={c.developerId || c.name} className="border-t border-slate-200 dark:border-zinc-800">
                         <td className="px-3 py-3 text-slate-900 dark:text-white font-semibold">
                           <Link
                             href={`/monitoring/developers/${encodeURIComponent(c.developerId || c.name)}`}
@@ -482,6 +484,7 @@ export default function MonitoringPage() {
                           {c.burnoutRiskFlag ? <span className="ml-2 text-xs text-red-700 dark:text-red-300">risk</span> : null}
                         </td>
                         <td className="px-3 py-3 text-slate-700 dark:text-slate-200">{c.role || "—"}</td>
+                        <td className="px-3 py-3 text-slate-700 dark:text-slate-200 capitalize">{c.availabilityStatus || "available"}</td>
                         <td className="px-3 py-3 text-right text-slate-700 dark:text-slate-200">{c.maxSprintCapacity}</td>
                         <td className="px-3 py-3 text-right text-slate-700 dark:text-slate-200">{c.currentSprintLoad}</td>
                         <td className="px-3 py-3 text-right text-slate-700 dark:text-slate-200">{c.remainingCapacity}</td>

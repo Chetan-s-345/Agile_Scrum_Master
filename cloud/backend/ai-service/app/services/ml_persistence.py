@@ -15,6 +15,16 @@ def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, float(x)))
 
 
+async def _try_get_pool():
+    try:
+        return await get_pool()
+    except RuntimeError as exc:
+        message = str(exc)
+        if "DATABASE_URL is not set" in message or "asyncpg" in message:
+            return None
+        raise
+
+
 async def insert_merit_prediction(
     *,
     developer_id: Optional[str],
@@ -23,8 +33,10 @@ async def insert_merit_prediction(
     confidence: float,
     model_version: str,
 ) -> str:
-    pool = await get_pool()
     pid = _id()
+    pool = await _try_get_pool()
+    if pool is None:
+        return pid
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -49,8 +61,10 @@ async def insert_velocity_prediction(
     confidence: float,
     model_version: str,
 ) -> str:
-    pool = await get_pool()
     pid = _id()
+    pool = await _try_get_pool()
+    if pool is None:
+        return pid
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -76,8 +90,10 @@ async def insert_complexity_prediction(
     confidence: float,
     model_version: str,
 ) -> str:
-    pool = await get_pool()
     pid = _id()
+    pool = await _try_get_pool()
+    if pool is None:
+        return pid
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -105,8 +121,10 @@ async def insert_burndown_anomaly(
     model_version: str,
     details: Optional[dict[str, Any]] = None,
 ) -> str:
-    pool = await get_pool()
     pid = _id()
+    pool = await _try_get_pool()
+    if pool is None:
+        return pid
     async with pool.acquire() as conn:
         await conn.execute(
             """

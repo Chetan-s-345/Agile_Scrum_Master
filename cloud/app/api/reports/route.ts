@@ -5,5 +5,5 @@ export async function GET() {
   const token = await getAuthTokenFromCookies();
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  return proxyToApiGateway({ upstreamPath: "/api/v1/reports", method: "GET", token });
+  return proxyToApiGateway({ upstreamPath: "/api/v1/reports", method: "GET", token, timeoutMs: 45000 });
 }

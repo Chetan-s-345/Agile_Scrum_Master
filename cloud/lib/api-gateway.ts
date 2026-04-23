@@ -43,6 +43,18 @@ async function readGatewayResponse(resp: Response): Promise<{ json: unknown | nu
   }
 }
 
+function isRetryableProxyError(message: string) {
+  const text = String(message || "").toLowerCase();
+  return (
+    text.includes("econnreset") ||
+    text.includes("econnrefused") ||
+    text.includes("etimedout") ||
+    text.includes("networkerror") ||
+    text.includes("fetch failed") ||
+    text.includes("connection")
+  );
+}
+
 export async function proxyToApiGateway({ upstreamPath, method, token, body, timeoutMs: timeoutOverrideMs }: ProxyOptions) {
   const baseUrl = getApiGatewayBaseUrl();
   const normalizedPath = upstreamPath.startsWith("/") ? upstreamPath : `/${upstreamPath}`;
@@ -61,19 +73,34 @@ export async function proxyToApiGateway({ upstreamPath, method, token, body, tim
       : normalizedEnvTimeoutMs;
   const startTime = Date.now();
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    
-    try {
-      resp = await fetch(upstreamUrl, {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
-        cache: "no-store",
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
+    const requestBody = body === undefined ? undefined : JSON.stringify(body);
+    let lastErr: unknown = null;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        resp = await fetch(upstreamUrl, {
+          method,
+          headers,
+          body: requestBody,
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        break;
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        const timedOut = msg.includes("abort") || msg.includes("timeout");
+        const canRetry = attempt === 0 && !timedOut && isRetryableProxyError(msg);
+        if (!canRetry) throw err;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    if (!resp!) {
+      throw (lastErr || new Error("Gateway request failed"));
     }
     
     const duration = Date.now() - startTime;

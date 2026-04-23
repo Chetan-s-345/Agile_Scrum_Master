@@ -533,6 +533,14 @@ async function briefing(req, res, next) {
 async function proxyJson(req, res, next, upstreamPath) {
   try {
     const url = buildAiServiceUrl(upstreamPath);
+    const normalizedPath = String(upstreamPath || '').toLowerCase();
+    const timeout =
+      normalizedPath.includes('/agentic/sprint-build') ||
+      normalizedPath.includes('/sprint-planning/plan') ||
+      normalizedPath.includes('/sprint-planning/scope')
+        ? 180_000
+        : 30_000;
+
     const resp = await axios({
       method: req.method,
       url,
@@ -540,7 +548,7 @@ async function proxyJson(req, res, next, upstreamPath) {
         'Content-Type': 'application/json',
       },
       data: req.body,
-      timeout: 30_000,
+      timeout,
       validateStatus: () => true,
     });
 

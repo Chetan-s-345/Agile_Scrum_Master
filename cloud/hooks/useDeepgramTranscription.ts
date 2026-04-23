@@ -99,13 +99,16 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
 
         const currentTrack = audioTrack;
         if (!currentTrack) {
+          console.warn("[Deepgram] No audio track available yet");
           if (mountedRef.current && !closed) {
             setIsTranscribing(false);
           }
           return;
         }
 
+        console.log("[Deepgram] Starting transcription...");
         const key = await fetchDeepgramKey();
+        console.log("[Deepgram] Token fetched, connecting...");
 
         const deepgram = new DeepgramClient({ apiKey: key });
         const connection = await deepgram.listen.v1.connect({
@@ -117,11 +120,29 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
         });
 
         dgConnection = connection as typeof dgConnection;
+        let isConnectionReady = false;
+        const audioChunksBuffer: ArrayBuffer[] = [];
 
         connection.on("open", () => {
           if (!mountedRef.current || closed) return;
+          console.log("[Deepgram] Connection opened, streaming audio...");
+          isConnectionReady = true;
           setIsTranscribing(true);
           scheduleNoDataRecovery(start);
+
+          // Flush any buffered audio chunks
+          while (audioChunksBuffer.length > 0) {
+            const bufferedChunk = audioChunksBuffer.shift();
+            if (bufferedChunk && dgConnection) {
+              try {
+                dgConnection.sendMedia(bufferedChunk);
+                bytesSent += bufferedChunk.byteLength;
+                console.log(`[Deepgram] Flushed buffered ${bufferedChunk.byteLength} bytes (total: ${bytesSent})`);
+              } catch (err) {
+                console.warn("[Deepgram] Failed to send buffered chunk:", err instanceof Error ? err.message : String(err));
+              }
+            }
+          }
         });
 
         connection.on("message", (message: unknown) => {
@@ -130,6 +151,7 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
           const text = String(payload?.channel?.alternatives?.[0]?.transcript || "").trim();
           if (!text || !payload?.is_final || !mountedRef.current || closed) return;
           clearNoDataTimer();
+          console.log("[Deepgram] Transcript received:", text);
 
           setTranscript((prev) => {
             if (!prev) return text;
@@ -139,11 +161,13 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
 
         connection.on("error", () => {
           if (!mountedRef.current || closed) return;
+          console.error("[Deepgram] Connection error");
           setIsTranscribing(false);
         });
 
         connection.on("close", () => {
           if (!mountedRef.current || closed) return;
+          console.warn("[Deepgram] Connection closed");
           setIsTranscribing(false);
         });
 
@@ -157,14 +181,29 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
 
         recorder = new MediaRecorder(stream, { mimeType: preferredType });
         recorder.ondataavailable = async (event) => {
-          if (!event.data || event.data.size === 0 || !dgConnection || closed) return;
+          if (!event.data || event.data.size === 0 || closed) return;
           const chunk = await event.data.arrayBuffer();
-          bytesSent += chunk.byteLength;
-          dgConnection.sendMedia(chunk);
+
+          if (!isConnectionReady) {
+            console.log(`[Deepgram] Connection not ready, buffering ${chunk.byteLength} bytes`);
+            audioChunksBuffer.push(chunk);
+            return;
+          }
+
+          if (!dgConnection) return;
+
+          try {
+            bytesSent += chunk.byteLength;
+            console.log(`[Deepgram] Sending ${chunk.byteLength} bytes (total: ${bytesSent})`);
+            dgConnection.sendMedia(chunk);
+          } catch (err) {
+            console.warn("[Deepgram] Failed to send media:", err instanceof Error ? err.message : String(err));
+          }
         };
 
         recorder.start(350);
-      } catch {
+      } catch (err) {
+        console.error("[Deepgram] Failed to start:", err instanceof Error ? err.message : String(err));
         if (!mountedRef.current || closed) return;
         setIsTranscribing(false);
       }
@@ -176,6 +215,7 @@ export function useDeepgramTranscription(audioTrack: MediaStreamTrack | null) {
       closed = true;
       setIsTranscribing(false);
       clearNoDataTimer();
+      console.log(`[Deepgram] Cleanup: ${bytesSent} bytes sent total`);
 
       if (recorder && recorder.state !== "inactive") {
         recorder.stop();

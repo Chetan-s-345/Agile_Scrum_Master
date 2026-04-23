@@ -208,18 +208,24 @@ export function Navbar() {
   useEffect(() => {
     async function loadNotifications() {
       setNotificationsLoading(true);
-      const [listResp, unreadResp] = await Promise.all([
-        fetch("/api/notifications", { cache: "no-store" }),
-        fetch("/api/notifications?unread=true", { cache: "no-store" }),
-      ]);
+      try {
+        const [listResp, unreadResp] = await Promise.all([
+          fetch("/api/notifications", { cache: "no-store" }),
+          fetch("/api/notifications?unread=true", { cache: "no-store" }),
+        ]);
 
-      const listData = await listResp.json().catch(() => null) as { items?: NotificationsItem[] } | null;
-      const unreadData = await unreadResp.json().catch(() => null) as { unreadCount?: number; items?: NotificationsItem[] } | null;
+        const listData = await listResp.json().catch(() => null) as { items?: NotificationsItem[] } | null;
+        const unreadData = await unreadResp.json().catch(() => null) as { unreadCount?: number; items?: NotificationsItem[] } | null;
 
-      setNotifications(Array.isArray(listData?.items) ? listData!.items : []);
-      const unreadFallback = Array.isArray(unreadData?.items) ? unreadData!.items.length : 0;
-      setUnreadCount(Number(unreadData?.unreadCount || unreadFallback || 0));
-      setNotificationsLoading(false);
+        setNotifications(Array.isArray(listData?.items) ? listData!.items : []);
+        const unreadFallback = Array.isArray(unreadData?.items) ? unreadData!.items.length : 0;
+        setUnreadCount(Number(unreadData?.unreadCount || unreadFallback || 0));
+      } catch {
+        setNotifications([]);
+        setUnreadCount(0);
+      } finally {
+        setNotificationsLoading(false);
+      }
     }
 
     void loadNotifications();
