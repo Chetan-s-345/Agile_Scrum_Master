@@ -11,6 +11,7 @@
     "dev:ai": "cd backend/ai-service && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
     "build": "next build",
     "start": "next start",
+    "prod": "concurrently -k \"npm run start\" \"npm run dev:api\"",
     "lint": "eslint",
     "init:app-db": "node tools/init-nextjs-db.mjs",
     "desktop:install": "npm --prefix desktop run install:frontend",

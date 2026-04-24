@@ -1,3 +1,5 @@
+require("dotenv").config({ path: require("path").join(__dirname, "..", ".env.production") });
+
 const path = require("path");
 const fs = require("fs");
 const { randomUUID } = require("crypto");
@@ -1915,7 +1917,12 @@ function getDesktopGatewayBaseUrl() {
       "http://localhost:4000"
   ).trim();
 
-  return candidate.replace(/\/+$/, "");
+  const normalized = candidate.replace(/\/+$/, "").replace(/\/api(?:\/v1)?$/i, "");
+  console.log("[GATEWAY] Base URL resolved:", normalized, {
+    DESKTOP_API_GATEWAY_URL: process.env.DESKTOP_API_GATEWAY_URL,
+    API_GATEWAY_URL: process.env.API_GATEWAY_URL
+  });
+  return normalized;
 }
 
 function getDesktopSessionToken() {
@@ -1928,27 +1935,61 @@ function getDesktopSessionToken() {
 }
 
 async function desktopGatewayRequest(method, pathname, body) {
+  console.log("[GATEWAY] Request:", { method, pathname });
+  
+  try {
+    const token = getDesktopSessionToken();
+    console.log("[GATEWAY] Token found:", token.substring(0, 20) + "...");
+  } catch (tokenError) {
+    console.log("[GATEWAY] Token error:", String(tokenError));
+    throw tokenError;
+  }
+
   const token = getDesktopSessionToken();
   const baseUrl = getDesktopGatewayBaseUrl();
   const url = `${baseUrl}${pathname}`;
+  console.log("[GATEWAY] Fetching:", url);
+  
+  const timeoutMs = 30000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  const response = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-      "Content-Type": "application/json"
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    cache: "no-store"
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        "Content-Type": "application/json"
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+      signal: controller.signal
+    });
+    console.log("[GATEWAY] Response status:", response.status);
+  } catch (error) {
+    console.log("[GATEWAY] Fetch error:", String(error));
+    const detail = String(error instanceof Error ? error.message : error).trim();
+    const lowered = detail.toLowerCase();
+    const timedOut = lowered.includes("abort") || lowered.includes("timeout");
+    throw new Error(
+      timedOut
+        ? `Gateway timeout after ${Math.round(timeoutMs / 1000)}s. Ensure API gateway is reachable at ${baseUrl}.`
+        : `Unable to reach API gateway at ${baseUrl}. ${detail}`
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
+    console.log("[GATEWAY] Error response:", { status: response.status, payload });
     const detail = String(payload?.detail || payload?.error || response.statusText || "Request failed").trim();
     throw new Error(`Gateway request failed (${response.status}): ${detail}`);
   }
 
+  console.log("[GATEWAY] Success");
   return payload;
 }
 
@@ -6969,11 +7010,15 @@ function registerSystemHandlers() {
       const path = String(payload.path || payload.pathname || "").trim();
       const supportedMethods = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 
+      console.log("[IPC] system:gatewayRequest:", { method, path });
+
       if (!supportedMethods.has(method)) {
+        console.log("[IPC] Invalid method:", method);
         return IPCResponse.validation("method", "method must be GET|POST|PUT|PATCH|DELETE");
       }
 
       if (!path || !path.startsWith("/api/")) {
+        console.log("[IPC] Invalid path:", path, "Must start with /api/");
         return IPCResponse.validation("path", "path must start with /api/");
       }
 
@@ -6982,8 +7027,10 @@ function registerSystemHandlers() {
         : payload.body;
 
       const data = await desktopGatewayRequest(method, path, requestBody);
+      console.log("[IPC] Success");
       return IPCResponse.success(data);
     } catch (error) {
+      console.log("[IPC] Error:", String(error));
       return IPCResponse.internalError("Failed to execute gateway request", String(error));
     }
   });
