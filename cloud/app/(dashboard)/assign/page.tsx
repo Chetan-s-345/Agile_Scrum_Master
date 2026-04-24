@@ -5,7 +5,19 @@ import { RefreshCw, Users, Wand2 } from "lucide-react";
 
 type Sprint = { id: string; name: string; status: string };
 
+type Developer = {
+  id: string;
+  fullName: string;
+  role?: string | null;
+  currentLoad: number;
+  maxCapacity: number;
+  loadPct: number;
+  availabilityStatus?: string | null;
+  burnoutRiskFlag?: boolean;
+};
+
 type SprintsResp = { items?: Sprint[]; error?: string };
+type DevelopersResp = { items?: Developer[]; error?: string };
 
 type Task = {
   id: string;
@@ -62,8 +74,10 @@ export default function AssignmentEnginePage() {
 
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [selectedSprintId, setSelectedSprintId] = useState<string>("");
+  const [developers, setDevelopers] = useState<Developer[]>([]);
 
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [manualDeveloperByTaskId, setManualDeveloperByTaskId] = useState<Record<string, string>>({});
 
   const [suggestForTaskId, setSuggestForTaskId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Record<string, Suggestion[]>>({});
@@ -102,12 +116,21 @@ export default function AssignmentEnginePage() {
     setTasks(items);
   }
 
+  async function loadDevelopers() {
+    const resp = await fetchJson<DevelopersResp>("/api/developers");
+    if (!resp.ok) {
+      throw new Error(String(resp.data?.error || `Failed to load developers (${resp.status})`));
+    }
+    setDevelopers(Array.isArray(resp.data?.items) ? (resp.data!.items as Developer[]) : []);
+  }
+
   async function loadAll() {
     setLoading(true);
     setError(null);
     setNotice(null);
     try {
       const sprintId = await loadSprints();
+      await loadDevelopers();
       if (sprintId) await loadTasks(String(sprintId));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load sprints");
@@ -202,6 +225,41 @@ export default function AssignmentEnginePage() {
       await refreshTasks();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Reassign failed");
+    } finally {
+      setAssigningTaskId(null);
+    }
+  }
+
+  async function handleExplicitAssign(task: Task, developerId: string) {
+    if (!developerId) {
+      setError("Select a developer first.");
+      return;
+    }
+
+    setError(null);
+    setNotice(null);
+    setAssigningTaskId(task.id);
+    try {
+      const resp = await fetchJson<AssignOk>("/api/assignment/assign-explicit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskId: task.id,
+          sprintId: String(selectedSprintId),
+          developerId,
+          reason: "Manual assignment from Assignment page",
+        }),
+      });
+      if (!resp.ok) {
+        const msg = String(resp.data?.error || resp.data?.reason || `Manual assignment failed (${resp.status})`);
+        throw new Error(msg);
+      }
+
+      const developerName = developers.find((dev) => String(dev.id) === String(developerId))?.fullName || "developer";
+      setNotice(`Assigned to ${developerName}.`);
+      await refreshTasks();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Manual assignment failed");
     } finally {
       setAssigningTaskId(null);
     }
@@ -352,6 +410,7 @@ export default function AssignmentEnginePage() {
                     const isSuggesting = suggestLoadingTaskId === t.id;
                     const rowSuggestions = suggestions[t.id] || [];
                     const showSuggestions = suggestForTaskId === t.id;
+                    const selectedDeveloperId = manualDeveloperByTaskId[t.id] || "";
 
                     return (
                       <tr key={t.id} className="border-t border-slate-200 dark:border-zinc-800">
@@ -419,6 +478,31 @@ export default function AssignmentEnginePage() {
                               className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-slate-900 dark:text-white disabled:opacity-60"
                             >
                               <Wand2 className="w-4 h-4" /> Suggest
+                            </button>
+                            <select
+                              value={selectedDeveloperId}
+                              onChange={(e) =>
+                                setManualDeveloperByTaskId((prev) => ({
+                                  ...prev,
+                                  [t.id]: e.target.value,
+                                }))
+                              }
+                              className="min-w-[220px] rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-slate-900 dark:text-white disabled:opacity-60"
+                              disabled={isBusy || loading || !selectedSprintId || !developers.length}
+                            >
+                              <option value="">Assign to developer…</option>
+                              {developers.map((dev) => (
+                                <option key={dev.id} value={dev.id}>
+                                  {dev.fullName} {dev.role ? `(${dev.role})` : ""} • {dev.currentLoad}/{dev.maxCapacity}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => handleExplicitAssign(t, selectedDeveloperId)}
+                              disabled={isBusy || loading || !selectedSprintId || !selectedDeveloperId || !developers.length}
+                              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-slate-900 dark:text-white disabled:opacity-60"
+                            >
+                              Assign to dev
                             </button>
                             {!t.assignee?.id ? (
                               <button

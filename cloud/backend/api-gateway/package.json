@@ -8,6 +8,7 @@
     "dev": "nodemon src/app.js",
     "start": "node src/app.js",
     "start:render": "node src/app.js",
+    "build": "node -e \"console.log('api-gateway: no separate build step required')\"",
     "init:universal-db": "node scripts/init-universal-db.js",
     "init:tenant-template-db": "node scripts/init-tenant-template-db.js",
     "init:tenant-db": "node scripts/init-tenant-db-from-connection-string.js",

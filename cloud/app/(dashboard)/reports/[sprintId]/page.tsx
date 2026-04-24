@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Download, FileDown, RefreshCw } from "lucide-react";
@@ -78,13 +79,82 @@ type SprintReportResp = {
     actionItems: Array<{ id?: string; title?: string; status?: string }>;
     scheduledStart: string;
   }>;
-  descriptions?: {
-    overview?: string;
-    burndown?: string;
-    risk?: string;
-    burnout?: string;
+  github?: {
+    summary?: {
+      commits: number;
+      pushes: number;
+      pullRequests: number;
+      reviews: number;
+      issues: number;
+      contributors: number;
+      repositories: number;
+      additions: number;
+      deletions: number;
+      lastEventAt: string | null;
+    };
+    byDeveloper?: Array<{
+      developer: string;
+      totalEvents: number;
+      commits: number;
+      pullRequests: number;
+      additions: number;
+      deletions: number;
+    }>;
+    recentEvents?: Array<{
+      id: string;
+      type: string;
+      repo: string | null;
+      developer: string;
+      commitSha: string | null;
+      prNumber: number | null;
+      branch: string | null;
+      additions: number;
+      deletions: number;
+      eventAt: string;
+    }>;
   };
   error?: string;
+};
+
+type TopContributorRow =
+  | {
+      source: "github";
+      name: string;
+      events: number;
+      commits: number;
+      pullRequests: number;
+      additions: number;
+      deletions: number;
+    }
+  | {
+      source: "sprint";
+      name: string;
+      storyPointsCompleted: number;
+      tasksCompleted: number;
+    };
+
+type SprintAuditResp = {
+  developer_audit?: {
+    section_score?: number;
+    section_status?: string;
+    skill_gap?: string[];
+    overloaded_developers?: Array<{ developer_id?: string; name?: string; assigned_story_points?: number }>;
+    underutilised_developers?: Array<{ developer_id?: string; name?: string; assigned_story_points?: number; capacity?: number }>;
+    task_mismatch?: Array<{ task_id?: string; title?: string; developer_name?: string; required_skills?: string[] }>;
+    recommended_upskilling?: Array<{ developer_id?: string; name?: string; skill_area?: string; related_backlog_items?: string[] }>;
+  };
+  recommendations?: {
+    section_score?: number;
+    section_status?: string;
+    top_3_immediate_actions?: string[];
+    top_3_process_improvements?: string[];
+    hiring_or_training_recommendation?: string;
+    executive_summary?: string;
+    ai_summary?: string | null;
+    ai_skill_focus?: Array<{ skill?: string; reason?: string; target_developers?: string[]; recommended_actions?: string[] }>;
+    ai_bench_actions?: Array<{ developer?: string; current_load?: number; focus?: string; next_steps?: string[] }>;
+    ai_notes?: string[];
+  };
 };
 
 function riskTone(level: string) {
@@ -119,6 +189,7 @@ export default function SprintReportPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<SprintReportResp | null>(null);
+  const [audit, setAudit] = useState<SprintAuditResp | null>(null);
 
   const sprint = useMemo(() => data?.sprint || null, [data]);
   const burndown = useMemo(() => (Array.isArray(data?.burndown) ? data!.burndown! : []), [data]);
@@ -128,19 +199,48 @@ export default function SprintReportPage() {
   const burnout = useMemo(() => (Array.isArray(data?.burnout) ? data!.burnout! : []), [data]);
   const contributors = useMemo(() => (Array.isArray(data?.contributors) ? data!.contributors! : []), [data]);
   const meetings = useMemo(() => (Array.isArray(data?.meetings) ? data!.meetings! : []), [data]);
+  const githubSummary = useMemo(() => data?.github?.summary || null, [data]);
+  const githubByDeveloper = useMemo(() => (Array.isArray(data?.github?.byDeveloper) ? data!.github!.byDeveloper! : []), [data]);
+  const githubEvents = useMemo(() => (Array.isArray(data?.github?.recentEvents) ? data!.github!.recentEvents! : []), [data]);
+  const topContributors = useMemo<TopContributorRow[]>(() => {
+    if (githubByDeveloper.length) {
+      return githubByDeveloper.map((row) => ({
+        source: "github",
+        name: row.developer,
+        events: row.totalEvents,
+        commits: row.commits,
+        pullRequests: row.pullRequests,
+        additions: row.additions,
+        deletions: row.deletions,
+      }));
+    }
+
+    return contributors.map((row) => ({
+      source: "sprint",
+      name: row.name,
+      storyPointsCompleted: row.storyPointsCompleted,
+      tasksCompleted: row.tasksCompleted,
+    }));
+  }, [contributors, githubByDeveloper]);
 
   async function loadReport() {
     if (!hasId) return;
 
-    const resp = await fetchJson<SprintReportResp>(`/api/reports/${encodeURIComponent(sprintId)}`);
-    if (!resp.ok) {
-      setError(String(resp.data?.error || `Failed to load sprint report (${resp.status})`));
+    const [reportResp, auditResp] = await Promise.all([
+      fetchJson<SprintReportResp>(`/api/reports/${encodeURIComponent(sprintId)}`),
+      fetchJson<SprintAuditResp>(`/api/reports/${encodeURIComponent(sprintId)}/audit`),
+    ]);
+
+    if (!reportResp.ok) {
+      setError(String(reportResp.data?.error || `Failed to load sprint report (${reportResp.status})`));
       setData(null);
+      setAudit(null);
       setLoading(false);
       return;
     }
 
-    setData(resp.data);
+    setData(reportResp.data);
+    setAudit(auditResp.ok ? auditResp.data : null);
     setLoading(false);
   }
 
@@ -158,17 +258,22 @@ export default function SprintReportPage() {
     let cancelled = false;
 
     (async () => {
-      const resp = await fetchJson<SprintReportResp>(`/api/reports/${encodeURIComponent(sprintId)}`);
+      const [reportResp, auditResp] = await Promise.all([
+        fetchJson<SprintReportResp>(`/api/reports/${encodeURIComponent(sprintId)}`),
+        fetchJson<SprintAuditResp>(`/api/reports/${encodeURIComponent(sprintId)}/audit`),
+      ]);
       if (cancelled) return;
 
-      if (!resp.ok) {
-        setError(String(resp.data?.error || `Failed to load sprint report (${resp.status})`));
+      if (!reportResp.ok) {
+        setError(String(reportResp.data?.error || `Failed to load sprint report (${reportResp.status})`));
         setData(null);
+        setAudit(null);
         setLoading(false);
         return;
       }
 
-      setData(resp.data);
+      setData(reportResp.data);
+      setAudit(auditResp.ok ? auditResp.data : null);
       setLoading(false);
     })();
 
@@ -184,7 +289,6 @@ export default function SprintReportPage() {
           <div>
             <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">Sprint Report</h1>
             <p className="text-slate-600 dark:text-slate-300">Sprint ID: {sprintId}</p>
-            <p className="text-xs text-slate-500 mt-1">{data?.descriptions?.overview || "Comprehensive sprint delivery and health report for Scrum Master decisions."}</p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -248,11 +352,94 @@ export default function SprintReportPage() {
               </div>
             </div>
 
+            {audit ? (
+              <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Skill & workload audit</div>
+                    <div className="mt-1 text-lg font-bold text-slate-900 dark:text-white">
+                      {audit.recommendations?.ai_summary || audit.recommendations?.executive_summary || "No AI summary available yet."}
+                    </div>
+                  </div>
+                  <Link
+                    href="/skill-gap"
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm font-semibold text-slate-900 dark:text-white"
+                  >
+                    Open skill audit
+                  </Link>
+                </div>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-4">
+                  <div className="rounded-md border border-slate-200 dark:border-zinc-800 p-3">
+                    <div className="text-xs text-slate-500">Skill gaps</div>
+                    <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{audit.developer_audit?.skill_gap?.length ?? 0}</div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 dark:border-zinc-800 p-3">
+                    <div className="text-xs text-slate-500">Bench developers</div>
+                    <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{audit.developer_audit?.underutilised_developers?.length ?? 0}</div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 dark:border-zinc-800 p-3">
+                    <div className="text-xs text-slate-500">Task mismatches</div>
+                    <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{audit.developer_audit?.task_mismatch?.length ?? 0}</div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 dark:border-zinc-800 p-3">
+                    <div className="text-xs text-slate-500">Audit score</div>
+                    <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{audit.developer_audit?.section_score ?? 0}</div>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-4 xl:grid-cols-2">
+                  <div className="rounded-md border border-slate-200 dark:border-zinc-800 p-4">
+                    <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Immediate actions</div>
+                    {audit.recommendations?.top_3_immediate_actions?.length ? (
+                      <div className="space-y-2 text-sm text-slate-700 dark:text-slate-200">
+                        {audit.recommendations.top_3_immediate_actions.map((item, idx) => (
+                          <div key={`${idx}-${item}`} className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2">
+                            {item}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-600 dark:text-slate-300">No AI recommendations available.</div>
+                    )}
+                  </div>
+
+                  <div className="rounded-md border border-slate-200 dark:border-zinc-800 p-4">
+                    <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Bench developer focus</div>
+                    {audit.developer_audit?.underutilised_developers?.length ? (
+                      <div className="space-y-2 text-sm text-slate-700 dark:text-slate-200">
+                        {audit.developer_audit.underutilised_developers.map((dev) => (
+                          <div key={String(dev.developer_id || dev.name)} className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2">
+                            <div className="font-semibold text-slate-900 dark:text-white">{dev.name}</div>
+                            <div className="text-xs text-slate-500">{dev.assigned_story_points ?? 0} points / {dev.capacity ?? 0} capacity</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-600 dark:text-slate-300">No underutilised developers detected.</div>
+                    )}
+                  </div>
+                </div>
+
+                {audit.developer_audit?.skill_gap?.length ? (
+                  <div className="mt-5 rounded-md border border-slate-200 dark:border-zinc-800 p-4">
+                    <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Skill gaps to close</div>
+                    <div className="flex flex-wrap gap-2">
+                      {audit.developer_audit.skill_gap.map((skill) => (
+                        <span key={skill} className="rounded-full bg-slate-100 dark:bg-black/30 px-3 py-1.5 text-sm text-slate-800 dark:text-slate-200">
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div>
                   <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Burndown</div>
-                  <div className="text-xs text-slate-500">{data?.descriptions?.burndown || "Ideal vs actual remaining points over sprint days."}</div>
                 </div>
               </div>
               {burndown.length ? (
@@ -275,7 +462,6 @@ export default function SprintReportPage() {
 
             <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
               <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Sprint Risk</div>
-              <div className="text-xs text-slate-500 mt-1">{data?.descriptions?.risk || "Risk score from delay likelihood, blockers, and velocity gap."}</div>
               <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="rounded-md border border-slate-200 dark:border-zinc-800 p-3">
                   <div className="text-xs text-slate-500">Risk Score</div>
@@ -333,7 +519,6 @@ export default function SprintReportPage() {
 
               <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
                 <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-4">Burnout Snapshot</div>
-                <div className="text-xs text-slate-500 mb-4">{data?.descriptions?.burnout || "Shows contributors above healthy sprint capacity."}</div>
                 {burnout.length ? (
                   <div className="overflow-auto rounded-md border border-slate-200 dark:border-zinc-800">
                     <table className="min-w-full text-sm">
@@ -367,32 +552,131 @@ export default function SprintReportPage() {
               </div>
             </div>
 
+            <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
+              <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-4">GitHub Delivery Activity</div>
+              <div className="grid grid-cols-2 md:grid-cols-5 xl:grid-cols-10 gap-3">
+                <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Commits</div><div className="font-semibold text-slate-900 dark:text-white">{githubSummary?.commits ?? 0}</div></div>
+                <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Pushes</div><div className="font-semibold text-slate-900 dark:text-white">{githubSummary?.pushes ?? 0}</div></div>
+                <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">PRs</div><div className="font-semibold text-slate-900 dark:text-white">{githubSummary?.pullRequests ?? 0}</div></div>
+                <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Reviews</div><div className="font-semibold text-slate-900 dark:text-white">{githubSummary?.reviews ?? 0}</div></div>
+                <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Issues</div><div className="font-semibold text-slate-900 dark:text-white">{githubSummary?.issues ?? 0}</div></div>
+                <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Contributors</div><div className="font-semibold text-slate-900 dark:text-white">{githubSummary?.contributors ?? 0}</div></div>
+                <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Repos</div><div className="font-semibold text-slate-900 dark:text-white">{githubSummary?.repositories ?? 0}</div></div>
+                <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Additions</div><div className="font-semibold text-slate-900 dark:text-white">{githubSummary?.additions ?? 0}</div></div>
+                <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Deletions</div><div className="font-semibold text-slate-900 dark:text-white">{githubSummary?.deletions ?? 0}</div></div>
+                <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Last Event</div><div className="font-semibold text-slate-900 dark:text-white">{githubSummary?.lastEventAt ? new Date(githubSummary.lastEventAt).toLocaleDateString() : "-"}</div></div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
-                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-4">Top Contributors</div>
-                {contributors.length ? (
+                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-4">GitHub Contribution by Developer</div>
+                {githubByDeveloper.length ? (
                   <div className="overflow-auto rounded-md border border-slate-200 dark:border-zinc-800">
                     <table className="min-w-full text-sm">
                       <thead className="bg-slate-50 dark:bg-black/40">
                         <tr>
                           <th className="text-left px-3 py-2">Developer</th>
-                          <th className="text-right px-3 py-2">Completed Points</th>
-                          <th className="text-right px-3 py-2">Tasks Done</th>
+                          <th className="text-right px-3 py-2">Events</th>
+                          <th className="text-right px-3 py-2">Commits</th>
+                          <th className="text-right px-3 py-2">PRs</th>
+                          <th className="text-right px-3 py-2">Code Churn</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {contributors.map((row) => (
-                          <tr key={`${row.name}-${row.tasksCompleted}`} className="border-t border-slate-200 dark:border-zinc-800">
-                            <td className="px-3 py-2 text-slate-900 dark:text-white font-medium">{row.name}</td>
-                            <td className="px-3 py-2 text-right">{row.storyPointsCompleted}</td>
-                            <td className="px-3 py-2 text-right">{row.tasksCompleted}</td>
+                        {githubByDeveloper.map((row) => (
+                          <tr key={`${row.developer}-${row.totalEvents}`} className="border-t border-slate-200 dark:border-zinc-800">
+                            <td className="px-3 py-2 text-slate-900 dark:text-white font-medium">{row.developer}</td>
+                            <td className="px-3 py-2 text-right">{row.totalEvents}</td>
+                            <td className="px-3 py-2 text-right">{row.commits}</td>
+                            <td className="px-3 py-2 text-right">{row.pullRequests}</td>
+                            <td className="px-3 py-2 text-right">+{row.additions}/-{row.deletions}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                 ) : (
-                  <div className="text-sm text-slate-600 dark:text-slate-300">No contributor data available.</div>
+                  <div className="text-sm text-slate-600 dark:text-slate-300">No GitHub contributor activity linked to this sprint.</div>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
+                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-4">Recent GitHub Events</div>
+                {githubEvents.length ? (
+                  <div className="space-y-2 max-h-80 overflow-auto">
+                    {githubEvents.map((event) => (
+                      <div key={event.id} className="rounded-md border border-slate-200 dark:border-zinc-800 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm font-semibold text-slate-900 dark:text-white">{event.type}</div>
+                          <div className="text-xs text-slate-500">{new Date(event.eventAt).toLocaleString()}</div>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                          {event.developer} · {event.repo || "repo-n/a"} · {event.branch || "branch-n/a"}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                          {event.commitSha ? `Commit ${event.commitSha.slice(0, 8)}` : ""}
+                          {event.prNumber ? ` PR #${event.prNumber}` : ""}
+                          {` +${event.additions} / -${event.deletions}`}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-600 dark:text-slate-300">No GitHub events recorded for this sprint.</div>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
+                <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-4">Top Contributors</div>
+                {topContributors.length ? (
+                  <div className="overflow-auto rounded-md border border-slate-200 dark:border-zinc-800">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-slate-50 dark:bg-black/40">
+                        <tr>
+                          <th className="text-left px-3 py-2">Developer</th>
+                          {topContributors[0]?.source === "github" ? (
+                            <>
+                              <th className="text-right px-3 py-2">Events</th>
+                              <th className="text-right px-3 py-2">Commits</th>
+                              <th className="text-right px-3 py-2">PRs</th>
+                              <th className="text-right px-3 py-2">Code Churn</th>
+                            </>
+                          ) : (
+                            <>
+                              <th className="text-right px-3 py-2">Completed Points</th>
+                              <th className="text-right px-3 py-2">Tasks Done</th>
+                            </>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {topContributors.map((row) =>
+                          row.source === "github" ? (
+                            <tr key={`${row.name}-${row.events}`} className="border-t border-slate-200 dark:border-zinc-800">
+                              <td className="px-3 py-2 text-slate-900 dark:text-white font-medium">{row.name}</td>
+                              <td className="px-3 py-2 text-right">{row.events}</td>
+                              <td className="px-3 py-2 text-right">{row.commits}</td>
+                              <td className="px-3 py-2 text-right">{row.pullRequests}</td>
+                              <td className="px-3 py-2 text-right">+{row.additions}/-{row.deletions}</td>
+                            </tr>
+                          ) : (
+                            <tr key={`${row.name}-${row.tasksCompleted}`} className="border-t border-slate-200 dark:border-zinc-800">
+                              <td className="px-3 py-2 text-slate-900 dark:text-white font-medium">{row.name}</td>
+                              <td className="px-3 py-2 text-right">{row.storyPointsCompleted}</td>
+                              <td className="px-3 py-2 text-right">{row.tasksCompleted}</td>
+                            </tr>
+                          )
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-600 dark:text-slate-300">
+                    No GitHub contributor activity linked to this sprint yet. Make sure sprint tasks are associated with GitHub push or PR events.
+                  </div>
                 )}
               </div>
 

@@ -15,7 +15,15 @@ import {
   YAxis,
 } from "recharts";
 
-type Sprint = { id: string; name: string; status: string };
+type Sprint = {
+  id: string;
+  name: string;
+  status: string;
+  plannedPoints?: number;
+  completedPoints?: number;
+  velocity?: number;
+  riskScore?: number;
+};
 
 type Velocity = { currentVelocity: number; requiredVelocity: number; gapPct: number; onTrack: boolean; daysRemaining: number };
 
@@ -70,6 +78,54 @@ type CapacityResp = { items: CapacityItem[]; totals?: { maxSprintCapacity: numbe
 
 type SprintsResp = { items?: Sprint[]; error?: string };
 
+type DeveloperActivitySummary = {
+  totalEvents: number;
+  commitCount: number;
+  pullRequestCount: number;
+  reviewCount: number;
+  issueCount: number;
+  pushCount: number;
+  additions: number;
+  deletions: number;
+  activeDays: number;
+  lastEventAt: string | null;
+};
+
+type DeveloperActivityEvent = {
+  id: string;
+  eventType: string;
+  repoName: string | null;
+  developerId: string | null;
+  developerName: string;
+  taskId: string | null;
+  taskTitle: string | null;
+  sprintId: string | null;
+  commitSha: string | null;
+  pullRequestNumber: number | null;
+  branchName: string | null;
+  additions: number;
+  deletions: number;
+  eventAt: string;
+};
+
+type DeveloperActivityByDeveloper = {
+  developerId: string | null;
+  developerName: string;
+  totalEvents: number;
+  commitCount: number;
+  pullRequestCount: number;
+  reviewCount: number;
+  additions: number;
+  deletions: number;
+  lastEventAt: string | null;
+};
+
+type DeveloperActivityResp = {
+  summary: DeveloperActivitySummary;
+  events: DeveloperActivityEvent[];
+  byDeveloper: DeveloperActivityByDeveloper[];
+};
+
 async function fetchJson<T>(url: string): Promise<{ ok: boolean; status: number; data: T | null }> {
   const resp = await fetch(url, { cache: "no-store" });
   const text = await resp.text().catch(() => "");
@@ -88,18 +144,76 @@ export default function MonitoringPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const [activeSprint, setActiveSprint] = useState<Sprint | null>(null);
+  const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [selectedSprintId, setSelectedSprintId] = useState<string | null>(null);
   const [velocity, setVelocity] = useState<Velocity | null>(null);
   const [alerts, setAlerts] = useState<AlertsResp | null>(null);
   const [burnout, setBurnout] = useState<BurnoutResp | null>(null);
   const [capacity, setCapacity] = useState<CapacityResp | null>(null);
   const [burndown, setBurndown] = useState<BurndownResp | null>(null);
+  const [sprintBurndowns, setSprintBurndowns] = useState<Record<string, BurndownResp>>({});
   const [risk, setRisk] = useState<RiskResp | null>(null);
+  const [developerFilter, setDeveloperFilter] = useState<string>("all");
+  const [developerActivity, setDeveloperActivity] = useState<DeveloperActivityResp | null>(null);
 
   const [severityFilter, setSeverityFilter] = useState<"all" | "critical" | "warning" | "info">("all");
 
   const [ackLoadingId, setAckLoadingId] = useState<string | null>(null);
 
+  const selectedSprint = useMemo(
+    () => sprints.find((item) => item.id === selectedSprintId) || null,
+    [sprints, selectedSprintId]
+  );
+
   const activeSprintId = useMemo(() => activeSprint?.id || null, [activeSprint]);
+
+  function fallbackBurndownFromSprint(sprint: Sprint): BurndownResp {
+    const planned = Math.max(0, Number(sprint.plannedPoints || 0));
+    const completed = Math.max(0, Number(sprint.completedPoints || 0));
+    const remaining = Math.max(0, planned - completed);
+
+    return {
+      items: [
+        { day: 1, idealRemaining: planned, actualRemaining: planned, date: "start" },
+        { day: 2, idealRemaining: remaining, actualRemaining: remaining, date: "current" },
+      ],
+    };
+  }
+
+  async function loadSelectedSprintData(sprintId: string | null) {
+    if (!sprintId) {
+      setVelocity(null);
+      setAlerts(null);
+      setBurndown(null);
+      setRisk(null);
+      return;
+    }
+
+    const [vResp, aResp, bResp, rResp] = await Promise.all([
+      fetchJson<Velocity>(`/api/monitoring/sprint/${encodeURIComponent(sprintId)}/velocity`),
+      fetchJson<AlertsResp>(`/api/monitoring/sprint/${encodeURIComponent(sprintId)}/alerts?acknowledged=false`),
+      fetchJson<BurndownResp>(`/api/sprints/${encodeURIComponent(sprintId)}/burndown`),
+      fetchJson<RiskResp>(`/api/sprints/${encodeURIComponent(sprintId)}/risk`),
+    ]);
+
+    setVelocity(vResp.ok ? vResp.data : null);
+    setAlerts(aResp.ok ? aResp.data : null);
+    setBurndown(bResp.ok ? bResp.data : null);
+    setRisk(rResp.ok ? rResp.data : null);
+  }
+
+  async function loadDeveloperActivity(sprintId: string | null, nextDeveloperFilter?: string) {
+    const query = new URLSearchParams();
+    if (sprintId) query.set("sprintId", sprintId);
+
+    const filterValue = nextDeveloperFilter ?? developerFilter;
+    if (filterValue && filterValue !== "all") {
+      query.set("developerId", filterValue);
+    }
+
+    const resp = await fetchJson<DeveloperActivityResp>(`/api/monitoring/developer-activity?${query.toString()}`);
+    setDeveloperActivity(resp.ok ? resp.data : null);
+  }
 
   const filteredAlerts = useMemo(() => {
     const items = Array.isArray(alerts?.items) ? alerts!.items : [];
@@ -127,14 +241,24 @@ export default function MonitoringPage() {
     return "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200";
   }
 
-  async function load() {
+  async function load(preferredSprintId?: string) {
     setLoading(true);
     setError(null);
     setNotice(null);
 
-    const sprintsResp = await fetchJson<SprintsResp>("/api/sprints?status=active");
-    const sprint = Array.isArray(sprintsResp.data?.items) ? sprintsResp.data!.items[0] || null : null;
+    const sprintsResp = await fetchJson<SprintsResp>('/api/sprints');
+    const sprintItems = Array.isArray(sprintsResp.data?.items) ? sprintsResp.data!.items : [];
+    const sprint = sprintItems.find((item) => String(item.status || '').toLowerCase() === 'active') || sprintItems[0] || null;
+    setSprints(sprintItems);
     setActiveSprint(sprint);
+
+    const requested = preferredSprintId || selectedSprintId;
+    const selected =
+      (requested ? sprintItems.find((item) => item.id === requested) : null) ||
+      sprint ||
+      sprintItems[0] ||
+      null;
+    setSelectedSprintId(selected?.id || null);
 
     const [burnoutResp, capacityResp] = await Promise.all([
       fetchJson<BurnoutResp>("/api/monitoring/burnout"),
@@ -144,27 +268,26 @@ export default function MonitoringPage() {
     setBurnout(burnoutResp.ok ? burnoutResp.data : null);
     setCapacity(capacityResp.ok ? capacityResp.data : null);
 
-    if (sprint?.id) {
-      const [vResp, aResp, bResp, rResp] = await Promise.all([
-        fetchJson<Velocity>(`/api/monitoring/sprint/${encodeURIComponent(sprint.id)}/velocity`),
-        fetchJson<AlertsResp>(`/api/monitoring/sprint/${encodeURIComponent(sprint.id)}/alerts?acknowledged=false`),
-        fetchJson<BurndownResp>(`/api/sprints/${encodeURIComponent(sprint.id)}/burndown`),
-        fetchJson<RiskResp>(`/api/sprints/${encodeURIComponent(sprint.id)}/risk`),
-      ]);
+    await Promise.all([
+      loadSelectedSprintData(selected?.id || null),
+      loadDeveloperActivity(selected?.id || null),
+    ]);
 
-      setVelocity(vResp.ok ? vResp.data : null);
-      setAlerts(aResp.ok ? aResp.data : null);
-      setBurndown(bResp.ok ? bResp.data : null);
-      setRisk(rResp.ok ? rResp.data : null);
+    if (sprintItems.length) {
+      const entries = await Promise.all(
+        sprintItems.map(async (item) => {
+          const resp = await fetchJson<BurndownResp>(`/api/sprints/${encodeURIComponent(item.id)}/burndown`);
+          const payload = resp.ok ? resp.data || { items: [] } : { items: [] };
+          return [item.id, payload.items?.length ? payload : fallbackBurndownFromSprint(item)] as const;
+        })
+      );
+      setSprintBurndowns(Object.fromEntries(entries));
     } else {
-      setVelocity(null);
-      setAlerts(null);
-      setBurndown(null);
-      setRisk(null);
+      setSprintBurndowns({});
     }
 
     if (!sprintsResp.ok) {
-      setError(sprintsResp.data?.error || `Failed to load active sprint (${sprintsResp.status})`);
+      setError(sprintsResp.data?.error || `Failed to load sprint data (${sprintsResp.status})`);
     }
 
     setLoading(false);
@@ -185,11 +308,38 @@ export default function MonitoringPage() {
       const data = await resp.json().catch(() => null);
       if (!resp.ok) throw new Error(String(data?.error || `Failed to acknowledge (${resp.status})`));
       setNotice("Alert acknowledged.");
-      await load();
+      await load(selectedSprintId || undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to acknowledge alert");
     } finally {
       setAckLoadingId(null);
+    }
+  }
+
+  async function onSprintSwitch(nextSprintId: string) {
+    setSelectedSprintId(nextSprintId);
+    setError(null);
+    setNotice(null);
+    setLoading(true);
+    try {
+      await Promise.all([
+        loadSelectedSprintData(nextSprintId),
+        loadDeveloperActivity(nextSprintId),
+      ]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load sprint details");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onDeveloperFilterChange(nextDeveloperId: string) {
+    setDeveloperFilter(nextDeveloperId);
+    setError(null);
+    try {
+      await loadDeveloperActivity(selectedSprintId, nextDeveloperId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load developer activity");
     }
   }
 
@@ -207,13 +357,31 @@ export default function MonitoringPage() {
             <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Monitoring</h1>
             <p className="text-slate-600 dark:text-slate-300">Velocity, alerts, and burnout indicators.</p>
           </div>
-          <button
-            onClick={load}
-            disabled={loading}
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm font-semibold text-slate-900 dark:text-white disabled:opacity-60"
-          >
-            <RefreshCw className="w-4 h-4" /> Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedSprintId || ""}
+              onChange={(e) => void onSprintSwitch(e.target.value)}
+              className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm font-semibold text-slate-900 dark:text-white"
+              disabled={loading || !sprints.length}
+            >
+              {sprints.length ? (
+                sprints.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} ({item.status})
+                  </option>
+                ))
+              ) : (
+                <option value="">No sprints</option>
+              )}
+            </select>
+            <button
+              onClick={() => void load(selectedSprintId || undefined)}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm font-semibold text-slate-900 dark:text-white disabled:opacity-60"
+            >
+              <RefreshCw className="w-4 h-4" /> Refresh
+            </button>
+          </div>
         </div>
 
         {error ? (
@@ -233,9 +401,14 @@ export default function MonitoringPage() {
         ) : (
           <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
             <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-              <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Active sprint</div>
-              <div className="mt-2 text-slate-900 dark:text-white font-bold">{activeSprint?.name || "None"}</div>
-              {activeSprintId ? <div className="mt-1 text-xs text-slate-500">{activeSprintId}</div> : null}
+              <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Selected sprint</div>
+              <div className="mt-2 text-slate-900 dark:text-white font-bold">{selectedSprint?.name || "None"}</div>
+              {selectedSprintId ? <div className="mt-1 text-xs text-slate-500">{selectedSprintId}</div> : null}
+              {activeSprintId && activeSprintId === selectedSprintId ? (
+                <div className="mt-2 inline-flex rounded-md bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">
+                  Active Sprint
+                </div>
+              ) : null}
             </div>
 
             <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
@@ -281,13 +454,6 @@ export default function MonitoringPage() {
           </div>
         )}
 
-        <div className="mt-6 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
-          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Monitoring Coverage</h2>
-          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-            This page tracks sprint execution health for Scrum Master actions: velocity versus required pace, burndown drift, unresolved alerts, burnout risk, and team capacity pressure.
-          </p>
-        </div>
-
         <div className="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-4">
           <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
             <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Burndown Trend</div>
@@ -326,6 +492,157 @@ export default function MonitoringPage() {
             ) : (
               <div className="text-sm text-slate-600 dark:text-slate-300">Capacity data unavailable.</div>
             )}
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Sprint Burndown Overview</div>
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">One burndown graph per sprint is shown below.</div>
+            </div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">Total sprints: {sprints.length}</div>
+          </div>
+
+          {sprints.length ? (
+            <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {sprints.map((item) => {
+                const chart = sprintBurndowns[item.id]?.items || [];
+                const isActive = String(item.status || '').toLowerCase() === 'active';
+                return (
+                  <div key={item.id} className={`rounded-lg border p-4 ${isActive ? 'border-sky-300 dark:border-sky-800 bg-sky-50/40 dark:bg-sky-950/20' : 'border-slate-200 dark:border-zinc-800 bg-slate-50/40 dark:bg-black/20'}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-slate-900 dark:text-white">{item.name}</div>
+                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Sprint {item.id}</div>
+                      </div>
+                      <span className="rounded-md border border-slate-200 dark:border-zinc-800 px-2 py-1 text-xs font-semibold text-slate-700 dark:text-slate-200 capitalize">
+                        {item.status}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 text-xs text-slate-600 dark:text-slate-300">
+                      Planned {item.plannedPoints ?? 0} · Completed {item.completedPoints ?? 0} · Velocity {item.velocity ?? 0} · Risk {item.riskScore ?? 0}
+                    </div>
+
+                    {chart.length ? (
+                      <div className="mt-4 h-52">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={chart}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="day" />
+                            <YAxis />
+                            <Tooltip />
+                            <Line type="monotone" dataKey="idealRemaining" stroke="#64748b" strokeWidth={2} name="Ideal Remaining" />
+                            <Line type="monotone" dataKey="actualRemaining" stroke="#0f766e" strokeWidth={2} name="Actual Remaining" />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : (
+                      <div className="mt-4 text-sm text-slate-600 dark:text-slate-300">No burndown snapshots yet.</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="mt-3 text-sm text-slate-600 dark:text-slate-300">No sprints found for this organization.</div>
+          )}
+        </div>
+
+        <div className="mt-6 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Developer Engineering Activity</div>
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Commit, PR, review, push and code churn signals for the selected sprint.</div>
+            </div>
+            <select
+              value={developerFilter}
+              onChange={(e) => void onDeveloperFilterChange(e.target.value)}
+              className="rounded-md border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2 py-1 text-xs text-slate-700 dark:text-slate-200"
+              disabled={!capacity?.items?.length}
+            >
+              <option value="all">All Developers</option>
+              {(capacity?.items || [])
+                .filter((d) => Boolean(d.developerId))
+                .map((d) => (
+                  <option key={d.developerId} value={d.developerId}>
+                    {d.name}
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 md:grid-cols-5 xl:grid-cols-10 gap-3">
+            <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Events</div><div className="font-semibold text-slate-900 dark:text-white">{developerActivity?.summary.totalEvents ?? 0}</div></div>
+            <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Commits</div><div className="font-semibold text-slate-900 dark:text-white">{developerActivity?.summary.commitCount ?? 0}</div></div>
+            <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">PRs</div><div className="font-semibold text-slate-900 dark:text-white">{developerActivity?.summary.pullRequestCount ?? 0}</div></div>
+            <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Reviews</div><div className="font-semibold text-slate-900 dark:text-white">{developerActivity?.summary.reviewCount ?? 0}</div></div>
+            <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Issues</div><div className="font-semibold text-slate-900 dark:text-white">{developerActivity?.summary.issueCount ?? 0}</div></div>
+            <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Pushes</div><div className="font-semibold text-slate-900 dark:text-white">{developerActivity?.summary.pushCount ?? 0}</div></div>
+            <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Additions</div><div className="font-semibold text-slate-900 dark:text-white">{developerActivity?.summary.additions ?? 0}</div></div>
+            <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Deletions</div><div className="font-semibold text-slate-900 dark:text-white">{developerActivity?.summary.deletions ?? 0}</div></div>
+            <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Active Days</div><div className="font-semibold text-slate-900 dark:text-white">{developerActivity?.summary.activeDays ?? 0}</div></div>
+            <div className="rounded-md border border-slate-200 dark:border-zinc-800 px-3 py-2"><div className="text-xs text-slate-500">Last Event</div><div className="font-semibold text-slate-900 dark:text-white">{developerActivity?.summary.lastEventAt ? new Date(developerActivity.summary.lastEventAt).toLocaleDateString() : "-"}</div></div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div className="rounded-lg border border-slate-200 dark:border-zinc-800 p-4">
+              <div className="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-2">Activity By Developer</div>
+              {developerActivity?.byDeveloper?.length ? (
+                <div className="overflow-auto rounded-md border border-slate-200 dark:border-zinc-800">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 dark:bg-black/40">
+                      <tr>
+                        <th className="text-left px-3 py-2">Developer</th>
+                        <th className="text-right px-3 py-2">Events</th>
+                        <th className="text-right px-3 py-2">Commits</th>
+                        <th className="text-right px-3 py-2">PRs</th>
+                        <th className="text-right px-3 py-2">Reviews</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {developerActivity.byDeveloper.map((row) => (
+                        <tr key={`${row.developerId || row.developerName}-${row.totalEvents}`} className="border-t border-slate-200 dark:border-zinc-800">
+                          <td className="px-3 py-2 text-slate-900 dark:text-white font-medium">{row.developerName}</td>
+                          <td className="px-3 py-2 text-right">{row.totalEvents}</td>
+                          <td className="px-3 py-2 text-right">{row.commitCount}</td>
+                          <td className="px-3 py-2 text-right">{row.pullRequestCount}</td>
+                          <td className="px-3 py-2 text-right">{row.reviewCount}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="text-sm text-slate-600 dark:text-slate-300">No developer activity recorded for this sprint.</div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-slate-200 dark:border-zinc-800 p-4">
+              <div className="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-2">Recent Commit and GitHub Events</div>
+              {developerActivity?.events?.length ? (
+                <div className="space-y-2 max-h-72 overflow-auto">
+                  {developerActivity.events.slice(0, 20).map((event) => (
+                    <div key={event.id} className="rounded-md border border-slate-200 dark:border-zinc-800 p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-semibold text-slate-900 dark:text-white">{event.eventType}</div>
+                        <div className="text-xs text-slate-500">{new Date(event.eventAt).toLocaleString()}</div>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">{event.developerName} · {event.repoName || "repo-n/a"} · {event.branchName || "branch-n/a"}</div>
+                      <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                        {event.commitSha ? `Commit ${event.commitSha.slice(0, 8)}` : ""}
+                        {event.pullRequestNumber ? ` PR #${event.pullRequestNumber}` : ""}
+                        {event.taskTitle ? ` · ${event.taskTitle}` : ""}
+                        {` · +${event.additions} / -${event.deletions}`}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-slate-600 dark:text-slate-300">No GitHub events available for this filter.</div>
+              )}
+            </div>
           </div>
         </div>
 

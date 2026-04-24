@@ -833,6 +833,63 @@ class AuthService {
       membershipsResp = { rows: [] };
     }
 
+    let developerProfile = null;
+    if (orgId) {
+      try {
+        const orgResp = await db.universalPool.query(
+          'SELECT db_connection_string FROM organizations WHERE id = $1 LIMIT 1',
+          [String(orgId)]
+        );
+        const connectionString = String(orgResp.rows[0]?.db_connection_string || '').trim();
+        if (connectionString) {
+          const orgPool = poolFromConnectionString(connectionString);
+          try {
+            const profileResp = await orgPool.query(
+              `SELECT
+                 dp.id,
+                 dp.tech_stack,
+                 dp.skill_levels,
+                 dp.primary_role,
+                 dp.current_sprint_load,
+                 dp.max_sprint_capacity,
+                 dp.availability_status,
+                 dp.years_experience,
+                 tm.id AS member_id,
+                 tm.full_name,
+                 tm.email,
+                 tm.role AS member_role
+               FROM team_members tm
+               JOIN developer_profiles dp ON dp.member_id = tm.id
+               WHERE tm.global_user_id = $1
+               LIMIT 1`,
+              [String(userId)]
+            );
+            const profile = profileResp.rows[0] || null;
+            if (profile) {
+              developerProfile = {
+                id: profile.id,
+                memberId: profile.member_id,
+                fullName: profile.full_name,
+                email: profile.email,
+                memberRole: profile.member_role,
+                techStack: Array.isArray(profile.tech_stack) ? profile.tech_stack : [],
+                skillLevels: profile.skill_levels && typeof profile.skill_levels === 'object' ? profile.skill_levels : {},
+                primaryRole: profile.primary_role || null,
+                currentSprintLoad: Number(profile.current_sprint_load || 0),
+                maxSprintCapacity: Number(profile.max_sprint_capacity || 0),
+                availabilityStatus: profile.availability_status || null,
+                yearsExperience: Number(profile.years_experience || 0),
+              };
+            }
+          } finally {
+            await orgPool.end();
+          }
+        }
+      } catch {
+        developerProfile = null;
+      }
+    }
+
     return {
       user: {
         id: user.id,
@@ -843,6 +900,7 @@ class AuthService {
       },
       tenantProvisioningMode: env.TENANT_DB_PROVISIONING_MODE,
       activeOrgId: orgId || null,
+      developerProfile,
       memberships: membershipsResp.rows.map((m) => ({
         org: { id: m.org_id, name: m.org_name, slug: m.org_slug },
         role: m.role,

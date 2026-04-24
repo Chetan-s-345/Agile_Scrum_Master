@@ -44,6 +44,19 @@ function normalizePriority(p) {
   return 0;
 }
 
+async function refreshDeveloperHealth(orgPool, developerId, sprintId) {
+  if (!developerId) return;
+
+  try {
+    if (sprintId) {
+      await orgPool.query('SELECT calculate_merit_score($1, $2)', [String(developerId), String(sprintId)]);
+    }
+    await orgPool.query('SELECT check_burnout_risk($1)', [String(developerId)]);
+  } catch {
+    // Best-effort only.
+  }
+}
+
 const { queueJiraTaskSync } = require('./jiraSync.service');
 
 class AssignmentService {
@@ -247,6 +260,8 @@ class AssignmentService {
       throw e;
     }
 
+    await refreshDeveloperHealth(orgPool, winner.developer.id, sprintId);
+
     // Best-effort Jira sync trigger (if integration active)
     await queueJiraTaskSync(req, {
       taskId: String(taskId),
@@ -324,6 +339,11 @@ class AssignmentService {
         // ignore
       }
       throw e;
+    }
+
+    await refreshDeveloperHealth(orgPool, newAssignee, sprintId);
+    if (oldAssignee && oldAssignee !== newAssignee) {
+      await refreshDeveloperHealth(orgPool, oldAssignee, sprintId);
     }
 
     // Best-effort Jira sync trigger (if integration active)
