@@ -75,6 +75,8 @@ type SpacesResp = { spaces?: Space[]; archived?: Space[] };
 
 const mainLinks: LinkItem[] = [
   { label: "Overview", href: "/board", icon: UserRound },
+  { label: "Tasks", href: "/tasks", icon: Filter },
+  { label: "Sprint Planner", href: "/sprint-plan", icon: Workflow },
   { label: "Recent", href: "/sprints", icon: ChevronRight },
   { label: "Starred", href: "/reports", icon: Star },
 ];
@@ -89,7 +91,6 @@ const appPages: LinkItem[] = [
 ];
 
 const bottomLinks: LinkItem[] = [
-  { label: "Filters", href: "/tasks", icon: Filter },
   { label: "Meetings", href: "/meetings/daily", icon: CalendarDays },
   { label: "Goals", href: "/goals", icon: Flag },
   { label: "Teams", href: "/teams", icon: Users },

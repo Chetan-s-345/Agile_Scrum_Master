@@ -9,7 +9,6 @@ const tabs = [
   { label: "Board", href: "/board" },
   { label: "Code", href: "/board/code" },
   { label: "Timeline", href: "/board/timeline" },
-  { label: "Pages", href: "/board/pages" },
   { label: "Forms", href: "/board/forms" },
 ];
 

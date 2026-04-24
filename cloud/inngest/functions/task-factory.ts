@@ -272,19 +272,27 @@ async function logAction(
 
 async function trackRun(orgPool: Pool, agentName: string, status: string, nextRun?: string): Promise<void> {
   await ensureAgentRunsTable(orgPool);
-  await orgPool.query(
-    `INSERT INTO agent_runs (agent_name, last_run, next_run, last_status, actions_today)
-     VALUES ($1, NOW(), $2::timestamptz, $3, 1)
-     ON CONFLICT (agent_name) DO UPDATE
+
+  const updateResp = await orgPool.query(
+    `UPDATE agent_runs
      SET last_run = NOW(),
-         next_run = COALESCE(EXCLUDED.next_run, agent_runs.next_run),
-         last_status = EXCLUDED.last_status,
+         next_run = COALESCE($2::timestamptz, next_run),
+         last_status = $3,
          actions_today = CASE
-           WHEN DATE(agent_runs.last_run) = CURRENT_DATE THEN COALESCE(agent_runs.actions_today, 0) + 1
+           WHEN DATE(last_run) = CURRENT_DATE THEN COALESCE(actions_today, 0) + 1
            ELSE 1
-         END`,
+         END
+     WHERE agent_name = $1`,
     [agentName, nextRun || null, status]
   );
+
+  if (!updateResp.rowCount) {
+    await orgPool.query(
+      `INSERT INTO agent_runs (agent_name, last_run, next_run, last_status, actions_today)
+       VALUES ($1, NOW(), $2::timestamptz, $3, 1)`,
+      [agentName, nextRun || null, status]
+    );
+  }
 }
 
 function classifyPriority(title: string, body: string, labels: string[]): string {

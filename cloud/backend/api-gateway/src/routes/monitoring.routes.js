@@ -262,4 +262,162 @@ router.get('/capacity', async (req, res, next) => {
   }
 });
 
+router.get('/developer-activity', async (req, res, next) => {
+  try {
+    const orgPool = req.orgDb;
+    const sprintId = String(req.query.sprintId || '').trim();
+    const developerId = String(req.query.developerId || '').trim();
+    const limit = Math.min(200, Math.max(10, Number(req.query.limit || 50)));
+
+    const hasGithubEventsResp = await orgPool.query(`SELECT to_regclass('github_events') AS name`);
+    const hasGithubEvents = Boolean(hasGithubEventsResp.rows[0]?.name);
+    if (!hasGithubEvents) {
+      return res.status(200).json({
+        summary: {
+          totalEvents: 0,
+          commitCount: 0,
+          pullRequestCount: 0,
+          reviewCount: 0,
+          issueCount: 0,
+          pushCount: 0,
+          additions: 0,
+          deletions: 0,
+          activeDays: 0,
+          lastEventAt: null,
+        },
+        events: [],
+        byDeveloper: [],
+      });
+    }
+
+    const where = [];
+    const params = [];
+    const addFilter = (expr, value) => {
+      params.push(value);
+      where.push(expr.replace('?', `$${params.length}`));
+    };
+
+    if (sprintId) addFilter('t.sprint_id = ?', sprintId);
+    if (developerId) addFilter('ge.developer_id = ?', developerId);
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const summaryResp = await orgPool.query(
+      `SELECT
+         COUNT(*)::int AS total_events,
+         COUNT(*) FILTER (WHERE ge.github_commit_sha IS NOT NULL OR ge.event_type IN ('commit'))::int AS commit_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('pull_request', 'pull_request_opened', 'pull_request_closed', 'pr_opened', 'pr_merged'))::int AS pull_request_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('review', 'pull_request_review'))::int AS review_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('issue', 'issues'))::int AS issue_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('push'))::int AS push_count,
+         COALESCE(SUM(ge.additions), 0)::int AS additions,
+         COALESCE(SUM(ge.deletions), 0)::int AS deletions,
+         COUNT(DISTINCT ge.event_at::date)::int AS active_days,
+         MAX(ge.event_at) AS last_event_at
+       FROM github_events ge
+       LEFT JOIN tasks t ON t.id = ge.task_id
+       ${whereSql}`,
+      params
+    );
+
+    params.push(limit);
+    const eventsResp = await orgPool.query(
+      `SELECT
+         ge.id,
+         ge.event_type,
+         ge.repo_name,
+         ge.github_commit_sha,
+         ge.github_pr_number,
+         ge.branch_name,
+         ge.additions,
+         ge.deletions,
+         ge.event_at,
+         t.id AS task_id,
+         t.title AS task_title,
+         t.sprint_id,
+         tm.full_name AS developer_name,
+         dp.id AS developer_id
+       FROM github_events ge
+       LEFT JOIN tasks t ON t.id = ge.task_id
+       LEFT JOIN developer_profiles dp ON dp.id = ge.developer_id
+       LEFT JOIN team_members tm ON tm.id = dp.member_id
+       ${whereSql}
+       ORDER BY ge.event_at DESC
+       LIMIT $${params.length}`,
+      params
+    );
+
+    const byDevResp = await orgPool.query(
+      `SELECT
+         COALESCE(tm.full_name, 'Unknown') AS developer_name,
+         dp.id AS developer_id,
+         COUNT(*)::int AS total_events,
+         COUNT(*) FILTER (WHERE ge.github_commit_sha IS NOT NULL OR ge.event_type IN ('commit'))::int AS commit_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('pull_request', 'pull_request_opened', 'pull_request_closed', 'pr_opened', 'pr_merged'))::int AS pull_request_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('review', 'pull_request_review'))::int AS review_count,
+         COALESCE(SUM(ge.additions), 0)::int AS additions,
+         COALESCE(SUM(ge.deletions), 0)::int AS deletions,
+         MAX(ge.event_at) AS last_event_at
+       FROM github_events ge
+       LEFT JOIN tasks t ON t.id = ge.task_id
+       LEFT JOIN developer_profiles dp ON dp.id = ge.developer_id
+       LEFT JOIN team_members tm ON tm.id = dp.member_id
+       ${whereSql}
+       GROUP BY COALESCE(tm.full_name, 'Unknown'), dp.id
+       ORDER BY total_events DESC, commit_count DESC
+       LIMIT 30`,
+      params.slice(0, where.length)
+    );
+
+    const summary = summaryResp.rows[0] || {};
+    const events = (eventsResp.rows || []).map((r) => ({
+      id: r.id,
+      eventType: r.event_type,
+      repoName: r.repo_name || null,
+      developerId: r.developer_id || null,
+      developerName: r.developer_name || 'Unknown',
+      taskId: r.task_id || null,
+      taskTitle: r.task_title || null,
+      sprintId: r.sprint_id || null,
+      commitSha: r.github_commit_sha || null,
+      pullRequestNumber: r.github_pr_number || null,
+      branchName: r.branch_name || null,
+      additions: Number(r.additions || 0),
+      deletions: Number(r.deletions || 0),
+      eventAt: r.event_at,
+    }));
+
+    const byDeveloper = (byDevResp.rows || []).map((r) => ({
+      developerId: r.developer_id || null,
+      developerName: r.developer_name,
+      totalEvents: Number(r.total_events || 0),
+      commitCount: Number(r.commit_count || 0),
+      pullRequestCount: Number(r.pull_request_count || 0),
+      reviewCount: Number(r.review_count || 0),
+      additions: Number(r.additions || 0),
+      deletions: Number(r.deletions || 0),
+      lastEventAt: r.last_event_at || null,
+    }));
+
+    return res.status(200).json({
+      summary: {
+        totalEvents: Number(summary.total_events || 0),
+        commitCount: Number(summary.commit_count || 0),
+        pullRequestCount: Number(summary.pull_request_count || 0),
+        reviewCount: Number(summary.review_count || 0),
+        issueCount: Number(summary.issue_count || 0),
+        pushCount: Number(summary.push_count || 0),
+        additions: Number(summary.additions || 0),
+        deletions: Number(summary.deletions || 0),
+        activeDays: Number(summary.active_days || 0),
+        lastEventAt: summary.last_event_at || null,
+      },
+      events,
+      byDeveloper,
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 module.exports = router;

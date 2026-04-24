@@ -3,6 +3,8 @@ const http = require('node:http');
 
 // Always load backend/api-gateway/.env regardless of launch cwd.
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+// Fall back to the workspace root .env so shared keys like INNGEST_EVENT_KEY are visible here too.
+require('dotenv').config({ path: path.resolve(__dirname, '../../../.env') });
 // Keep cwd .env as a secondary source (without overriding existing keys).
 require('dotenv').config();
 
