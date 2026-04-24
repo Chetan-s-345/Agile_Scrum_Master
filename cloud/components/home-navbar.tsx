@@ -54,7 +54,6 @@ export function HomeNavbar() {
   const links = [
     { label: "Features", href: "/features" },
     { label: "Pricing", href: "/pricing" },
-    { label: "Changelog", href: "/changelog" },
     { label: "Docs", href: "/solution" },
   ];
 

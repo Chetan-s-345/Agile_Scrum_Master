@@ -22,7 +22,7 @@ function getGatewayBaseUrl() {
       "http://localhost:4000"
   );
 
-  return candidate.replace(/\/+$/, "");
+  return candidate.replace(/\/+$/, "").replace(/\/api(?:\/v1)?$/i, "");
 }
 
 function getGatewayToken() {
@@ -63,19 +63,39 @@ async function gatewayRequest(method, pathname, options = {}) {
   const url = `${getGatewayBaseUrl()}${pathWithQuery}`;
   const token = getGatewayToken();
 
-  const response = await fetch(url, {
-    method: normalizedMethod,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body:
-      normalizedMethod === "GET" || normalizedMethod === "DELETE"
-        ? undefined
-        : JSON.stringify(options.body === undefined ? {} : options.body),
-    cache: "no-store",
-  });
+  const timeoutMs = 30000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: normalizedMethod,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body:
+        normalizedMethod === "GET" || normalizedMethod === "DELETE"
+          ? undefined
+          : JSON.stringify(options.body === undefined ? {} : options.body),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    const detail = String(error instanceof Error ? error.message : error).trim();
+    const timedOut = detail.toLowerCase().includes("abort") || detail.toLowerCase().includes("timeout");
+    throw new GatewayError(
+      timedOut
+        ? `Gateway timeout after ${Math.round(timeoutMs / 1000)}s. Check API gateway availability at ${getGatewayBaseUrl()}.`
+        : `Unable to reach API gateway at ${getGatewayBaseUrl()}. ${detail}`,
+      timedOut ? 504 : 502,
+      { url, detail }
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const payload = await response.json().catch(() => null);
   if (!response.ok) {

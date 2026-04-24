@@ -4,7 +4,7 @@ const docs = [
   {
     title: "Getting Started",
     description: "Account setup, first project, first sprint, and team onboarding.",
-    href: "/changelog",
+    href: "/solution",
     note: "Read the full guide in docs/product/getting-started.md",
   },
   {
@@ -30,12 +30,6 @@ const docs = [
     description: "Fixes for common integration, workflow, and UI issues.",
     href: "/monitoring",
     note: "Read the full guide in docs/product/troubleshooting.md",
-  },
-  {
-    title: "Changelog",
-    description: "Release notes and newly shipped capabilities.",
-    href: "/changelog",
-    note: "Read the full guide in docs/product/changelog.md",
   },
 ];
 
