@@ -24,8 +24,15 @@ function startPostMeetingWorker() {
       const orgId = String(job.data?.orgId || '').trim() || null;
       return processPostMeetingJob({ orgId, meetingId });
     },
-    { connection, concurrency: 3 }
+    { connection, concurrency: 2 }
   );
+
+  _worker.on('active', (job) => {
+    logger.info(
+      { jobId: job.id, jobName: job.name, instance: process.env.RENDER_INSTANCE_NAME },
+      `[${process.env.RENDER_INSTANCE_NAME}] Processing post-meeting job`
+    );
+  });
 
   _worker.on('completed', (job, result) => {
     logger.info({ jobId: job.id, result }, 'post-meeting job completed');

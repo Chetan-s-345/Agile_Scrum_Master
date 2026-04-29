@@ -672,6 +672,13 @@ function startJiraSyncWorker() {
     }
   );
 
+  _worker.on('active', (job) => {
+    logger.info(
+      { jobId: job.id, jobName: job.name, instance: process.env.RENDER_INSTANCE_NAME },
+      `[${process.env.RENDER_INSTANCE_NAME}] Processing jira-sync job`
+    );
+  });
+
   _worker.on('completed', (job) => {
     logger.info({ jobId: job.id, jobName: job.name }, 'jira-sync job completed');
   });

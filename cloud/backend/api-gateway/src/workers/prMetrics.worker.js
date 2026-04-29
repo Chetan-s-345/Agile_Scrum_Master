@@ -25,6 +25,13 @@ function startPrMetricsWorker() {
     { connection, concurrency: 1 }
   );
 
+  _worker.on('active', (job) => {
+    logger.info(
+      { jobId: job.id, jobName: job.name, instance: process.env.RENDER_INSTANCE_NAME },
+      `[${process.env.RENDER_INSTANCE_NAME}] Processing pr-metrics job`
+    );
+  });
+
   _worker.on('completed', (job) => {
     logger.info({ jobId: job.id, jobName: job.name }, 'pr-metrics job completed');
   });
