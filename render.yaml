@@ -5,9 +5,9 @@ services:
     plan: free
     ipAllowList: []
 
-  # Web service instance 1: API gateway (Node.js) - Load Balanced Instance 1.
+  # Web service instance 1: API gateway (Node.js).
   - type: web
-    name: sprint-gateway-1
+    name: asm-api-gateway
     runtime: node
     rootDir: cloud/backend/api-gateway
     plan: free
@@ -60,9 +60,9 @@ services:
       - key: JIRA_CLIENT_SECRET
         sync: false
 
-  # Web service instance 2: API gateway (Node.js) - Load Balanced Instance 2.
+  # Web service instance 2: API gateway clone (Node.js).
   - type: web
-    name: sprint-gateway-2
+    name: asm-api-gateway-2
     runtime: node
     rootDir: cloud/backend/api-gateway
     plan: free
