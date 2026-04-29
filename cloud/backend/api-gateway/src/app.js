@@ -13,6 +13,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const { Server } = require('socket.io');
+const { v4: uuidv4 } = require('uuid');
+const { createAdapter } = require('@socket.io/redis-adapter');
 
 const { env } = require('./config/env');
 const { logger, morganStream } = require('./middleware/logger');
@@ -63,6 +65,19 @@ const io = new Server(server, {
   },
 });
 
+// Configure Socket.IO Redis adapter for cross-instance communication
+(async () => {
+  const { getRedis } = require('./services/queue.service');
+  try {
+    const pubClient = getRedis();
+    const subClient = pubClient.duplicate();
+    io.adapter(createAdapter(pubClient, subClient));
+    logger.info('Socket.IO Redis adapter configured');
+  } catch (err) {
+    logger.error({ err }, 'Failed to configure Socket.IO Redis adapter');
+  }
+})();
+
 setIo(io);
 
 io.on('connection', (socket) => {
@@ -104,6 +119,14 @@ app.use(
   })
 );
 
+// Add request ID tracing middleware
+app.use((req, res, next) => {
+  req.requestId = req.headers['x-request-id'] || uuidv4();
+  res.setHeader('x-request-id', req.requestId);
+  res.setHeader('x-served-by', process.env.RENDER_INSTANCE_NAME || 'unknown');
+  next();
+});
+
 // Important: webhook signature verification requires access to the raw request body.
 // So we skip global JSON parsing for /api/v1/webhooks and parse bodies per webhook route.
 const jsonParser = express.json({ limit: '1mb' });
@@ -113,8 +136,17 @@ app.use((req, res, next) => {
 });
 app.use(morgan('combined', { stream: morganStream }));
 
+// Health check endpoint - must respond fast and not require authentication
 app.get('/health', (req, res) => {
-  res.status(200).json({ ok: true, service: 'api-gateway' });
+  const { getRedis } = require('./services/queue.service');
+  const redisClient = getRedis();
+  res.json({
+    status: 'ok',
+    instance: process.env.RENDER_INSTANCE_NAME || 'unknown',
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    redis: redisClient.status === 'ready' ? 'connected' : 'disconnected',
+  });
 });
 
 app.use('/api/v1/auth', authRoutes);

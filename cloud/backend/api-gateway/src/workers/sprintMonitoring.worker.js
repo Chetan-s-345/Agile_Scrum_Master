@@ -27,6 +27,13 @@ function startSprintMonitoringWorker() {
     }
   );
 
+  _worker.on('active', (job) => {
+    logger.info(
+      { jobId: job.id, jobName: job.name, instance: process.env.RENDER_INSTANCE_NAME },
+      `[${process.env.RENDER_INSTANCE_NAME}] Processing sprint-monitoring job`
+    );
+  });
+
   _worker.on('completed', (job) => {
     logger.info({ jobId: job.id, jobName: job.name }, 'sprint-monitoring job completed');
   });
