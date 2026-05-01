@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { Plus, Save, ShieldCheck, Sparkles, Trash2, User } from "lucide-react";
+import { Plus, Save, Trash2, User } from "lucide-react";
 import { getMe, type MeResponse } from "@/lib/org-member-auth";
 
 type DeveloperProfile = NonNullable<MeResponse["developerProfile"]>;
