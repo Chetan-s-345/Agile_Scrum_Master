@@ -347,7 +347,7 @@ export default function MonitoringPage() {
     (async () => {
       await load();
     })();
-  }, []);
+  }, [load]);
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">

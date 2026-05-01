@@ -426,7 +426,7 @@ export default function ReportsPage() {
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   useEffect(() => {
     if (hasReportRows) return;
