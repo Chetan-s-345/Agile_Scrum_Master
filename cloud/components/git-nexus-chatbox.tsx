@@ -66,7 +66,7 @@ export function GitNexusChatBox({ projectId, analysisResult }: { projectId: stri
     const question = draft.trim();
     if (!projectId.trim() || !question || sending) return;
 
-    const nextMessages = [...messages, { role: "user", content: question }];
+    const nextMessages = [...messages, { role: "user" as const, content: question }];
     setMessages(nextMessages);
     setDraft("");
     setSending(true);

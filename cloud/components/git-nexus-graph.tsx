@@ -189,7 +189,6 @@ function buildTreeGraph(result: NexusAnalysisResult | null): { nodes: GraphNode[
   enqueue("/", 0);
 
   // place nodes
-  const totalDepth = Math.max(1, levels.length);
   levels.forEach((levelNodes, depth) => {
     const step = 92 / Math.max(1, levelNodes.length);
     levelNodes.forEach((nodeName, idx) => {
@@ -273,7 +272,7 @@ export function GitNexusGraph({ result }: { result: NexusAnalysisResult | null }
       // return focus to trigger if available, otherwise previous active
       try {
         (triggerRef?.current || prevActive)?.focus?.();
-      } catch (_) {}
+      } catch {}
     };
   }, [showAllFunctions]);
   if (!result) {
@@ -443,7 +442,7 @@ export function GitNexusGraph({ result }: { result: NexusAnalysisResult | null }
                     ? (el) => {
                         try {
                           triggerRef.current = el as HTMLElement;
-                        } catch (_) {}
+                        } catch {}
                       }
                     : undefined
                 }

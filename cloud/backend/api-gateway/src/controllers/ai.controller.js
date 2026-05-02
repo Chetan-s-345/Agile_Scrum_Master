@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { randomUUID } = require('node:crypto');
+const { URLSearchParams } = require('url');
 const { buildContext } = require('../../server/lib/ragContext');
 const {
   getToolDefinitions,

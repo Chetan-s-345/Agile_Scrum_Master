@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { Badge, Card, PageWrapper } from "@/components/ui/themed";
 import { GitNexusChatBox } from "@/components/git-nexus-chatbox";
 import { GitNexusPanel } from "@/components/git-nexus-panel";
@@ -15,9 +14,16 @@ function safeText(value: unknown): string {
 }
 
 export default function GitNexusPage() {
-  const searchParams = useSearchParams();
+  const getQueryProjectId = () => {
+    try {
+      if (typeof window === "undefined") return "";
+      return new URLSearchParams(window.location.search).get("projectId") ?? "";
+    } catch {
+      return "";
+    }
+  };
   const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState(searchParams.get("projectId") ?? "");
+  const [projectId, setProjectId] = useState(getQueryProjectId() ?? "");
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectsError, setProjectsError] = useState("");
   const [analysisResult, setAnalysisResult] = useState<NexusAnalysisResult | null>(null);
@@ -96,7 +102,7 @@ export default function GitNexusPage() {
       setProjectId((current) => {
         const normalizedCurrent = safeText(current);
         if (normalizedCurrent && rows.some((row) => row.id === normalizedCurrent)) return normalizedCurrent;
-        const queryProjectId = safeText(searchParams.get("projectId"));
+        const queryProjectId = safeText(getQueryProjectId());
         if (queryProjectId && rows.some((row) => row.id === queryProjectId)) return queryProjectId;
         return rows[0]?.id || "";
       });
@@ -105,7 +111,7 @@ export default function GitNexusPage() {
     } finally {
       setProjectLoading(false);
     }
-  }, [searchParams]);
+  }, []);
 
   useEffect(() => {
     void loadProjects();
