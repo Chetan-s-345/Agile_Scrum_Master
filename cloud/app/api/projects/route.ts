@@ -3,7 +3,11 @@ import { getAuthTokenFromCookies, proxyToApiGateway } from "@/lib/api-gateway";
 
 export async function GET(request: Request) {
   const token = await getAuthTokenFromCookies();
-  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  
+  // Allow unauthenticated requests in development mode
+  if (!token && process.env.NODE_ENV !== "development") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const url = new URL(request.url);
   const qs = url.searchParams.toString();
@@ -11,7 +15,7 @@ export async function GET(request: Request) {
   const upstream = await proxyToApiGateway({
     upstreamPath: `/api/v1/projects${qs ? `?${qs}` : ""}`,
     method: "GET",
-    token,
+    token: token || undefined,
   });
 
   if (upstream.status === 400) {
@@ -37,14 +41,18 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const token = await getAuthTokenFromCookies();
-  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  
+  // Allow unauthenticated requests in development mode
+  if (!token && process.env.NODE_ENV !== "development") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const body = await request.json().catch(() => null);
 
   return proxyToApiGateway({
     upstreamPath: "/api/v1/projects",
     method: "POST",
-    token,
+    token: token || undefined,
     body: body ?? {},
   });
 }

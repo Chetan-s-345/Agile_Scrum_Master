@@ -36,7 +36,7 @@ function jsonSchema(type, props, required = []) {
 }
 
 function getToolDefinitions() {
-  return [
+  const tools = [
     {
       name: 'create_task',
       description: 'Create a new task in the current project.',
@@ -153,6 +153,15 @@ function getToolDefinitions() {
       ),
     },
   ];
+
+  return tools.map((tool) => ({
+    type: 'function',
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.input_schema,
+    },
+  }));
 }
 
 async function ensureAgentActionsTable(orgPool) {

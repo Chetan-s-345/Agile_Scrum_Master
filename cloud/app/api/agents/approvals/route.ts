@@ -6,7 +6,9 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const token = await getAuthTokenFromCookies();
-  if (!token) {
+  
+  // Allow unauthenticated requests in development mode
+  if (!token && process.env.NODE_ENV !== "development") {
     return NextResponse.json({ error: "Unauthorized", code: 401, detail: "Missing auth token." }, { status: 401 });
   }
 
@@ -20,7 +22,7 @@ export async function GET(request: Request) {
   return proxyToApiGateway({
     upstreamPath: `/api/v1/agents/approvals?projectId=${encodeURIComponent(projectId)}${status ? `&status=${encodeURIComponent(status)}` : ""}`,
     method: "GET",
-    token,
+    token: token || undefined,
   });
 }
 

@@ -1,0 +1,19 @@
+# E2B GitNexus Runtime Template Configuration
+dockerfile = "Dockerfile"
+template_name = "agile-gitnexus-runtime"
+template_id = "agile-gitnexus"
+dockerfile_path = "Dockerfile"
+
+[env]
+REPO_URL = ""
+BRANCH = "main"
+SINCE_DAYS = "30"
+GITHUB_TOKEN = ""
+
+# Mounted volumes (optional)
+# volumes = [
+#   { host_path = "/tmp/analysis", sandbox_path = "/data" }
+# ]
+
+# System packages available
+# (see Dockerfile for pre-installed packages)
