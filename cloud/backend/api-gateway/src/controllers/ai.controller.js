@@ -44,10 +44,54 @@ function setSseHeaders(res) {
 }
 
 function extractText(contentBlocks) {
-  return (Array.isArray(contentBlocks) ? contentBlocks : [])
-    .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text)
-    .join('');
+  if (typeof contentBlocks === 'string') return contentBlocks;
+  if (Array.isArray(contentBlocks)) {
+    return contentBlocks
+      .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text)
+      .join('');
+  }
+  return '';
+}
+
+function normalizeGroqTools(rawTools) {
+  return (Array.isArray(rawTools) ? rawTools : [])
+    .map((tool) => {
+      if (!tool || typeof tool !== 'object') return null;
+      const fn = tool.function && typeof tool.function === 'object' ? tool.function : null;
+      const name = safe(fn?.name);
+      if (!name) return null;
+      return {
+        type: 'function',
+        function: {
+          name,
+          description: safe(fn?.description),
+          parameters: fn?.parameters && typeof fn.parameters === 'object' ? fn.parameters : { type: 'object', properties: {} },
+        },
+      };
+    })
+    .filter(Boolean);
+}
+
+async function callGroqWithOptionalTools(apiKey, payload, tools) {
+  const basePayload = { ...payload };
+  if (Array.isArray(tools) && tools.length > 0) {
+    basePayload.tools = tools;
+  }
+
+  try {
+    return await callGroqMessages(apiKey, basePayload);
+  } catch (err) {
+    const detail = safe(err?.message || '');
+    const shouldRetryWithoutTools =
+      Array.isArray(tools) &&
+      tools.length > 0 &&
+      (detail.toLowerCase().includes('tools.0.type') || detail.toLowerCase().includes('tool schema'));
+
+    if (!shouldRetryWithoutTools) throw err;
+
+    return callGroqMessages(apiKey, payload);
+  }
 }
 
 async function callGroqMessages(apiKey, payload) {
@@ -75,6 +119,46 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function resolveGroqModel() {
+  const configured = safe(process.env.GROQ_MODEL);
+  const normalized = configured.toLowerCase();
+  if (!configured || normalized === 'llama3-8b-8192' || normalized === 'llama-3.1-8b-instant') {
+    return 'llama-3.3-70b-versatile';
+  }
+  return configured;
+}
+
+const MAX_USER_MESSAGE_CHARS = 1800;
+const MAX_HISTORY_ITEMS = 6;
+const MAX_HISTORY_ITEM_CHARS = 900;
+const MAX_RAG_CHARS = 7000;
+const MAX_LIVE_CHARS = 5000;
+const MAX_GRAPH_CHARS = 9000;
+
+function truncateText(value, maxChars) {
+  const text = safe(value);
+  if (!text) return '';
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n...[truncated]`;
+}
+
+function isGroqPayloadTooLargeError(detail) {
+  const value = safe(detail).toLowerCase();
+  return value.includes('request too large') || value.includes('tokens per minute') || value.includes('requested ');
+}
+
+function buildSystemPrompt(mode, ragText, liveText, graphContext, compact = false) {
+  const basePrompt = systemPromptByMode(mode);
+  if (compact) return `${basePrompt}\n\nUse only the minimal context needed for a concise answer.`;
+
+  const rag = truncateText(ragText, MAX_RAG_CHARS) || '(no vector context)';
+  const live = truncateText(liveText, MAX_LIVE_CHARS);
+  const graph = truncateText(graphContext, MAX_GRAPH_CHARS);
+  const graphPrompt = graph ? `\n\nGRAPH JSON:\n${graph}` : '';
+
+  return `${basePrompt}\n\nCONTEXT:\n${rag}\n\nLIVE DATA:\n${live}${graphPrompt}`;
+}
+
 function systemPromptByMode(mode) {
   const base =
     'You are an Agentic Scrum Master AI embedded in the Sprint platform. ' +
@@ -95,6 +179,10 @@ function systemPromptByMode(mode) {
       'Show reasoning for each recommendation.',
     brief:
       'You are in briefing mode. Summarize sprint state clearly and answer follow-up questions in concise executive language.',
+    graph:
+      'You are in graph analysis mode. Treat attached graph JSON as the source of truth for folder/file topology only. Explain folder clusters, file groupings, and containment relationships without inventing symbols or tasks.',
+    groq:
+      'You are in Groq reasoning mode. If graph JSON is attached, use it as the source of truth for folder/file structure and keep the answer concise, grounded, and concrete.',
     chat: '',
   };
 
@@ -161,47 +249,68 @@ async function history(req, res, next) {
 async function chat(req, res, next) {
   try {
     const body = req.body || {};
-    const message = safe(body.message);
+    const message = truncateText(body.message, MAX_USER_MESSAGE_CHARS);
     const projectId = safe(body.projectId);
     const modeInput = safe(body.mode || 'chat').toLowerCase();
     const mode = modeInput === 'auto' ? 'chat' : modeInput;
     const executionMode = safe(body.executionMode || body.actionMode || modeInput || 'confirm').toLowerCase();
     const agentId = safe(body.agentId || body.agentType);
     const historyList = Array.isArray(body.history) ? body.history : [];
+    const graphContext = safe(body.graphContext || body.graph_context || body.graphJson || '');
 
     if (!message) return jsonError(res, 400, 'Bad request', 'message is required.');
     if (!projectId) return jsonError(res, 400, 'Bad request', 'projectId is required.');
     if (!req.orgDb) return jsonError(res, 500, 'Server error', 'Org database is not available.');
 
-    const allowedModes = new Set(['chat', 'plan', 'standup', 'report', 'assign', 'brief']);
-    if (!allowedModes.has(mode)) return jsonError(res, 400, 'Bad request', 'mode must be one of chat|plan|standup|report|assign|brief.');
+    const allowedModes = new Set(['chat', 'plan', 'standup', 'report', 'assign', 'brief', 'graph', 'groq']);
+    if (!allowedModes.has(mode)) return jsonError(res, 400, 'Bad request', 'mode must be one of chat|plan|standup|report|assign|brief|graph|groq.');
 
     const access = await ensureProjectAccess(req.orgDb, projectId, req.actorMemberId, req.user?.role);
     if (!access.ok) return jsonError(res, 403, 'Forbidden', access.reason);
 
     const { ragText, liveText, totalChunks } = await buildContext(message, projectId, req.orgDb);
-    const systemPrompt = `${systemPromptByMode(mode)}\n\nCONTEXT:\n${ragText || '(no vector context)'}\n\nLIVE DATA:\n${liveText}`;
+    const systemPrompt = buildSystemPrompt(mode, ragText, liveText, graphContext, false);
 
     const trimmedHistory = historyList
-      .slice(-10)
+      .slice(-MAX_HISTORY_ITEMS)
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && safe(m.content))
-      .map((m) => ({ role: m.role, content: safe(m.content) }));
+      .map((m) => ({ role: m.role, content: truncateText(m.content, MAX_HISTORY_ITEM_CHARS) }));
 
     const groqApiKey = process.env.GROQ_API_KEY;
     if (!safe(groqApiKey)) return jsonError(res, 500, 'Server error', 'GROQ_API_KEY is not configured.');
 
-    const messages = [{ role: 'system', content: systemPrompt }, ...trimmedHistory, { role: 'user', content: message }];
-    const tools = getToolDefinitions();
-    const firstResponse = await callGroqMessages(groqApiKey, {
-      model: 'llama3-8b-8192',
-      max_tokens: 2000,
-      temperature: 0.7,
-      messages,
-      tools,
-    });
+    let outboundMessages = [{ role: 'system', content: systemPrompt }, ...trimmedHistory, { role: 'user', content: message }];
+    const tools = normalizeGroqTools(getToolDefinitions());
+    let useTools = mode !== 'groq' && mode !== 'graph';
+    const groqModel = resolveGroqModel();
+    let firstResponse;
+    try {
+      firstResponse = await callGroqWithOptionalTools(groqApiKey, {
+        model: groqModel,
+        max_tokens: 900,
+        temperature: 0.4,
+        messages: outboundMessages,
+      }, useTools ? tools : []);
+    } catch (caught) {
+      const detail = safe(caught?.message || '');
+      if (!isGroqPayloadTooLargeError(detail)) throw caught;
 
-    let finalText = extractText(firstResponse.content);
-    if (firstResponse.choices?.[0]?.message?.tool_calls?.length) {
+      useTools = false;
+      outboundMessages = [
+        { role: 'system', content: buildSystemPrompt(mode, ragText, liveText, graphContext, true) },
+        { role: 'user', content: truncateText(message, 900) },
+      ];
+
+      firstResponse = await callGroqWithOptionalTools(groqApiKey, {
+        model: groqModel,
+        max_tokens: 600,
+        temperature: 0.3,
+        messages: outboundMessages,
+      }, []);
+    }
+
+    let finalText = extractText(firstResponse.choices?.[0]?.message?.content || firstResponse.content);
+    if (useTools && firstResponse.choices?.[0]?.message?.tool_calls?.length) {
       const toolCalls = firstResponse.choices[0].message.tool_calls;
       const toolResults = [];
 
@@ -225,19 +334,18 @@ async function chat(req, res, next) {
       }
 
       const secondMessages = [
-        ...messages,
+        ...outboundMessages,
         firstResponse.choices[0].message,
         ...toolResults,
       ];
 
-      const secondResponse = await callGroqMessages(groqApiKey, {
-        model: 'llama3-8b-8192',
-        max_tokens: 2000,
-        temperature: 0.7,
+      const secondResponse = await callGroqWithOptionalTools(groqApiKey, {
+        model: groqModel,
+        max_tokens: 900,
+        temperature: 0.4,
         messages: secondMessages,
-        tools,
-      });
-      finalText = extractText(secondResponse.choices?.[0]?.message || {});
+      }, useTools ? tools : []);
+      finalText = extractText(secondResponse.choices?.[0]?.message?.content || secondResponse.content);
     }
 
     setSseHeaders(res);

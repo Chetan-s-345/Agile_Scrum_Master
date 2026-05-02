@@ -23,9 +23,8 @@ class NexusSandboxManager:
     """Manages E2B sandboxes for GitNexus analysis."""
 
     RESOURCE_TIERS = {
-        "tiny": {"ram_mb": 512, "cpu": 0.5, "timeout": 120, "size_max_kb": 10_000},
-        "small": {"ram_mb": 1024, "cpu": 1.0, "timeout": 240, "size_max_kb": 100_000},
-        "medium": {"ram_mb": 2048, "cpu": 2.0, "timeout": 480, "size_max_kb": 500_000},
+        "small": {"ram_mb": 1024, "cpu": 1.0, "timeout": 240, "size_max_kb": 50_000},
+        "medium": {"ram_mb": 2048, "cpu": 2.0, "timeout": 480, "size_max_kb": 100_000},
         "large": {"ram_mb": 4096, "cpu": 4.0, "timeout": 900, "size_max_kb": 2_000_000},
     }
     RAM_MIN_MB = 512

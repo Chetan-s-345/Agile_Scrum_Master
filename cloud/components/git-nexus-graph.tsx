@@ -3,6 +3,8 @@
 import type { NexusAnalysisResult } from "@/types/git-nexus";
 import { Badge, Card } from "@/components/ui/themed";
 import { useState, useEffect, useRef } from "react";
+import KnowledgeGraph3D from "@/components/git-nexus-function-graph";
+import { mapSymbolInventoryToGraph } from "@/lib/graph-mapper";
 
 type GraphNodeKind = "repo" | "module" | "framework" | "task" | "developer" | "risk" | "file" | "function";
 
@@ -34,83 +36,128 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function buildProjectGraph(result: NexusAnalysisResult | null): { nodes: GraphNode[]; edges: GraphEdge[] } {
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\.?\//, "").trim();
+}
+
+function uniqueNormalizedPaths(paths: string[]): string[] {
+  const normalized = paths.map(normalizePath).filter((path): path is string => path.length > 0);
+  return Array.from(new Set(normalized));
+}
+
+function parentFolder(path: string): string | null {
+  const normalized = normalizePath(path);
+  if (!normalized) return null;
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length <= 1) return null;
+  return parts.slice(0, -1).join("/");
+}
+
+function folderName(path: string): string {
+  const normalized = normalizePath(path);
+  if (!normalized) return "root";
+  return leafName(normalized);
+}
+
+function buildFolderGraph(result: NexusAnalysisResult | null): { nodes: GraphNode[]; edges: GraphEdge[] } {
   if (!result) return { nodes: [], edges: [] };
 
   const projectStructure = result.project_structure || {};
-  const nodes: GraphNode[] = [{ id: "repo", kind: "repo", label: "Repository", detail: result.repo_meta.url, x: 50, y: 10, tone: "#8b5cf6" }];
+  const nodes: GraphNode[] = [
+    { id: "repo", kind: "repo", label: "Repository", detail: result.repo_meta.url, x: 50, y: 10, tone: "#8b5cf6" },
+  ];
   const edges: GraphEdge[] = [];
 
-  const typeLabel = projectStructure.project_type || result.repo_meta.primary_language || "Project";
-  nodes.push({ id: "type", kind: "module", label: "Project Type", detail: typeLabel, x: 50, y: 22, tone: "#f59e0b" });
-  edges.push({ from: "repo", to: "type", tone: "#f59e0b" });
+  const folderSet = new Set<string>();
+  const seedFolders = [
+    ...(projectStructure.all_dirs || []),
+    ...(projectStructure.key_dirs || []),
+    ...(projectStructure.root_files || []).map((path) => parentFolder(path)).filter((path): path is string => Boolean(path)),
+    ...(projectStructure.package_files || []).map((path) => parentFolder(path)).filter((path): path is string => Boolean(path)),
+    ...(result.symbol_inventory?.top_files || []).map((entry) => parentFolder(entry.file)).filter((path): path is string => Boolean(path)),
+  ];
 
-  if (projectStructure.is_monorepo) {
-    nodes.push({ id: "monorepo", kind: "framework", label: "Monorepo", detail: "multi-package workspace", x: 50, y: 32, tone: "#a78bfa" });
-    edges.push({ from: "repo", to: "monorepo", tone: "#a78bfa" });
-  }
-
-  // Distribute directories across the graph
-  const dirs = (projectStructure.key_dirs || []).filter(Boolean);
-  const visibleDirs = dirs.slice(0, 24);
-  const dirColumns = clamp(Math.ceil(visibleDirs.length / 4), 4, 6);
-  const dirRows = Math.max(1, Math.ceil(visibleDirs.length / dirColumns));
-  visibleDirs.forEach((dir, index) => {
-    const id = `dir-${index}`;
-    const col = index % dirColumns;
-    const row = Math.floor(index / dirColumns);
-    const x = dirColumns === 1 ? 26 : 10 + (col / (dirColumns - 1)) * 34;
-    const y = dirRows === 1 ? 52 : 36 + (row / (dirRows - 1)) * 42;
-    nodes.push({ id, kind: "module", label: leafName(dir), detail: dir, x, y, tone: "#38bdf8" });
-    edges.push({ from: "repo", to: id, tone: "#38bdf8" });
+  seedFolders.map(normalizePath).filter(Boolean).forEach((path) => {
+    folderSet.add(path);
+    const parts = path.split("/").filter(Boolean);
+    for (let index = 1; index < parts.length; index += 1) {
+      folderSet.add(parts.slice(0, index).join("/"));
+    }
   });
 
-  if (dirs.length > visibleDirs.length) {
-    const extraId = "dir-extra";
-    nodes.push({ id: extraId, kind: "module", label: `+${dirs.length - visibleDirs.length} more`, detail: "additional directories", x: 27, y: 84, tone: "#0ea5e9" });
-    edges.push({ from: "repo", to: extraId, tone: "#0ea5e9" });
+  if (folderSet.size === 0) {
+    nodes.push({ id: "folder-none", kind: "module", label: "No folders detected", detail: "Run analysis to populate the project map", x: 50, y: 56, tone: "#94a3b8" });
+    edges.push({ from: "repo", to: "folder-none", tone: "#94a3b8" });
+    return { nodes, edges };
+  }
+
+  const folderPaths = Array.from(folderSet).sort((a, b) => a.length - b.length || a.localeCompare(b));
+  const folderIndex = new Map<string, number>();
+  folderPaths.forEach((path, index) => folderIndex.set(path, index));
+
+  const roots = folderPaths.filter((path) => !path.includes("/"));
+  const depthMap = new Map<string, number>();
+  const siblingMap = new Map<number, string[]>();
+
+  folderPaths.forEach((path) => {
+    const depth = path.split("/").filter(Boolean).length;
+    depthMap.set(path, depth);
+    if (!siblingMap.has(depth)) siblingMap.set(depth, []);
+    siblingMap.get(depth)!.push(path);
+  });
+
+  folderPaths.forEach((path) => {
+    const depth = depthMap.get(path) || 1;
+    const siblings = siblingMap.get(depth) || [];
+    const siblingIndex = siblings.indexOf(path);
+    const depthStep = 14;
+    const x = clamp(12 + depth * depthStep, 10, 90);
+    const yBand = siblings.length > 1 ? siblingIndex / (siblings.length - 1 || 1) : 0.5;
+    const y = clamp(16 + yBand * 72, 8, 92);
+    const parent = parentFolder(path);
+    const parentId = parent ? `folder-${folderIndex.get(parent) ?? 0}` : "repo";
+
+    nodes.push({
+      id: `folder-${folderIndex.get(path)}`,
+      kind: "module",
+      label: folderName(path),
+      detail: path,
+      x,
+      y,
+      tone: depth <= 1 ? "#38bdf8" : "#60a5fa",
+    });
+    edges.push({ from: parentId, to: `folder-${folderIndex.get(path)}`, tone: "rgba(148,163,184,0.8)" });
+  });
+
+  if (roots.length > 0) {
+    nodes.push({ id: "root-summary", kind: "framework", label: `${roots.length} top-level folders`, detail: roots.join(", "), x: 50, y: 92, tone: "#a78bfa" });
+    edges.push({ from: "repo", to: "root-summary", tone: "#a78bfa" });
   }
 
   return { nodes, edges };
 }
 
-  function buildFunctionGraph(result: NexusAnalysisResult | null): { nodes: GraphNode[]; edges: GraphEdge[] } {
-    if (!result) return { nodes: [], edges: [] };
+function buildProjectGraph(result: NexusAnalysisResult | null): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  if (!result) return { nodes: [], edges: [] };
 
-    const nodes: GraphNode[] = [
-      { id: "repo", kind: "repo", label: "Functions", detail: result.repo_meta.url, x: 50, y: 12, tone: "#8b5cf6" },
-    ];
-    const edges: GraphEdge[] = [];
+  const projectStructure = result.project_structure || {};
+  const folderGraph = buildFolderGraph(result);
+  const nodes: GraphNode[] = [...folderGraph.nodes];
+  const edges: GraphEdge[] = [...folderGraph.edges];
 
-    const symbol = result.symbol_inventory;
-    const files = (symbol?.top_files || []).filter((entry) => (entry.functions?.length || 0) > 0);
-    const functionsFlat: { name: string; file: string }[] = [];
-    files.forEach((entry) => {
-      (entry.functions || []).forEach((fn) => functionsFlat.push({ name: fn, file: entry.file }));
-    });
+  const typeLabel = projectStructure.project_type || result.repo_meta.primary_language || "Project";
+  nodes.push({ id: "type", kind: "module", label: "Project Type", detail: typeLabel, x: 8, y: 10, tone: "#f59e0b" });
+  nodes.push({ id: "coverage", kind: "framework", label: "Structure Coverage", detail: `${(projectStructure.all_dirs || []).length || (projectStructure.key_dirs || []).length} folders`, x: 8, y: 22, tone: "#a78bfa" });
+  edges.push({ from: "repo", to: "type", tone: "#f59e0b" });
+  edges.push({ from: "repo", to: "coverage", tone: "#a78bfa" });
 
-    const total = functionsFlat.length;
-    if (total === 0) {
-      nodes.push({ id: "fn-none", kind: "function", label: "No functions detected", detail: "", x: 50, y: 60, tone: "#94a3b8" });
-      edges.push({ from: "repo", to: "fn-none", tone: "#94a3b8" });
-      return { nodes, edges };
-    }
-
-    const cols = clamp(Math.ceil(Math.sqrt(total)), 6, 60);
-    const rows = Math.max(1, Math.ceil(total / cols));
-
-    functionsFlat.forEach((fn, idx) => {
-      const col = idx % cols;
-      const row = Math.floor(idx / cols);
-      const x = clamp(8 + (col / Math.max(1, cols - 1)) * 84, 8, 92);
-      const y = clamp(18 + (row / Math.max(1, rows - 1)) * 74, 18, 92);
-      const id = `fn-${idx}`;
-      nodes.push({ id, kind: "function", label: fn.name, detail: fn.file, x, y, tone: "#22c55e" });
-      edges.push({ from: "repo", to: id, tone: "#22c55e" });
-    });
-
-    return { nodes, edges };
+  if (projectStructure.is_monorepo) {
+    nodes.push({ id: "monorepo", kind: "framework", label: "Monorepo", detail: "multi-package workspace", x: 8, y: 34, tone: "#a78bfa" });
+    edges.push({ from: "repo", to: "monorepo", tone: "#a78bfa" });
   }
+
+  return { nodes, edges };
+}
 
 function buildActivityGraph(result: NexusAnalysisResult | null): { nodes: GraphNode[]; edges: GraphEdge[] } {
   if (!result) return { nodes: [], edges: [] };
@@ -152,10 +199,12 @@ function buildTreeGraph(result: NexusAnalysisResult | null): { nodes: GraphNode[
 
   // Gather file paths from project structure and symbol inventory
   const projectStructure = result.project_structure || {};
-  const filePaths = new Set<string>();
-  (projectStructure.root_files || []).forEach((f: string) => filePaths.add(f));
-  (projectStructure.package_files || []).forEach((f: string) => filePaths.add(f));
-  (result.symbol_inventory?.top_files || []).forEach((entry) => filePaths.add(entry.file));
+  const rawFilePaths = [
+    ...(projectStructure.root_files || []),
+    ...(projectStructure.package_files || []),
+    ...(result.symbol_inventory?.top_files || []).map((entry) => entry.file),
+  ].map(normalizePath).filter(Boolean);
+  const filePaths = new Set<string>(uniqueNormalizedPaths(rawFilePaths));
 
   // Build directory tree map
   const tree = new Map<string, Set<string>>();
@@ -218,10 +267,59 @@ export function GitNexusGraph({ result }: { result: NexusAnalysisResult | null }
   const [selectedView, setSelectedView] = useState<"project" | "activity" | "function" | "tree">("project");
   const [showAllFunctions, setShowAllFunctions] = useState(false);
   const triggerRef = useRef<HTMLElement | null>(null);
-  const projectGraph = buildProjectGraph(result);
-  const activityGraph = buildActivityGraph(result);
-  const functionGraph = buildFunctionGraph(result);
-  const treeGraph = buildTreeGraph(result);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const dragging = useRef(false);
+  const lastPos = useRef({ x: 0, y: 0 });
+
+  // Wheel to zoom (Ctrl/Cmd + wheel)
+  useEffect(() => {
+    function handleWheel(e: WheelEvent) {
+      if (!containerRef.current) return;
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? 0.9 : 1.1;
+        setScale((s) => clamp(s * delta, 0.2, 4));
+      }
+    }
+    const el = containerRef.current;
+    el?.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      el?.removeEventListener('wheel', handleWheel);
+    };
+  }, []);
+
+  // Drag to pan
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    function onDown(e: MouseEvent) {
+      dragging.current = true;
+      lastPos.current = { x: e.clientX, y: e.clientY };
+      el!.style.cursor = 'grabbing';
+    }
+    function onMove(e: MouseEvent) {
+      if (!dragging.current) return;
+      const dx = e.clientX - lastPos.current.x;
+      const dy = e.clientY - lastPos.current.y;
+      lastPos.current = { x: e.clientX, y: e.clientY };
+      setOffset((o) => ({ x: o.x + dx, y: o.y + dy }));
+    }
+    function onUp() {
+      dragging.current = false;
+      el!.style.cursor = 'grab';
+    }
+    el.addEventListener('mousedown', onDown);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      el.removeEventListener('mousedown', onDown);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+  
 
   useEffect(() => {
     // manage escape key and allow early cleanup
@@ -236,6 +334,7 @@ export function GitNexusGraph({ result }: { result: NexusAnalysisResult | null }
   useEffect(() => {
     if (!showAllFunctions) return;
     const prevActive = document.activeElement as HTMLElement | null;
+    const triggerEl = triggerRef.current;
     const modal = document.getElementById("gnx-fn-modal");
     const focusableSelector = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
     const focusable = modal ? Array.from(modal.querySelectorAll<HTMLElement>(focusableSelector)) : [];
@@ -271,7 +370,7 @@ export function GitNexusGraph({ result }: { result: NexusAnalysisResult | null }
       window.removeEventListener("keydown", onKey);
       // return focus to trigger if available, otherwise previous active
       try {
-        (triggerRef?.current || prevActive)?.focus?.();
+        (triggerEl || prevActive)?.focus?.();
       } catch {}
     };
   }, [showAllFunctions]);
@@ -307,6 +406,98 @@ export function GitNexusGraph({ result }: { result: NexusAnalysisResult | null }
         : "Not detected",
     },
   ];
+
+  const transformStyle = { transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: '0 0' } as const;
+  // Precompute graphs
+  const projectGraph = buildProjectGraph(result);
+  const activityGraph = buildActivityGraph(result);
+  const treeGraph = buildTreeGraph(result);
+  const visibleStructureDirs = uniqueNormalizedPaths(projectStructure.key_dirs || []).slice(0, 8);
+
+  function renderGraphArea() {
+    const isFunctionView = selectedView === "function";
+    const isProjectView = selectedView === "project";
+
+    // For function view, use the new 3D graph component
+    if (isFunctionView && result?.symbol_inventory) {
+      const { nodes, edges } = mapSymbolInventoryToGraph(result.symbol_inventory);
+      return (
+        <div className="relative h-[520px] overflow-hidden rounded-3xl border border-[var(--border)]">
+          <KnowledgeGraph3D
+            nodes={nodes}
+            edges={edges}
+            title={`${result.repo_meta.url.split("/").pop() || "Repository"} - Function Graph`}
+          />
+        </div>
+      );
+    }
+
+    // For other views, use the old 2D SVG rendering
+    const graph = selectedView === "project" ? projectGraph : selectedView === "activity" ? activityGraph : treeGraph;
+
+    return (
+      <div
+        ref={containerRef}
+        className={`relative h-[520px] overflow-hidden rounded-3xl border border-[var(--border)] cursor-grab ${isFunctionView ? 'bg-[radial-gradient(circle_at_center,_rgba(56,189,248,0.22),_transparent_28%),radial-gradient(circle_at_center,_rgba(59,130,246,0.12),_transparent_55%),linear-gradient(180deg,_rgba(6,10,18,0.98),_rgba(11,14,24,1))]' : 'bg-[radial-gradient(circle_at_top,_rgba(91,140,255,0.22),_transparent_40%),linear-gradient(180deg,_rgba(9,12,18,0.98),_rgba(14,17,24,1))]'}`}
+      >
+        {isFunctionView ? (
+          <svg className="pointer-events-none absolute inset-0 h-full w-full opacity-80" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <ellipse cx="50" cy="50" rx="30" ry="21" fill="none" stroke="rgba(96,165,250,0.18)" strokeWidth="0.5" />
+            <ellipse cx="50" cy="50" rx="41" ry="29" fill="none" stroke="rgba(96,165,250,0.12)" strokeWidth="0.5" strokeDasharray="1.3 1.6" />
+            <path d="M20,50 C32,28 68,28 80,50 C68,72 32,72 20,50 Z" fill="none" stroke="rgba(125,211,252,0.12)" strokeWidth="0.45" />
+            <path d="M50,20 C61,32 61,68 50,80 C39,68 39,32 50,20 Z" fill="none" stroke="rgba(125,211,252,0.12)" strokeWidth="0.45" />
+          </svg>
+        ) : null}
+        <div style={transformStyle} className="absolute inset-0">
+          <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            {graph.edges.map((edge, index) => {
+              const from = graph.nodes.find((n) => n.id === edge.from);
+              const to = graph.nodes.find((n) => n.id === edge.to);
+              if (!from || !to) return null;
+              return <line key={`${edge.from}-${edge.to}-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={edge.tone} strokeWidth="0.6" strokeLinecap="round" opacity="0.75" />;
+            })}
+          </svg>
+
+          {graph.nodes.map((node) => (
+            <div
+              key={node.id}
+              className={`absolute max-w-[28%] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/10 bg-slate-950/80 px-3 py-2 shadow-lg backdrop-blur ${node.kind === 'function' ? 'max-w-[32%]' : ''}`}
+              style={{ left: `${node.x}%`, top: `${node.y}%`, boxShadow: `0 0 0 1px ${node.tone}22, 0 16px 40px rgba(0,0,0,0.35)` }}
+            >
+              <div className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ background: node.tone }} />
+                <span className="truncate text-xs font-semibold text-white">{node.label}</span>
+              </div>
+              <p className="mt-1 truncate text-[11px] text-slate-300">{node.detail}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* zoom controls */}
+        <div className="absolute right-3 bottom-3 z-20 flex flex-col gap-2">
+          <button onClick={() => setScale((s) => clamp(s * 1.2, 0.2, 4))} className="h-9 w-9 rounded-md border bg-[var(--bg-surface)] text-[var(--text-secondary)]">+</button>
+          <button onClick={() => setScale((s) => clamp(s / 1.2, 0.2, 4))} className="h-9 w-9 rounded-md border bg-[var(--bg-surface)] text-[var(--text-secondary)]">−</button>
+          <button onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }); }} className="h-9 w-9 rounded-md border bg-[var(--bg-surface)] text-[var(--text-secondary)]">Fit</button>
+        </div>
+
+        {isProjectView ? (
+          <div className="absolute left-3 top-3 z-20 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)]/90 px-3 py-2 text-sm shadow-lg backdrop-blur">
+            <div className="flex items-center justify-between gap-4">
+              <div className="font-semibold text-[var(--text-primary)]">Structure</div>
+              <div className="text-xs text-[var(--text-secondary)]">{visibleStructureDirs.length} dirs</div>
+            </div>
+            <div className="mt-2 flex max-w-[28rem] flex-wrap gap-2">
+              {visibleStructureDirs.map((dir) => (
+                <span key={dir} className="rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-3 py-1 text-xs text-[var(--text-secondary)]">
+                  {leafName(dir)}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -349,166 +540,8 @@ export function GitNexusGraph({ result }: { result: NexusAnalysisResult | null }
           </div>
         </div>
 
-        {selectedView === "project" ? (
-          <div className="relative h-[520px] overflow-hidden rounded-3xl border border-[var(--border)] bg-[radial-gradient(circle_at_top,_rgba(91,140,255,0.22),_transparent_40%),linear-gradient(180deg,_rgba(9,12,18,0.98),_rgba(14,17,24,1))]">
-            <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-              {projectGraph.edges.map((edge, index) => {
-                const from = projectGraph.nodes.find((node) => node.id === edge.from);
-                const to = projectGraph.nodes.find((node) => node.id === edge.to);
-                if (!from || !to) return null;
-                return <line key={`${edge.from}-${edge.to}-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={edge.tone} strokeWidth="0.7" strokeLinecap="round" opacity="0.75" />;
-              })}
-            </svg>
-
-            {projectGraph.nodes.map((node) => (
-              <div
-                key={node.id}
-                className="absolute max-w-[24%] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/10 bg-slate-950/82 px-3 py-2 shadow-lg backdrop-blur"
-                style={{ left: `${node.x}%`, top: `${node.y}%`, boxShadow: `0 0 0 1px ${node.tone}22, 0 16px 40px rgba(0, 0, 0, 0.35)` }}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: node.tone }} />
-                  <span className="truncate text-xs font-semibold text-white">{node.label}</span>
-                </div>
-                <p className="mt-1 truncate text-[11px] text-slate-300">{node.detail}</p>
-              </div>
-            ))}
-          </div>
-        ) : selectedView === "activity" ? (
-          <div className="relative h-[500px] overflow-hidden rounded-3xl border border-[var(--border)] bg-[radial-gradient(circle_at_top,_rgba(91,140,255,0.24),_transparent_40%),linear-gradient(180deg,_rgba(9,12,18,0.98),_rgba(14,17,24,1))]">
-            <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-              {activityGraph.edges.map((edge, index) => {
-                const from = activityGraph.nodes.find((node) => node.id === edge.from);
-                const to = activityGraph.nodes.find((node) => node.id === edge.to);
-                if (!from || !to) return null;
-                return <line key={`${edge.from}-${edge.to}-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={edge.tone} strokeWidth="0.6" strokeLinecap="round" opacity="0.7" />;
-              })}
-            </svg>
-
-            {activityGraph.nodes.map((node) => (
-              <div
-                key={node.id}
-                className="absolute max-w-[28%] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/10 bg-slate-950/80 px-3 py-2 shadow-lg backdrop-blur"
-                style={{ left: `${node.x}%`, top: `${node.y}%`, boxShadow: `0 0 0 1px ${node.tone}22, 0 16px 40px rgba(0, 0, 0, 0.35)` }}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: node.tone }} />
-                  <span className="truncate text-xs font-semibold text-white">{node.label}</span>
-                </div>
-                <p className="mt-1 truncate text-[11px] text-slate-300">{node.detail}</p>
-              </div>
-            ))}
-          </div>
-        ) : selectedView === "tree" ? (
-          <div className="relative h-[500px] overflow-hidden rounded-3xl border border-[var(--border)] bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.06),_transparent_40%),linear-gradient(180deg,_rgba(9,12,18,0.98),_rgba(14,17,24,1))]">
-            <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-              {treeGraph.edges.map((edge, index) => {
-                const from = treeGraph.nodes.find((node) => node.id === edge.from);
-                const to = treeGraph.nodes.find((node) => node.id === edge.to);
-                if (!from || !to) return null;
-                return <line key={`${edge.from}-${edge.to}-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={edge.tone} strokeWidth="0.6" strokeLinecap="round" opacity="0.7" />;
-              })}
-            </svg>
-
-            {treeGraph.nodes.map((node) => (
-              <div
-                key={node.id}
-                className="absolute max-w-[28%] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/6 bg-slate-900/70 px-3 py-2 shadow-lg backdrop-blur"
-                style={{ left: `${node.x}%`, top: `${node.y}%`, boxShadow: `0 0 0 1px ${node.tone}22, 0 12px 30px rgba(0,0,0,0.35)` }}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: node.tone }} />
-                  <span className="truncate text-xs font-semibold text-white">{node.label}</span>
-                </div>
-                <p className="mt-1 truncate text-[11px] text-slate-300">{node.detail}</p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="relative h-[500px] overflow-hidden rounded-3xl border border-[var(--border)] bg-[radial-gradient(circle_at_top,_rgba(91,140,255,0.24),_transparent_40%),linear-gradient(180deg,_rgba(9,12,18,0.98),_rgba(14,17,24,1))]">
-            <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-              {functionGraph.edges.map((edge, index) => {
-                const from = functionGraph.nodes.find((node) => node.id === edge.from);
-                const to = functionGraph.nodes.find((node) => node.id === edge.to);
-                if (!from || !to) return null;
-                return <line key={`${edge.from}-${edge.to}-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={edge.tone} strokeWidth="0.6" strokeLinecap="round" opacity="0.72" />;
-              })}
-            </svg>
-
-            {functionGraph.nodes.map((node) => (
-              <div
-                ref={
-                  node.id === "fn-extra"
-                    ? (el) => {
-                        try {
-                          triggerRef.current = el as HTMLElement;
-                        } catch {}
-                      }
-                    : undefined
-                }
-                key={node.id}
-                role={node.id === "fn-extra" ? "button" : undefined}
-                tabIndex={node.id === "fn-extra" ? 0 : undefined}
-                onKeyDown={
-                  node.id === "fn-extra"
-                    ? (e) => {
-                        if (e.key === "Enter" || e.key === " ") setShowAllFunctions(true);
-                      }
-                    : undefined
-                }
-                onClick={node.id === "fn-extra" ? () => setShowAllFunctions(true) : undefined}
-                className={`absolute max-w-[28%] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/10 bg-slate-950/80 px-3 py-2 shadow-lg backdrop-blur ${
-                  node.id === "fn-extra" ? "cursor-pointer ring-2 ring-offset-1 ring-indigo-400/20" : ""
-                }`}
-                style={{ left: `${node.x}%`, top: `${node.y}%`, boxShadow: `0 0 0 1px ${node.tone}22, 0 16px 40px rgba(0, 0, 0, 0.35)` }}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: node.tone }} />
-                  <span className="truncate text-xs font-semibold text-white">{node.label}</span>
-                </div>
-                <p className="mt-1 truncate text-[11px] text-slate-300">{node.detail}</p>
-              </div>
-            ))}
-
-            {showAllFunctions && result?.symbol_inventory?.top_files ? (
-              <div id="gnx-fn-modal" role="dialog" aria-modal="true" aria-labelledby="gnx-fn-modal-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
-                <div className="max-h-[80vh] w-full max-w-4xl overflow-auto rounded-2xl bg-white/5 p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h3 id="gnx-fn-modal-title" className="text-lg font-semibold text-white">All files with functions</h3>
-                      <p className="text-sm text-slate-300">Showing {result.symbol_inventory.top_files.length} files detected with functions.</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setShowAllFunctions(false)}
-                        className="rounded bg-white/10 px-3 py-1 text-sm text-white"
-                      >
-                        Close
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 space-y-3">
-                    {result.symbol_inventory.top_files.map((entry) => (
-                      <div key={entry.file} className="rounded-lg border border-white/5 bg-slate-900/60 p-3">
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm font-medium text-white break-all">{entry.file}</div>
-                          <div className="text-xs text-slate-300">{(entry.functions || []).length} functions</div>
-                        </div>
-                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                          {(entry.functions || []).map((fn) => (
-                            <div key={fn} className="rounded px-2 py-1 text-sm text-slate-200">{fn}</div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        )}
-      </Card>
+        {renderGraphArea()}
+        </Card>
 
       <div className="grid gap-3 md:grid-cols-3">
         {summaryItems.map((item) => (
@@ -535,6 +568,7 @@ export function GitNexusGraph({ result }: { result: NexusAnalysisResult | null }
             )}
           </div>
         </div>
+        
 
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-3">
           <p className="text-[11px] uppercase tracking-[0.2em] text-[var(--text-secondary)]">Files, frameworks, and workspaces</p>

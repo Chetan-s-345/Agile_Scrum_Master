@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Card, PageWrapper } from "@/components/ui/themed";
 import { GitNexusChatBox } from "@/components/git-nexus-chatbox";
 import { GitNexusPanel } from "@/components/git-nexus-panel";
@@ -27,7 +27,6 @@ export default function GitNexusPage() {
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectsError, setProjectsError] = useState("");
   const [analysisResult, setAnalysisResult] = useState<NexusAnalysisResult | null>(null);
-  const [analysisLogs, setAnalysisLogs] = useState<string[]>([]);
 
   const routeLabel = useMemo(() => "/git-nexus", []);
   const ready = projectId.trim().length > 0;
@@ -44,6 +43,9 @@ export default function GitNexusPage() {
   const structureJson = useMemo(() => {
     return structurePayload ? JSON.stringify(structurePayload, null, 2) : "{}";
   }, [structurePayload]);
+  const [chatOpen, setChatOpen] = useState(true);
+  const [chatWidth, setChatWidth] = useState(420);
+  const resizingRef = useRef<{ active: boolean; startX: number; startWidth: number }>({ active: false, startX: 0, startWidth: 420 });
   const gitNexusEndpoints = useMemo(() => {
     return [
       {
@@ -114,6 +116,25 @@ export default function GitNexusPage() {
   }, []);
 
   useEffect(() => {
+    function onMouseMove(e: MouseEvent) {
+      if (!resizingRef.current.active) return;
+      const dx = resizingRef.current.startX - e.clientX;
+      const newWidth = Math.max(320, Math.min(900, resizingRef.current.startWidth + dx));
+      setChatWidth(newWidth);
+    }
+
+    function onMouseUp() {
+      resizingRef.current.active = false;
+      document.body.style.cursor = "";
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    }
+
+    if (resizingRef.current.active) {
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "ew-resize";
+    }
     void loadProjects();
   }, [loadProjects]);
 
@@ -188,26 +209,7 @@ export default function GitNexusPage() {
                   connectedRepo={selectedProject.repo_url || undefined}
                   embedded
                   onResult={setAnalysisResult}
-                  onProgress={(message) => setAnalysisLogs((current) => [...current, message])}
                 />
-                <Card className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <h3 className="text-lg font-semibold text-[var(--text-primary)]">Analysis logs</h3>
-                      <p className="text-sm text-[var(--text-secondary)]">Streaming progress.</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setAnalysisLogs([])}
-                      className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                    >
-                      Clear logs
-                    </button>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-3 font-mono text-xs text-emerald-300">
-                    {analysisLogs.length ? analysisLogs.map((line, index) => <div key={`${line}-${index}`}>{line}</div>) : <div className="text-[var(--text-secondary)]">No log entries yet.</div>}
-                  </div>
-                </Card>
               </>
             ) : (
               <Card className="space-y-2 border-dashed">
@@ -320,104 +322,7 @@ export default function GitNexusPage() {
                     </div>
                   </div>
 
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
-                      <div className="text-sm font-semibold text-[var(--text-primary)]">Structure</div>
-                      <div className="mt-3 space-y-3 text-sm text-[var(--text-secondary)]">
-                        <div>
-                          <div className="text-[11px] uppercase tracking-[0.2em]">Key directories</div>
-                          <div className="mt-2 max-h-40 space-y-2 overflow-y-auto pr-1">
-                            {analysisResult.project_structure?.key_dirs?.length ? analysisResult.project_structure.key_dirs.map((dir) => (
-                              <div key={dir} className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2">
-                                <div className="break-all text-[var(--text-primary)]">{dir}</div>
-                              </div>
-                            )) : <div>No directories detected.</div>}
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="text-[11px] uppercase tracking-[0.2em]">Root files</div>
-                          <div className="mt-2 max-h-32 space-y-2 overflow-y-auto pr-1">
-                            {analysisResult.project_structure?.root_files?.length ? analysisResult.project_structure.root_files.map((file) => (
-                              <div key={file} className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2">
-                                <div className="break-all text-[var(--text-primary)]">{file}</div>
-                              </div>
-                            )) : <div>No root files detected.</div>}
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="text-[11px] uppercase tracking-[0.2em]">Package files</div>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {analysisResult.project_structure?.package_files?.length ? analysisResult.project_structure.package_files.map((file) => (
-                              <span key={file} className="rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-3 py-1 text-xs text-[var(--text-secondary)]">{file}</span>
-                            )) : <span>No package files detected.</span>}
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="text-[11px] uppercase tracking-[0.2em]">Frameworks</div>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {analysisResult.project_structure?.frameworks?.length ? analysisResult.project_structure.frameworks.map((framework) => (
-                              <span key={framework} className="rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-3 py-1 text-xs text-[var(--text-secondary)]">{framework}</span>
-                            )) : <span>No frameworks detected.</span>}
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="text-[11px] uppercase tracking-[0.2em]">Workspaces</div>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {analysisResult.project_structure?.workspaces?.length ? analysisResult.project_structure.workspaces.map((workspace) => (
-                              <span key={workspace} className="rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-3 py-1 text-xs text-[var(--text-secondary)]">{workspace}</span>
-                            )) : <span>No workspaces detected.</span>}
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="text-[11px] uppercase tracking-[0.2em]">All directories (recursive)</div>
-                          <div className="mt-1 text-xs text-[var(--text-secondary)]">
-                            {analysisResult.project_structure?.all_dirs_total
-                              ? `${analysisResult.project_structure.all_dirs_total} total`
-                              : "Total not reported"}
-                            {analysisResult.project_structure?.all_dirs_truncated ? " · truncated in payload" : ""}
-                          </div>
-                          <div className="mt-2 max-h-32 space-y-2 overflow-y-auto pr-1">
-                            {analysisResult.project_structure?.all_dirs?.length ? (
-                              analysisResult.project_structure.all_dirs.map((dir) => (
-                                <div key={dir} className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2">
-                                  <div className="break-all text-[var(--text-primary)]">{dir}</div>
-                                </div>
-                              ))
-                            ) : (
-                              <span>No recursive directory list returned.</span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="text-[11px] uppercase tracking-[0.2em]">All files (recursive)</div>
-                          <div className="mt-1 text-xs text-[var(--text-secondary)]">
-                            {analysisResult.project_structure?.all_files_total
-                              ? `${analysisResult.project_structure.all_files_total} total`
-                              : "Total not reported"}
-                            {analysisResult.project_structure?.all_files_truncated ? " · truncated in payload" : ""}
-                          </div>
-                          <div className="mt-2 max-h-32 space-y-2 overflow-y-auto pr-1">
-                            {analysisResult.project_structure?.all_files?.length ? (
-                              analysisResult.project_structure.all_files.map((file) => (
-                                <div key={file} className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2">
-                                  <div className="break-all text-[var(--text-primary)]">{file}</div>
-                                </div>
-                              ))
-                            ) : (
-                              <span>No recursive file list returned.</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
+                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
                       <div className="text-sm font-semibold text-[var(--text-primary)]">Analysis output</div>
                       <div className="mt-3 space-y-3 text-sm text-[var(--text-secondary)]">
                         <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3">
@@ -488,15 +393,6 @@ export default function GitNexusPage() {
                         </div>
                       </div>
                     </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
-                    <div className="text-sm font-semibold text-[var(--text-primary)]">Raw project_structure JSON</div>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Directly rendered from the latest GitNexus response.</p>
-                    <pre className="mt-3 max-h-64 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 text-xs text-[var(--text-primary)]">
-                      {structureJson}
-                    </pre>
-                  </div>
                 </div>
               ) : (
                 <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--bg-surface)] p-4 text-sm text-[var(--text-secondary)]">
@@ -505,9 +401,43 @@ export default function GitNexusPage() {
               )}
             </Card>
 
-            <GitNexusChatBox projectId={projectId.trim()} analysisResult={analysisResult} />
           </div>
         </div>
+        {/* Floating Chat Panel */}
+        {chatOpen ? (
+          <div
+            style={{ width: chatWidth }}
+            className="fixed right-6 top-20 bottom-6 z-50 flex max-w-[90%] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] shadow-[0_24px_80px_rgba(0,0,0,0.45)]"
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">
+              <div className="text-sm font-semibold tracking-[0.02em] text-[var(--text-primary)]">GitNexus Chat</div>
+              <button type="button" onClick={() => setChatOpen(false)} className="rounded px-2 py-1 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]">Close</button>
+            </div>
+            <div className="flex h-full min-h-0 flex-1 overflow-hidden">
+              <div className="relative flex-1 overflow-auto p-3">
+                <GitNexusChatBox projectId={projectId.trim()} analysisResult={analysisResult} />
+              </div>
+              <div
+                role="separator"
+                onMouseDown={(e) => {
+                  resizingRef.current.active = true;
+                  resizingRef.current.startX = e.clientX;
+                  resizingRef.current.startWidth = chatWidth;
+                }}
+                aria-label="Resize chat panel"
+                className="w-2 cursor-ew-resize touch-none bg-transparent hover:bg-[var(--border-focus)]/20"
+                style={{ cursor: "ew-resize" }}
+              />
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => setChatOpen(true)}
+            className="fixed right-6 top-20 z-50 rounded-full border border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-sm text-[var(--text-primary)] shadow-lg"
+          >
+            Chat
+          </button>
+        )}
       </div>
     </PageWrapper>
   );

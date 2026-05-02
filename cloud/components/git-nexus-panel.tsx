@@ -97,7 +97,7 @@ export function GitNexusPanel({
 }: GitNexusPanelProps) {
   const [repoUrl, setRepoUrl] = useState(connectedRepo || "");
   const [sinceDays, setSinceDays] = useState("30");
-  const [resourceTier, setResourceTier] = useState<"" | "tiny" | "small" | "medium" | "large">("");
+  const [resourceTier, setResourceTier] = useState<"" | "small" | "medium" | "large">("");
   const [ramMb, setRamMb] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState<string[]>([]);
@@ -364,12 +364,11 @@ export function GitNexusPanel({
                   <label className="text-sm font-medium text-[var(--text-primary)]">Resource tier override</label>
                   <select
                     value={resourceTier}
-                    onChange={(event) => setResourceTier(event.target.value as "" | "tiny" | "small" | "medium" | "large")}
+                    onChange={(event) => setResourceTier(event.target.value as "" | "small" | "medium" | "large")}
                     className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none transition focus:border-[var(--border-focus)]"
                     disabled={analyzing}
                   >
                     <option value="">Auto</option>
-                    <option value="tiny">Tiny</option>
                     <option value="small">Small</option>
                     <option value="medium">Medium</option>
                     <option value="large">Large</option>

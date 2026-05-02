@@ -8,7 +8,7 @@ export interface NexusAnalysisRequest {
   project_id: string;
   branch?: string;
   since_days?: number;
-  resource_tier?: "tiny" | "small" | "medium" | "large" | "";
+  resource_tier?: "small" | "medium" | "large" | "";
   ram_mb?: number;
   github_token?: string;
   sprint_id?: string;
