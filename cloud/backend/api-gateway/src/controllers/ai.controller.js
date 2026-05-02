@@ -593,6 +593,33 @@ async function proxySse(req, res, next, upstreamPath) {
   }
 }
 
+async function proxyQuery(req, res, next, upstreamPath) {
+  try {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(req.query || {})) {
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item !== undefined && item !== null) query.append(key, String(item));
+        }
+      } else if (value !== undefined && value !== null) {
+        query.append(key, String(value));
+      }
+    }
+
+    const url = buildAiServiceUrl(query.toString() ? `${upstreamPath}?${query.toString()}` : upstreamPath);
+    const resp = await axios({
+      method: req.method,
+      url,
+      timeout: 30_000,
+      validateStatus: () => true,
+    });
+
+    res.status(resp.status).json(resp.data);
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   chat,
   confirmAction,
@@ -639,6 +666,22 @@ module.exports = {
 
   riskNarratorStream(req, res, next) {
     return proxySse(req, res, next, '/groq/risk-narrator/stream');
+  },
+
+  gitNexusAnalyze(req, res, next) {
+    return proxySse(req, res, next, '/api/v1/git-nexus/analyze');
+  },
+
+  gitNexusStatus(req, res, next) {
+    return proxyJson(req, res, next, '/api/v1/git-nexus/status');
+  },
+
+  gitNexusTasks(req, res, next) {
+    return proxyQuery(req, res, next, '/api/v1/git-nexus/tasks');
+  },
+
+  gitNexusImportTasks(req, res, next) {
+    return proxyJson(req, res, next, '/api/v1/git-nexus/import-tasks');
   },
 
   // ML (internal)

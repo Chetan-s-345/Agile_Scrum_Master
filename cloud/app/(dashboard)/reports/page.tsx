@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import {
   CartesianGrid,
@@ -367,7 +367,7 @@ export default function ReportsPage() {
     return "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-200";
   }
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     const [reportResp, sprintResp] = await Promise.all([fetchJson<ReportsResp>("/api/reports"), fetchJson<SprintsResp>("/api/sprints")]);
@@ -392,7 +392,7 @@ export default function ReportsPage() {
     }
 
     setLoading(false);
-  }
+  }, [selectedSprintId, hasReportRows, selectedAuditSprintId]);
 
   async function loadLiveReport(sprintId: string) {
     if (!sprintId) return;

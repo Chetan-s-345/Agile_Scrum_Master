@@ -78,3 +78,9 @@ services:
         value: https://api.groq.com/openai/v1
       - key: GROQ_MODEL
         value: llama-3.1-8b-instant
+      - key: E2B_API_KEY
+        sync: false
+      - key: E2B_TEMPLATE
+        value: agile-gitnexus-runtime
+      - key: GITHUB_TOKEN
+        sync: false

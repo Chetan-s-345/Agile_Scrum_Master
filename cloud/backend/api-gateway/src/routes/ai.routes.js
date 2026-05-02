@@ -26,6 +26,12 @@ router.post('/autonomous/autopilot', aiController.autonomousAutopilot);
 router.post('/autonomous/team-rebalance', aiController.autonomousTeamRebalance);
 router.post('/autonomous/briefing', aiController.autonomousBriefing);
 
+// GitNexus repository intelligence
+router.post('/git-nexus/analyze', aiController.gitNexusAnalyze);
+router.get('/git-nexus/status', aiController.gitNexusStatus);
+router.get('/git-nexus/tasks', aiController.gitNexusTasks);
+router.post('/git-nexus/import-tasks', aiController.gitNexusImportTasks);
+
 // Groq SSE streaming features
 router.post('/ticket-enrichment/stream', aiController.ticketEnrichmentStream);
 router.post('/standup-summarizer/stream', aiController.standupSummarizerStream);

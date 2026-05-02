@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import {
   Bar,
@@ -180,7 +180,7 @@ export default function MonitoringPage() {
     };
   }
 
-  async function loadSelectedSprintData(sprintId: string | null) {
+  const loadSelectedSprintData = useCallback(async (sprintId: string | null) => {
     if (!sprintId) {
       setVelocity(null);
       setAlerts(null);
@@ -200,9 +200,9 @@ export default function MonitoringPage() {
     setAlerts(aResp.ok ? aResp.data : null);
     setBurndown(bResp.ok ? bResp.data : null);
     setRisk(rResp.ok ? rResp.data : null);
-  }
+  }, []);
 
-  async function loadDeveloperActivity(sprintId: string | null, nextDeveloperFilter?: string) {
+  const loadDeveloperActivity = useCallback(async (sprintId: string | null, nextDeveloperFilter?: string) => {
     const query = new URLSearchParams();
     if (sprintId) query.set("sprintId", sprintId);
 
@@ -213,7 +213,7 @@ export default function MonitoringPage() {
 
     const resp = await fetchJson<DeveloperActivityResp>(`/api/monitoring/developer-activity?${query.toString()}`);
     setDeveloperActivity(resp.ok ? resp.data : null);
-  }
+  }, [developerFilter]);
 
   const filteredAlerts = useMemo(() => {
     const items = Array.isArray(alerts?.items) ? alerts!.items : [];
@@ -241,7 +241,7 @@ export default function MonitoringPage() {
     return "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200";
   }
 
-  async function load(preferredSprintId?: string) {
+  const load = useCallback(async (preferredSprintId?: string) => {
     setLoading(true);
     setError(null);
     setNotice(null);
@@ -291,7 +291,7 @@ export default function MonitoringPage() {
     }
 
     setLoading(false);
-  }
+  }, [loadDeveloperActivity, loadSelectedSprintData, selectedSprintId]);
 
   async function acknowledge(alert: AlertItem) {
     setError(null);

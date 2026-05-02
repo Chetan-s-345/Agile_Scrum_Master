@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from app.routes import autonomous_router, agentic_sprint_router, groq_features_router, ml_router, sprint_planning_router
 from app.services.db import close_pool, ensure_ml_schema
+from git_nexus.routes import router as git_nexus_router
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -25,6 +26,7 @@ app.include_router(agentic_sprint_router)
 app.include_router(autonomous_router)
 app.include_router(groq_features_router)
 app.include_router(ml_router)
+app.include_router(git_nexus_router, prefix="/api/v1", tags=["gitnexus"])
 
 
 @app.on_event("startup")

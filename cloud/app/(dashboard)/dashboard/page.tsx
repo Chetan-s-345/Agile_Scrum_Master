@@ -408,6 +408,18 @@ function DashboardPageContent() {
           </div>
         </div>
 
+        <div className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.24em] text-[var(--text-secondary)]">GitNexus</p>
+              <p className="mt-1 text-sm text-[var(--text-primary)]">Open GitNexus analysis.</p>
+            </div>
+            <Link href="/git-nexus" className="rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)] transition hover:bg-[var(--bg-hover)]">
+              <code>/git-nexus</code>
+            </Link>
+          </div>
+        </div>
+
         <div className="show-scrollbar flex gap-3 overflow-x-auto pb-3">
           {boardColumns.map((column) => (
             <BoardColumn
