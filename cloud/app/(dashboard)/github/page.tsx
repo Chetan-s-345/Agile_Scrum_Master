@@ -275,7 +275,7 @@ export default function GithubHubPage() {
             </div>
           </div>
           <Link href="/git-nexus" className="rounded-lg border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 px-4 py-2 text-sm font-semibold text-slate-900 dark:text-white transition">
-            📊 GitNexus
+            GitNexus
           </Link>
         </div>
 

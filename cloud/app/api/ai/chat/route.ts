@@ -37,8 +37,44 @@ export async function POST(request: Request) {
       cache: "no-store",
     });
 
-    const payload = await response.json().catch(() => null);
-    return NextResponse.json(payload ?? { error: "Upstream error", code: 502, detail: "Empty response from ai-service." }, { status: response.status });
+    const raw = await response.text().catch(() => "");
+    let payload: unknown = null;
+    try {
+      payload = raw ? JSON.parse(raw) : null;
+    } catch {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      const detail =
+        (payload && typeof payload === "object" && "detail" in payload && typeof (payload as { detail?: unknown }).detail === "string"
+          ? (payload as { detail: string }).detail
+          : "") ||
+        raw ||
+        `ai-service responded with ${response.status}`;
+
+      return NextResponse.json(
+        {
+          error: "Chat request failed",
+          code: response.status,
+          detail,
+        },
+        { status: response.status }
+      );
+    }
+
+    if (payload && typeof payload === "object") {
+      return NextResponse.json(payload, { status: response.status });
+    }
+
+    return NextResponse.json(
+      {
+        error: "Chat request failed",
+        code: 502,
+        detail: raw || "Empty response from ai-service.",
+      },
+      { status: 502 }
+    );
   } catch (caught) {
     const detail = caught instanceof Error ? caught.message : String(caught);
     return NextResponse.json({ error: "Bad gateway", code: 502, detail, upstream: `${aiServiceUrl}/rag/chat` }, { status: 502 });
