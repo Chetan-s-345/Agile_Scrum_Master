@@ -41,7 +41,7 @@ export async function GET(request: Request) {
     console.log(`[GitNexus Last] Query result: ${result.rowCount} rows`);
 
     if (result.rowCount === 0) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return NextResponse.json({ error: "Not found", detail: `No persisted GitNexus analysis found for project ${projectId}` }, { status: 404 });
     }
 
     return NextResponse.json(result.rows[0].raw_payload);

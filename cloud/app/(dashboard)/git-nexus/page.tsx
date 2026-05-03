@@ -27,6 +27,7 @@ export default function GitNexusPage() {
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectsError, setProjectsError] = useState("");
   const [analysisResult, setAnalysisResult] = useState<NexusAnalysisResult | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(true);
 
   const routeLabel = useMemo(() => "/git-nexus", []);
   const ready = projectId.trim().length > 0;
@@ -98,19 +99,32 @@ export default function GitNexusPage() {
     async function loadPersistedAnalysis() {
       if (!projectId.trim()) {
         setAnalysisResult(null);
+        setAnalysisLoading(false);
         return;
       }
 
+      setAnalysisLoading(true);
       try {
         const response = await fetch(`/api/ai/git-nexus/last?projectId=${encodeURIComponent(projectId.trim())}`, { cache: "no-store" });
-        if (!response.ok) return;
+        if (!response.ok) {
+          if (!cancelled) {
+            setAnalysisResult(null);
+          }
+          return;
+        }
 
         const payload = (await response.json().catch(() => null)) as NexusAnalysisResult | null;
         if (!cancelled && payload && typeof payload === "object" && "repo_meta" in payload) {
           setAnalysisResult(payload);
+        } else if (!cancelled) {
+          setAnalysisResult(null);
         }
       } catch {
         // Keep existing state if DB lookup is temporarily unavailable.
+      } finally {
+        if (!cancelled) {
+          setAnalysisLoading(false);
+        }
       }
     }
 
@@ -256,7 +270,7 @@ export default function GitNexusPage() {
                   <h3 className="text-lg font-semibold text-[var(--text-primary)]">Project details</h3>
                   <p className="text-sm text-[var(--text-secondary)]">Database project metadata and the latest analysis summary.</p>
                 </div>
-                {analysisResult ? <Badge color="blue">{analysisResult.repo_meta.primary_language}</Badge> : null}
+                {analysisResult ? <Badge color="blue">{analysisResult.repo_meta.primary_language}</Badge> : analysisLoading ? <Badge color="blue">Loading saved analysis</Badge> : null}
               </div>
 
               {selectedProject ? (
@@ -267,7 +281,11 @@ export default function GitNexusPage() {
                 </div>
               ) : null}
 
-              {analysisResult ? (
+              {analysisLoading && !analysisResult ? (
+                <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-4 text-sm text-[var(--text-secondary)]">
+                  Loading saved analysis from the database...
+                </div>
+              ) : analysisResult ? (
                 <div className="space-y-4">
                   <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">
                     Structure source: live GitNexus analysis payload
@@ -427,7 +445,7 @@ export default function GitNexusPage() {
                 </div>
               ) : (
                 <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--bg-surface)] p-4 text-sm text-[var(--text-secondary)]">
-                  Run an analysis to populate project details.
+                  No saved analysis found yet. Run analysis to populate project details.
                 </div>
               )}
             </Card>

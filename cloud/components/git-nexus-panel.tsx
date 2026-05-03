@@ -24,16 +24,6 @@ type StreamEnvelope = {
   line?: string;
 };
 
-type SandboxStatus = {
-  active_sandboxes?: number;
-  total_analyses_today?: number;
-  avg_duration_seconds?: number;
-  last_error?: string | null;
-  configured?: boolean;
-  ready?: boolean;
-  template_name?: string | null;
-};
-
 function getEventName(payload: StreamEnvelope): string {
   return String(payload.event || payload.type || "").toLowerCase();
 }
@@ -72,16 +62,6 @@ function eventText(payload: StreamEnvelope): string {
   return "";
 }
 
-function statusText(status: SandboxStatus | null): string {
-  if (!status) return "Sandbox status not checked yet.";
-  if (status.ready) {
-    const templateLabel = status.template_name || "unknown template";
-    return `Sandbox ready using ${templateLabel}.`;
-  }
-  if (!status.configured) return status.last_error || "E2B is not configured for this environment.";
-  return status.last_error || "Sandbox is not ready.";
-}
-
 function sanitizeTerminalLine(message: string): string {
   return message
     .replace(/^[\s\u200B-\u200D\uFEFF]*[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{S}\p{P}]+\s*/gu, "")
@@ -108,8 +88,6 @@ export function GitNexusPanel({
   const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sandboxTier, setSandboxTier] = useState<string | null>(null);
-  const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus | null>(null);
   const [targetRepo, setTargetRepo] = useState(connectedRepo || "");
   const [creatingPr, setCreatingPr] = useState(false);
   const [prUrl, setPrUrl] = useState<string | null>(null);
@@ -124,21 +102,6 @@ export function GitNexusPanel({
       progressLogRef.current.scrollTop = progressLogRef.current.scrollHeight;
     }
   }, [progress]);
-
-  useEffect(() => {
-    void fetch("/api/ai/git-nexus/status", { cache: "no-store" })
-      .then(async (response) => {
-        const payload = (await response.json().catch(() => ({}))) as SandboxStatus & { error?: string; detail?: string };
-        if (!response.ok) {
-          throw new Error(payload.detail || payload.error || `Sandbox status check failed (${response.status})`);
-        }
-        setSandboxStatus(payload as SandboxStatus);
-      })
-      .catch((caught) => {
-        const message = caught instanceof Error ? caught.message : "Sandbox status check failed";
-        setSandboxStatus({ configured: false, ready: false, last_error: message });
-      });
-  }, []);
 
   // Load persisted analysis if present so refresh doesn't re-run analysis
   useEffect(() => {
@@ -185,8 +148,6 @@ export function GitNexusPanel({
     setResult(null);
     onResult?.(null as unknown as NexusAnalysisResult);
     setSelectedTasks(new Set());
-    setSandboxTier(null);
-    setSandboxStatus(null);
     abortControllerRef.current = new AbortController();
 
     try {
@@ -241,10 +202,6 @@ export function GitNexusPanel({
             if (eventName === "progress") {
               const message = eventText(payload);
               appendProgress(message);
-              if (message.includes("Sandbox")) {
-                const tierMatch = message.match(/\(([^)]+Sandbox[^)]*)\)/i);
-                if (tierMatch) setSandboxTier(tierMatch[1]);
-              }
               continue;
             }
 
@@ -253,6 +210,17 @@ export function GitNexusPanel({
               if (analysis) {
                 setResult(analysis);
                 onResult?.(analysis);
+                void fetch("/api/ai/git-nexus/save", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    project_id: projectId,
+                    repo_url: nextRepoUrl,
+                    analysis,
+                  }),
+                }).catch((saveError) => {
+                  console.error("GitNexus save error", saveError);
+                });
               }
               appendProgress("Analysis complete");
               continue;
@@ -337,7 +305,6 @@ export function GitNexusPanel({
     setProgress([]);
     setSelectedTasks(new Set());
     setError(null);
-    setSandboxTier(null);
   }
 
   function abortAnalysis() {
@@ -431,17 +398,6 @@ export function GitNexusPanel({
               </div>
             )}
 
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-4 text-sm text-[var(--text-secondary)]">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <span className="font-medium text-[var(--text-primary)]">Sandbox status:</span> {statusText(sandboxStatus)}
-                </div>
-                <Badge color={sandboxStatus?.ready ? "green" : "default"}>
-                  {sandboxStatus?.ready ? "Ready" : "Not ready"}
-                </Badge>
-              </div>
-            </div>
-
             {error ? <div className="rounded-lg border border-red-500/50 bg-red-950/30 p-3 text-sm text-red-200">{error}</div> : null}
             {loadingPersisted ? (
               <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-3 text-sm text-[var(--text-secondary)]">
@@ -468,8 +424,6 @@ export function GitNexusPanel({
               <div className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
               <span className="text-sm font-medium text-[var(--text-primary)]">Terminal session active</span>
             </div>
-
-            {sandboxTier ? <Badge color="blue">{sandboxTier}</Badge> : null}
 
             <div className="overflow-hidden rounded-2xl border border-emerald-500/20 bg-[#050608] shadow-[0_0_0_1px_rgba(16,185,129,0.08),0_24px_80px_rgba(0,0,0,0.55)]">
               <div className="flex items-center gap-2 border-b border-white/5 bg-white/5 px-4 py-2">
@@ -507,7 +461,6 @@ export function GitNexusPanel({
               <Badge>{result.repo_meta.primary_language}</Badge>
               <Badge color="blue">{Math.round(result.repo_meta.repo_size_kb / 1024)} MB</Badge>
               <Badge color="green">{result.repo_meta.total_commits_analyzed} commits</Badge>
-              {result.sandbox_config ? <Badge color="purple">{result.sandbox_config.tier_name}</Badge> : null}
             </div>
 
             <GitNexusGraph result={result} />
