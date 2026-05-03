@@ -20,6 +20,7 @@ import {
 type SprintListItem = {
   id: string;
   projectId: string;
+  project_id?: string;
   name: string;
 };
 
@@ -83,6 +84,19 @@ function normalizeTask(task: BoardTask): BoardTask {
   };
 }
 
+function normalizeSprint(input: unknown): SprintListItem | null {
+  if (!input || typeof input !== "object") return null;
+  const row = input as { id?: unknown; projectId?: unknown; project_id?: unknown; name?: unknown };
+  const id = String(row.id || "").trim();
+  if (!id) return null;
+  const projectId = String(row.projectId || row.project_id || "").trim();
+  return {
+    id,
+    projectId,
+    project_id: projectId,
+    name: String(row.name || "Sprint"),
+  };
+}
 function TaskCard({ task }: { task: BoardTask }) {
   const dueText = formatDueDate(task.dueDate);
   const hasDueDate = dueText !== "No due date";
@@ -189,26 +203,38 @@ function DashboardPageContent() {
     let cancelled = false;
     async function loadSprints() {
       try {
-        const queryParams = new URLSearchParams({ status: "active" });
-        if (preferredProjectId) queryParams.set("projectId", preferredProjectId);
-        const respActive = await fetch(`/api/sprints?${queryParams.toString()}`, { cache: "no-store" });
-        const dataActive = await respActive.json().catch(() => null);
-        if (!respActive.ok) throw new Error(String(dataActive?.error || "Failed to load sprints"));
-
-        let items = Array.isArray(dataActive?.items) ? (dataActive.items as SprintListItem[]) : [];
-        if (!items.length) {
-          const planningParams = new URLSearchParams({ status: "planning" });
-          if (preferredProjectId) planningParams.set("projectId", preferredProjectId);
-          const respPlanning = await fetch(`/api/sprints?${planningParams.toString()}`, { cache: "no-store" });
-          const dataPlanning = await respPlanning.json().catch(() => null);
-          if (respPlanning.ok) items = Array.isArray(dataPlanning?.items) ? (dataPlanning.items as SprintListItem[]) : [];
+        const respAll = await fetch(`/api/sprints`, { cache: "no-store" });
+        const dataAll = await respAll.json().catch(() => null);
+        if (!respAll.ok) {
+          const message = String(dataAll?.error || "Failed to load sprints");
+          throw new Error(message);
         }
+
+        const merged = Array.isArray(dataAll?.items) ? dataAll.items : [];
+
+        const dedup = new Map<string, SprintListItem>();
+        for (const item of merged) {
+          const normalized = normalizeSprint(item);
+          if (!normalized || dedup.has(normalized.id)) continue;
+          dedup.set(normalized.id, normalized);
+        }
+
+        if (preferredSprintId && !dedup.has(preferredSprintId)) {
+          const requestedResp = await fetch(`/api/sprints/${encodeURIComponent(preferredSprintId)}`, { cache: "no-store" });
+          const requestedData = await requestedResp.json().catch(() => null) as { sprint?: unknown } | null;
+          if (requestedResp.ok) {
+            const requested = normalizeSprint(requestedData?.sprint);
+            if (requested) dedup.set(requested.id, requested);
+          }
+        }
+
+        const items = [...dedup.values()];
         if (cancelled) return;
         setSprints(items);
         if (preferredSprintId && items.some((x) => String(x.id) === preferredSprintId)) {
           setSelectedSprintId(preferredSprintId);
         } else {
-          setSelectedSprintId(items[0]?.id ? String(items[0].id) : "");
+          setSelectedSprintId(items[0]?.id ? String(items[0].id) : (preferredSprintId || ""));
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load sprints");
@@ -225,7 +251,8 @@ function DashboardPageContent() {
     const next = new URLSearchParams(searchParams?.toString() || "");
     if (selectedSprintId) next.set("sprintId", selectedSprintId);
     const selectedSprint = sprints.find((item) => String(item.id) === String(selectedSprintId));
-    if (selectedSprint?.projectId) next.set("projectId", String(selectedSprint.projectId));
+    const selectedProjectId = String(selectedSprint?.projectId || selectedSprint?.project_id || "");
+    if (selectedProjectId) next.set("projectId", selectedProjectId);
     const nextQuery = next.toString();
     const currentQuery = searchParams?.toString() || "";
     if (nextQuery === currentQuery) return;
@@ -271,6 +298,11 @@ function DashboardPageContent() {
     const sprint = sprints.find((item) => String(item.id) === String(selectedSprintId));
     return sprint?.name || "No active sprint";
   }, [selectedSprintId, sprints]);
+
+  const sprintOptions = useMemo(() => {
+    if (!selectedSprintId || sprints.some((item) => String(item.id) === String(selectedSprintId))) return sprints;
+    return [{ id: selectedSprintId, name: "Selected Sprint", projectId: preferredProjectId, project_id: preferredProjectId }, ...sprints];
+  }, [preferredProjectId, selectedSprintId, sprints]);
 
   const totalTasks = filteredBoard.todo.length + filteredBoard.in_progress.length + filteredBoard.in_review.length + filteredBoard.blocked.length + filteredBoard.done.length;
   const completedTasks = filteredBoard.done.length;
@@ -321,7 +353,7 @@ function DashboardPageContent() {
               onChange={(e) => setSelectedSprintId(e.target.value)}
               className="h-9 min-w-[220px] rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 text-sm text-[var(--text-primary)] outline-none"
             >
-              {sprints.map((sprint) => (
+              {sprintOptions.map((sprint) => (
                 <option key={sprint.id} value={sprint.id}>
                   {sprint.name}
                 </option>
@@ -373,6 +405,18 @@ function DashboardPageContent() {
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded bg-[#1f1f1f]">
             <div className="h-full bg-[var(--accent-blue)]" style={{ width: `${completionPct}%` }} />
+          </div>
+        </div>
+
+        <div className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.24em] text-[var(--text-secondary)]">GitNexus</p>
+              <p className="mt-1 text-sm text-[var(--text-primary)]">Open GitNexus analysis.</p>
+            </div>
+            <Link href="/git-nexus" className="rounded-lg border border-[var(--border-strong)] bg-[var(--bg-surface)] px-3 py-2 text-sm text-[var(--text-primary)] transition hover:bg-[var(--bg-hover)]">
+              <code>/git-nexus</code>
+            </Link>
           </div>
         </div>
 

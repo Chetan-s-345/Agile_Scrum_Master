@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Users, Check, RefreshCw, Plus, Archive, Trash2 } from 'lucide-react';
+import { Check, RefreshCw, Plus, Archive, Trash2 } from 'lucide-react';
 import { BlockLoadingOverlay } from "@/components/block-loading-overlay";
 
 type ProjectListItem = {
@@ -30,30 +30,37 @@ type SprintListItem = {
 };
 
 type PlannedTask = {
-  id: string;
-  sprint_id: string;
-  project_id: string;
+  id?: string;
   title: string;
-  story_points: number;
-  tech_tags: string[];
-  priority: string;
-};
-
-type TeamBreakdownItem = {
-  developerId: string;
-  name: string;
-  availabilityStatus: string;
-  maxCapacity: number;
-  currentLoad: number;
-  availableCapacity: number;
+  description?: string;
+  story_points?: number;
+  storyPoints?: number;
+  tech_tags?: string[];
+  priority?: string;
 };
 
 type PlanResult = {
   sprintId: string;
-  selectedTasks: PlannedTask[];
-  totalPoints: number;
-  capacityUsed: number;
-  teamBreakdown: TeamBreakdownItem[];
+  projectId?: string;
+  sprintName?: string;
+  warning?: string | null;
+  createdTasks: PlannedTask[];
+  assignmentResults?: Array<{
+    taskId?: string;
+    developerId?: string | null;
+    ok?: boolean;
+  }>;
+  githubIssueResults?: Array<{
+    taskId?: string;
+    ok?: boolean;
+    issue?: { htmlUrl?: string; number?: number };
+  }>;
+};
+
+type DeveloperListItem = {
+  id: string;
+  fullName?: string;
+  name?: string;
 };
 
 export default function SprintPlannerPage() {
@@ -62,6 +69,8 @@ export default function SprintPlannerPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [selectedSprintId, setSelectedSprintId] = useState<string>("");
   const [planResult, setPlanResult] = useState<PlanResult | null>(null);
+  const [sprintDescription, setSprintDescription] = useState("");
+  const [developers, setDevelopers] = useState<DeveloperListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,17 +87,27 @@ export default function SprintPlannerPage() {
   const [creatingSprint, setCreatingSprint] = useState(false);
   const [actingOnSprint, setActingOnSprint] = useState(false);
 
-  const capacityUsedPct = useMemo(() => {
-    const v = Number(planResult?.capacityUsed ?? 0);
-    if (!Number.isFinite(v)) return 0;
-    return Math.max(0, Math.min(100, v));
-  }, [planResult?.capacityUsed]);
+  const developerNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const d of developers) {
+      map.set(String(d.id), String(d.fullName || d.name || "Developer"));
+    }
+    return map;
+  }, [developers]);
 
-  const getRiskColor = (capacityUsed: number) => {
-    if (capacityUsed < 80) return 'text-green-600 dark:text-green-400';
-    if (capacityUsed < 95) return 'text-yellow-600 dark:text-yellow-400';
-    return 'text-red-600 dark:text-red-400';
-  };
+  const assignedByTaskId = useMemo(() => {
+    const map = new Map<string, string>();
+    const rows = Array.isArray(planResult?.assignmentResults) ? planResult.assignmentResults : [];
+    for (const row of rows) {
+      const taskId = String(row?.taskId || "");
+      const developerId = String(row?.developerId || "");
+      if (!taskId || !developerId || row?.ok === false) continue;
+      map.set(taskId, developerId);
+    }
+    return map;
+  }, [planResult]);
+
+  const blockingAction = planning || creatingProject || creatingSprint || actingOnSprint;
 
   async function loadProjects() {
     setError(null);
@@ -103,10 +122,25 @@ export default function SprintPlannerPage() {
       if (!selectedProjectId && items.length) {
         setSelectedProjectId(String(items[0].id));
       }
+      if (data?.requiresOrgSetup) {
+        setError(String(data?.upstreamError || "Tenant database is not ready yet. Create or provision the org database, then refresh."));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load projects");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadDevelopers() {
+    try {
+      const resp = await fetch("/api/developers", { cache: "no-store" });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) return;
+      const items = Array.isArray(data?.items) ? (data.items as DeveloperListItem[]) : [];
+      setDevelopers(items);
+    } catch {
+      setDevelopers([]);
     }
   }
 
@@ -124,6 +158,9 @@ export default function SprintPlannerPage() {
       if (!selectedSprintId || !items.some((s) => String(s.id) === String(selectedSprintId))) {
         setSelectedSprintId(items.length ? String(items[0].id) : "");
       }
+      if (data?.requiresOrgSetup) {
+        setError(String(data?.upstreamError || "Tenant database is not ready yet. Create or provision the org database, then refresh."));
+      }
     } catch (e) {
       setPlanningSprints([]);
       setSelectedSprintId("");
@@ -135,22 +172,37 @@ export default function SprintPlannerPage() {
 
   async function runPlanner() {
     if (!selectedProjectId || !selectedSprintId) return;
+    if (!sprintDescription.trim()) {
+      setError("Sprint description is required to generate AI tasks.");
+      return;
+    }
     setError(null);
     setPlanning(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 90000);
     try {
-      const resp = await fetch(`/api/sprints/${encodeURIComponent(selectedSprintId)}/plan`, {
+      const resp = await fetch(`/api/sprints/${encodeURIComponent(selectedSprintId)}/agentic-build`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: selectedProjectId }),
+        body: JSON.stringify({
+          projectId: selectedProjectId,
+          projectDetails: sprintDescription.trim(),
+          minTickets: 8,
+          maxTickets: 8,
+          mirrorToGithub: true,
+        }),
         cache: "no-store",
+        signal: controller.signal,
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok) throw new Error(String(data?.error || "Sprint planning failed"));
       setPlanResult(data as PlanResult);
     } catch (e) {
       setPlanResult(null);
-      setError(e instanceof Error ? e.message : "Sprint planning failed");
+      const message = e instanceof Error ? e.message : "Sprint planning failed";
+      setError(/abort/i.test(message) ? "Planner timed out. Please retry with a shorter sprint description." : message);
     } finally {
+      clearTimeout(timeoutId);
       setPlanning(false);
     }
   }
@@ -272,6 +324,7 @@ export default function SprintPlannerPage() {
 
   useEffect(() => {
     void loadProjects();
+    void loadDevelopers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -293,12 +346,17 @@ export default function SprintPlannerPage() {
 
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
-      <BlockLoadingOverlay active={loading || planning || creatingProject || creatingSprint || actingOnSprint} label="Loading sprint planner..." fullScreen={true} delayMs={420} />
+      <BlockLoadingOverlay active={blockingAction} label="Loading sprint planner..." fullScreen={true} delayMs={420} />
       <div className="w-full">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">Sprint Planner</h1>
           <p className="text-slate-600 dark:text-slate-300">Plan next sprint from backlog with AI assistance</p>
+          {loading && (
+            <p className="mt-3 inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-slate-300">
+              Loading projects and planning sprints...
+            </p>
+          )}
         </div>
 
         {/* Controls */}
@@ -377,7 +435,7 @@ export default function SprintPlannerPage() {
               <button
                 onClick={() => void runPlanner()}
                 className="flex-1 bg-[var(--bg-card)] border border-[var(--border-strong)] text-[var(--text-primary)] font-semibold px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 hover:bg-[var(--bg-hover)] disabled:opacity-60"
-                disabled={!selectedProjectId || !selectedSprintId || planning || actingOnSprint}
+                disabled={!selectedProjectId || !selectedSprintId || !sprintDescription.trim() || planning || actingOnSprint}
               >
                 <Check className="w-4 h-4" />
                 {planning ? "Planning…" : "Run Planner"}
@@ -402,6 +460,20 @@ export default function SprintPlannerPage() {
               </button>
             </div>
           </div>
+        </div>
+
+        <div className="mb-6 bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Sprint Description</label>
+          <textarea
+            className="w-full bg-white dark:bg-zinc-900 text-slate-900 dark:text-white px-3 py-2 rounded-lg border border-slate-200 dark:border-zinc-800 min-h-[120px]"
+            value={sprintDescription}
+            onChange={(e) => setSprintDescription(e.target.value)}
+            placeholder="Describe sprint goals, scope, constraints, and required outcomes. The planner will generate and auto-assign at least 8 tasks and mirror them to GitHub issues."
+            disabled={planning || loading}
+          />
+          <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">
+            Keep this focused for better AI output quality and lower token usage.
+          </p>
         </div>
 
         {showCreateProject && (
@@ -513,129 +585,73 @@ export default function SprintPlannerPage() {
             <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
           </div>
         )}
-        
-        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
-          <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="text-xs text-slate-500 dark:text-slate-400">Planning Sprints</div>
-            <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{planningSprints.length}</div>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="text-xs text-slate-500 dark:text-slate-400">Planned Tasks</div>
-            <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{planResult?.selectedTasks?.length || 0}</div>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="text-xs text-slate-500 dark:text-slate-400">Total Points</div>
-            <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{planResult?.totalPoints || 0}</div>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="text-xs text-slate-500 dark:text-slate-400">Capacity Usage</div>
-            <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{Math.round(capacityUsedPct)}%</div>
-          </div>
-        </div>
 
-        {/* Main Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Planned Items */}
-          <div className="lg:col-span-2">
-            <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
-              <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">Planned Tasks</h2>
-              <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-800/40">
-                <div className="mb-1 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
-                  <span>Planner Overview</span>
-                  <span>{planResult?.selectedTasks?.length || 0} tasks • {planResult?.totalPoints || 0} pts</span>
-                </div>
-                <div className="h-1.5 w-full overflow-hidden rounded bg-slate-200 dark:bg-zinc-700">
-                  <div className="h-full bg-[var(--accent-blue)]" style={{ width: `${capacityUsedPct}%` }} />
-                </div>
-              </div>
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {!planResult?.selectedTasks?.length ? (
-                  <div className="p-4 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg">
-                    <p className="text-sm text-slate-700 dark:text-slate-300">
-                      Run the planner to generate tasks from backlog items marked as <b>ready</b>.
-                    </p>
-                  </div>
-                ) : (
-                  planResult.selectedTasks.map((task) => (
-                    <div
-                      key={task.id}
-                      className="p-4 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg hover:shadow-md transition"
-                    >
-                      <div className="flex items-start justify-between mb-2">
-                        <h3 className="font-semibold text-slate-900 dark:text-white">{task.title}</h3>
-                        <span
-                          className={`px-2 py-1 rounded text-xs font-medium ${
-                            task.priority === "high"
-                              ? "bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200"
-                              : task.priority === "medium"
-                                ? "bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200"
-                                : "bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200"
-                          }`}
-                        >
-                          {task.priority}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-slate-600 dark:text-slate-400">ID: #{task.id.slice(0, 8)}</span>
-                        <span className="font-bold text-lg text-[var(--accent-blue)]">{Number(task.story_points || 0)} pts</span>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className="mt-6 pt-6 border-t border-slate-200 dark:border-zinc-800">
-                <p className="text-sm text-slate-600 dark:text-slate-400">
-                  {planResult
-                    ? `Planned ${planResult.selectedTasks.length} tasks for ${planResult.totalPoints} points.`
-                    : "Select a project and planning sprint to begin."}
+        {!!planResult?.warning && (
+          <div className="mb-6 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+            <p className="text-sm text-amber-800 dark:text-amber-200">{planResult.warning}</p>
+          </div>
+        )}
+        
+        <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
+          <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">Planned Tasks</h2>
+          <div className="space-y-3 max-h-[560px] overflow-y-auto">
+            {!planResult?.createdTasks?.length ? (
+              <div className="p-4 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg">
+                <p className="text-sm text-slate-700 dark:text-slate-300">
+                  Add sprint description and click <b>Run Planner</b> to generate at least 8 AI tasks, assign them to developers, and mirror them to GitHub.
                 </p>
               </div>
-            </div>
+            ) : (
+              planResult.createdTasks.map((task, idx) => {
+                const taskId = String(task.id || "");
+                const points = Number(task.story_points ?? task.storyPoints ?? 0);
+                const priority = String(task.priority || "medium").toLowerCase();
+                const developerId = assignedByTaskId.get(taskId) || "";
+                const assigneeName = developerId ? (developerNameById.get(developerId) || `Developer ${developerId.slice(0, 8)}`) : "Unassigned";
+                const githubMirror = (planResult.githubIssueResults || []).find((x) => String(x?.taskId || "") === taskId);
+                return (
+                  <div
+                    key={taskId || `${task.title}-${idx}`}
+                    className="p-4 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg hover:shadow-md transition"
+                  >
+                    <div className="flex items-start justify-between mb-2 gap-3">
+                      <h3 className="font-semibold text-slate-900 dark:text-white">{task.title}</h3>
+                      <span
+                        className={`px-2 py-1 rounded text-xs font-medium ${
+                          priority === "critical" || priority === "high"
+                            ? "bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200"
+                            : priority === "medium"
+                              ? "bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200"
+                              : "bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200"
+                        }`}
+                      >
+                        {priority}
+                      </span>
+                    </div>
+                    {!!task.description && <p className="text-sm text-slate-600 dark:text-slate-300 mb-3">{task.description}</p>}
+                    <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600 dark:text-slate-400">
+                      <span className="font-semibold text-[var(--accent-blue)]">{Number.isFinite(points) ? Math.max(0, Math.round(points)) : 0} pts</span>
+                      <span>Assignee: {assigneeName}</span>
+                      <span>
+                        GitHub: {githubMirror?.ok ? "Mirrored" : "Pending"}
+                        {githubMirror?.issue?.htmlUrl && (
+                          <a href={githubMirror.issue.htmlUrl} target="_blank" rel="noreferrer" className="ml-1 text-blue-600 dark:text-blue-400 underline">
+                            issue #{githubMirror.issue.number || ""}
+                          </a>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
-
-          {/* Team Capacity */}
-          <div className="space-y-6">
-            {/* Risk Score Card */}
-            <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
-              <h3 className="font-semibold text-slate-900 dark:text-white mb-4">Sprint Risk Score</h3>
-              <div className={`text-4xl font-bold mb-2 ${getRiskColor(capacityUsedPct)}`}>
-                {Math.round(capacityUsedPct)}%
-              </div>
-              <div className="w-full bg-slate-200 dark:bg-slate-600 rounded-full h-2 mb-3">
-                <div className="bg-green-500 h-2 rounded-full" style={{ width: `${capacityUsedPct}%` }}></div>
-              </div>
-              <p className="text-xs text-slate-600 dark:text-slate-400">Capacity used by planned tasks</p>
-            </div>
-
-            {/* Team Capacity Bars */}
-            <div className="bg-white dark:bg-zinc-900 rounded-lg shadow-md border border-slate-200 dark:border-zinc-800 p-6">
-              <h3 className="font-semibold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
-                <Users className="w-5 h-5" />
-                Team Capacity
-              </h3>
-              <div className="space-y-4">
-                {Array.isArray(planResult?.teamBreakdown) && planResult!.teamBreakdown!.length ? (
-                  planResult!.teamBreakdown!.map((dev) => {
-                    const max = Math.max(1, Number(dev.maxCapacity || 0));
-                    const used = Math.max(0, Math.min(max, Number(dev.currentLoad || 0)));
-                    const pct = Math.max(0, Math.min(100, (used / max) * 100));
-                    return (
-                      <div key={dev.developerId}>
-                        <div className="flex justify-between mb-2">
-                          <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{dev.name}</span>
-                          <span className="text-sm text-slate-600 dark:text-slate-400">{used}/{max}</span>
-                        </div>
-                        <div className="w-full bg-slate-200 dark:bg-slate-600 rounded-full h-2">
-                          <div className="bg-[var(--accent-blue)] h-2 rounded-full transition-all" style={{ width: `${pct}%` }}></div>
-                        </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <p className="text-sm text-slate-600 dark:text-slate-400">Run the planner to see capacity breakdown.</p>
-                )}
-              </div>
-            </div>
+          <div className="mt-6 pt-6 border-t border-slate-200 dark:border-zinc-800">
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              {planResult
+                ? `Generated ${planResult.createdTasks.length} tasks for sprint ${planResult.sprintName || selectedSprint?.name || ""}.`
+                : "Select a project and planning sprint, add sprint description, then run planner."}
+            </p>
           </div>
         </div>
       </div>

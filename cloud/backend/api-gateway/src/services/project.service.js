@@ -76,54 +76,61 @@ class ProjectService {
         p.slug,
         p.status,
         p.tech_stack,
-        COALESCE(pm.member_count, 0)::int AS member_count,
-        COALESCE(cs.completed_sprints, 0)::int AS completed_sprints,
-        act.id AS active_sprint_id,
-        act.name AS active_sprint_name,
-        act.sprint_number AS active_sprint_number,
-        act.start_date AS active_sprint_start_date,
-        act.end_date AS active_sprint_end_date
+        p.github_repo,
+        COALESCE((SELECT COUNT(*) FROM project_members pm_count WHERE pm_count.project_id = p.id), 0)::int AS member_count,
+        COALESCE((SELECT COUNT(*) FROM sprints s_done WHERE s_done.project_id = p.id AND s_done.status = 'completed'), 0)::int AS completed_sprints,
+        (
+          SELECT json_build_object(
+            'id', s.id,
+            'name', s.name,
+            'sprintNumber', s.sprint_number,
+            'startDate', s.start_date,
+            'endDate', s.end_date
+          )
+          FROM sprints s
+          WHERE s.project_id = p.id AND s.status = 'active'
+          ORDER BY s.start_date DESC
+          LIMIT 1
+        ) AS active_sprint
       FROM projects p
-      LEFT JOIN (
-        SELECT project_id, COUNT(*) AS member_count
-        FROM project_members
-        GROUP BY project_id
-      ) pm ON pm.project_id = p.id
-      LEFT JOIN (
-        SELECT project_id, COUNT(*) FILTER (WHERE status = 'completed') AS completed_sprints
-        FROM sprints
-        GROUP BY project_id
-      ) cs ON cs.project_id = p.id
-      LEFT JOIN LATERAL (
-        SELECT id, name, sprint_number, start_date, end_date
-        FROM sprints
-        WHERE project_id = p.id AND status = 'active'
-        ORDER BY start_date DESC
-        LIMIT 1
-      ) act ON TRUE
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY p.created_at DESC
     `;
 
-    const resp = await orgPool.query(sql, params);
-    return resp.rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      slug: r.slug,
-      status: r.status,
-      memberCount: Number(r.member_count || 0),
-      activeSprint: r.active_sprint_id
-        ? {
-            id: r.active_sprint_id,
-            name: r.active_sprint_name,
-            sprintNumber: r.active_sprint_number,
-            startDate: r.active_sprint_start_date,
-            endDate: r.active_sprint_end_date,
-          }
-        : null,
-      completedSprints: Number(r.completed_sprints || 0),
-      techStack: r.tech_stack || [],
-    }));
+    try {
+      const resp = await orgPool.query(sql, params);
+      return resp.rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        status: r.status,
+        repo_url: r.github_repo || '',
+        memberCount: Number(r.member_count || 0),
+        activeSprint: r.active_sprint || null,
+        completedSprints: Number(r.completed_sprints || 0),
+        techStack: r.tech_stack || [],
+      }));
+    } catch (err) {
+      console.warn('Project list aggregate query failed, falling back to basic list:', err?.message || err);
+      const fallbackSql = `
+        SELECT id, name, slug, status, tech_stack, github_repo
+        FROM projects
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        ORDER BY created_at DESC
+      `;
+      const fallbackResp = await orgPool.query(fallbackSql, params);
+      return fallbackResp.rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        status: r.status,
+        repo_url: r.github_repo || '',
+        memberCount: 0,
+        activeSprint: null,
+        completedSprints: 0,
+        techStack: r.tech_stack || [],
+      }));
+    }
   }
 
   async create(req, payload, context) {
@@ -282,6 +289,7 @@ class ProjectService {
     if (patch.description !== undefined) push('description', patch.description || null);
     if (patch.status !== undefined) push('status', String(patch.status));
     if (patch.techStack !== undefined) push('tech_stack', patch.techStack || []);
+    if (patch.repo_url !== undefined) push('github_repo', String(patch.repo_url).trim() || null);
     if (patch.targetEndDate !== undefined) {
       const iso = parseDateToIso(patch.targetEndDate);
       if (!iso) throw Object.assign(new Error('Invalid targetEndDate'), { statusCode: 400 });

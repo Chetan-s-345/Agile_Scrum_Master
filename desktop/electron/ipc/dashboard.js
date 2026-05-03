@@ -25,9 +25,47 @@ function getAuthToken() {
   const session = getStoredSession();
   const token = asString(session?.accessToken);
   if (!token) {
-    throw new Error("Desktop session not found. Please sign in.");
+    const error = new Error("Desktop session not found. Please sign in.");
+    error.code = "DESKTOP_SESSION_MISSING";
+    throw error;
   }
   return token;
+}
+
+function isMissingSessionError(error) {
+  if (!error || typeof error !== "object") return false;
+  if (error.code === "DESKTOP_SESSION_MISSING") return true;
+  const message = String(error.message || "");
+  if (message.includes("Desktop session not found")) return true;
+  return message.includes("Gateway request failed (401)");
+}
+
+function isGatewayUnavailableError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  if (!message) return false;
+  return (
+    message.includes("fetch failed") ||
+    message.includes("econnrefused") ||
+    message.includes("gateway request failed (5")
+  );
+}
+
+function emptyDashboardPayload() {
+  return {
+    summary: {
+      activeSprint: null,
+      openTasks: 0,
+      blockers: 0,
+      velocity: 0,
+      upcomingStandups: 0,
+    },
+    recentActivity: [],
+    burndown: {
+      dates: [],
+      ideal: [],
+      actual: [],
+    },
+  };
 }
 
 async function gatewayGet(pathname, searchParams) {
@@ -211,18 +249,39 @@ async function fetchDashboardData(payload = {}) {
 
 function registerDashboardIpcHandlers(ipcMain) {
   ipcMain.handle(CHANNELS.DASHBOARD.GET_SUMMARY, async (_event, payload) => {
-    const dashboard = await fetchDashboardData(payload);
-    return dashboard.summary;
+    try {
+      const dashboard = await fetchDashboardData(payload);
+      return dashboard.summary;
+    } catch (error) {
+      if (isMissingSessionError(error) || isGatewayUnavailableError(error)) {
+        return emptyDashboardPayload().summary;
+      }
+      throw error;
+    }
   });
 
   ipcMain.handle(CHANNELS.DASHBOARD.GET_RECENT_ACTIVITY, async (_event, payload) => {
-    const dashboard = await fetchDashboardData(payload);
-    return dashboard.recentActivity;
+    try {
+      const dashboard = await fetchDashboardData(payload);
+      return dashboard.recentActivity;
+    } catch (error) {
+      if (isMissingSessionError(error) || isGatewayUnavailableError(error)) {
+        return emptyDashboardPayload().recentActivity;
+      }
+      throw error;
+    }
   });
 
   ipcMain.handle(CHANNELS.DASHBOARD.GET_BURNDOWN_DATA, async (_event, payload) => {
-    const dashboard = await fetchDashboardData(payload);
-    return dashboard.burndown;
+    try {
+      const dashboard = await fetchDashboardData(payload);
+      return dashboard.burndown;
+    } catch (error) {
+      if (isMissingSessionError(error) || isGatewayUnavailableError(error)) {
+        return emptyDashboardPayload().burndown;
+      }
+      throw error;
+    }
   });
 }
 

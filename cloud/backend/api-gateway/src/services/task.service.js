@@ -47,6 +47,19 @@ async function hasTasksColumn(orgPool, columnName) {
   return Boolean(resp.rows[0]);
 }
 
+async function refreshDeveloperHealth(orgPool, developerId, sprintId) {
+  if (!developerId) return;
+
+  try {
+    if (sprintId) {
+      await orgPool.query('SELECT calculate_merit_score($1, $2)', [String(developerId), String(sprintId)]);
+    }
+    await orgPool.query('SELECT check_burnout_risk($1)', [String(developerId)]);
+  } catch {
+    // Best-effort only.
+  }
+}
+
 class TaskService {
   mapSubtaskRow(row) {
     return {
@@ -178,7 +191,7 @@ class TaskService {
     if (!issueKey) return { ok: true, ignored: true, reason: 'missing_issue_key' };
 
     const taskResp = await orgPool.query(
-      'SELECT id, assignee_id, story_points FROM tasks WHERE jira_issue_key = $1 LIMIT 1',
+      'SELECT id, status, started_at, completed_at, sprint_id, assignee_id, story_points FROM tasks WHERE jira_issue_key = $1 LIMIT 1',
       [issueKey]
     );
     const task = taskResp.rows[0] || null;
@@ -231,10 +244,17 @@ class TaskService {
       }
     }
 
+    if (currentAssigneeId) {
+      await refreshDeveloperHealth(orgPool, currentAssigneeId, null);
+    }
+    if (newAssigneeId) {
+      await refreshDeveloperHealth(orgPool, newAssigneeId, null);
+    }
+
     return { ok: true, changed: true, assigneeId: newAssigneeId };
   }
 
-  async updateStatus(jiraIssueKey, newStatusName, orgPool) {
+  async updateJiraStatus(jiraIssueKey, newStatusName, orgPool) {
     if (!orgPool) throw Object.assign(new Error('Org DB not provided'), { statusCode: 500 });
     const issueKey = String(jiraIssueKey || '').trim();
     if (!issueKey) return { ok: true, ignored: true, reason: 'missing_issue_key' };
@@ -256,6 +276,8 @@ class TaskService {
     const task = taskResp.rows[0] || null;
     if (!task) return { ok: true, ignored: true, reason: 'task_not_found' };
 
+    const beforeTerminal = ['done', 'cancelled'].includes(String(task.status));
+
     if (String(task.status) === mapped) return { ok: true, changed: false, status: mapped };
 
     const sets = ['status = $2', 'updated_at = NOW()'];
@@ -265,6 +287,23 @@ class TaskService {
     if (mapped === 'done' && !task.completed_at) sets.push('completed_at = NOW()');
 
     await orgPool.query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = $1`, params);
+
+    const afterTerminal = ['done', 'cancelled'].includes(mapped);
+    const assigneeId = task.assignee_id ? String(task.assignee_id) : null;
+    const points = Number(task.story_points || 0);
+
+    if (assigneeId && points && beforeTerminal !== afterTerminal) {
+      const loadDelta = afterTerminal ? -points : points;
+      await orgPool.query(
+        `UPDATE developer_profiles
+         SET current_sprint_load = GREATEST(0, current_sprint_load + $2),
+             availability_status = CASE WHEN GREATEST(0, current_sprint_load + $2) = 0 THEN 'available' ELSE availability_status END,
+             burnout_risk_flag = CASE WHEN GREATEST(0, current_sprint_load + $2) = 0 THEN FALSE ELSE burnout_risk_flag END,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [assigneeId, loadDelta]
+      );
+    }
 
     // Keep sprint rollups consistent (idempotent).
     if (task.sprint_id) {
@@ -276,6 +315,10 @@ class TaskService {
          WHERE id = $1`,
         [String(task.sprint_id)]
       );
+    }
+
+    if (assigneeId) {
+      await refreshDeveloperHealth(orgPool, assigneeId, task.sprint_id);
     }
 
     return { ok: true, changed: true, status: mapped };
@@ -329,6 +372,10 @@ class TaskService {
            WHERE id = $1`,
           [String(task.sprint_id)]
         );
+      }
+
+      if (task.assignee_id) {
+        await refreshDeveloperHealth(orgPool, task.assignee_id, task.sprint_id);
       }
 
       return { ok: true, changed: true, storyPoints: points };
@@ -600,6 +647,8 @@ class TaskService {
     if (!before) throw Object.assign(new Error('Task not found'), { statusCode: 404 });
 
     const nextStatus = String(payload.status);
+    const beforeTerminal = ['done', 'cancelled'].includes(String(before.status));
+    const afterTerminal = ['done', 'cancelled'].includes(nextStatus);
 
     await orgPool.query('BEGIN');
     try {
@@ -619,6 +668,19 @@ class TaskService {
         params
       );
       const after = updResp.rows[0];
+
+      if (before.assignee_id && Number(before.story_points || 0) && beforeTerminal !== afterTerminal) {
+        const loadDelta = afterTerminal ? -Number(before.story_points || 0) : Number(before.story_points || 0);
+        await orgPool.query(
+          `UPDATE developer_profiles
+           SET current_sprint_load = GREATEST(0, current_sprint_load + $2),
+               availability_status = CASE WHEN GREATEST(0, current_sprint_load + $2) = 0 THEN 'available' ELSE availability_status END,
+               burnout_risk_flag = CASE WHEN GREATEST(0, current_sprint_load + $2) = 0 THEN FALSE ELSE burnout_risk_flag END,
+               updated_at = NOW()
+           WHERE id = $1`,
+          [String(before.assignee_id), loadDelta]
+        );
+      }
 
       // Comment for status change
       await orgPool.query(
@@ -653,6 +715,10 @@ class TaskService {
             `Review blockers and consider reassignment.`,
           ]
         );
+      }
+
+      if (before.assignee_id) {
+        await refreshDeveloperHealth(orgPool, before.assignee_id, after.sprint_id || before.sprint_id);
       }
 
       await orgPool.query('COMMIT');
@@ -806,6 +872,9 @@ class TaskService {
       );
 
       await orgPool.query('COMMIT');
+      if (before.assignee_id) {
+        await refreshDeveloperHealth(orgPool, before.assignee_id, before.sprint_id);
+      }
       return { ok: true };
     } catch (e) {
       try {
@@ -847,6 +916,10 @@ class TaskService {
       );
 
       await orgPool.query('COMMIT');
+
+      if (before.assignee_id) {
+        await refreshDeveloperHealth(orgPool, before.assignee_id, before.sprint_id);
+      }
 
       await queueJiraTaskSync(req, {
         taskId: String(taskId),

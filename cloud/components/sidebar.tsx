@@ -9,7 +9,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useUIStore } from "@/lib/ui-store";
 import {
   Activity,
-  AppWindow,
   Archive,
   BookOpen,
   Bot,
@@ -25,17 +24,15 @@ import {
   Flag,
   GitBranch,
   Grid3X3,
-  LayoutDashboard,
-  ListTodo,
   PanelsTopLeft,
   Pencil,
   Plus,
-  ShieldAlert,
   Star,
   Trash2,
   UserRound,
   Users,
   Workflow,
+  Video,
   Zap,
 } from "lucide-react";
 
@@ -74,28 +71,23 @@ type SpacesResp = { spaces?: Space[]; archived?: Space[] };
 
 const mainLinks: LinkItem[] = [
   { label: "Overview", href: "/board", icon: UserRound },
+  { label: "Tasks", href: "/tasks", icon: Filter },
+  { label: "Sprint Planner", href: "/sprint-plan", icon: Workflow },
   { label: "Recent", href: "/sprints", icon: ChevronRight },
   { label: "Starred", href: "/reports", icon: Star },
-  { label: "Tasks", href: "/tasks", icon: AppWindow },
-  { label: "Plans", href: "/sprint-plan", icon: Workflow },
 ];
 
 const appPages: LinkItem[] = [
-  { label: "Sprint Plan", href: "/sprint-plan", icon: Zap },
   { label: "Agentic Scrum Master", href: "/scrum-master", icon: Bot },
   { label: "Sprints", href: "/sprints", icon: Flag },
-  { label: "Tasks", href: "/tasks", icon: ListTodo },
-  { label: "Pages", href: "/pages", icon: PanelsTopLeft },
   { label: "GitHub", href: "/github", icon: GitBranch },
   { label: "Assignment", href: "/assignment", icon: Compass },
   { label: "Monitoring", href: "/monitoring", icon: Activity },
   { label: "Reports", href: "/reports", icon: BookOpen },
-  { label: "Admin Webhooks", href: "/webhooks", icon: ShieldAlert },
 ];
 
 const bottomLinks: LinkItem[] = [
-  { label: "Filters", href: "/tasks", icon: Filter },
-  { label: "Dashboards", href: "/tasks", icon: LayoutDashboard },
+  { label: "Meetings", href: "/meetings", icon: Video },
   { label: "Goals", href: "/goals", icon: Flag },
   { label: "Teams", href: "/teams", icon: Users },
   { label: "More", href: "/settings", icon: Ellipsis },
@@ -165,15 +157,19 @@ function Item({
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
   try {
-    data = text ? (JSON.parse(text) as T) : null;
+    const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
+    const text = await resp.text().catch(() => "");
+    let data: T | null = null;
+    try {
+      data = text ? (JSON.parse(text) as T) : null;
+    } catch {
+      data = null;
+    }
+    return { ok: resp.ok, status: resp.status, data };
   } catch {
-    data = null;
+    return { ok: false, status: 503, data: null };
   }
-  return { ok: resp.ok, status: resp.status, data };
 }
 
 function SortableSpaceRow({
@@ -391,15 +387,18 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   const loadSpaces = useCallback(async () => {
     setLoadingSpaces(true);
-    const [spacesResp, githubResp] = await Promise.all([
-      fetchJson<SpacesResp>("/api/spaces"),
-      fetchJson<{ connected?: boolean }>("/api/integrations/github/status"),
-    ]);
+    try {
+      const [spacesResp, githubResp] = await Promise.all([
+        fetchJson<SpacesResp>("/api/spaces"),
+        fetchJson<{ connected?: boolean }>("/api/integrations/github/status"),
+      ]);
 
-    setSpaces(Array.isArray(spacesResp.data?.spaces) ? spacesResp.data!.spaces : []);
-    setArchivedSpaces(Array.isArray(spacesResp.data?.archived) ? spacesResp.data!.archived : []);
-    setGithubConnected(Boolean(githubResp.data?.connected));
-    setLoadingSpaces(false);
+      setSpaces(Array.isArray(spacesResp.data?.spaces) ? spacesResp.data!.spaces : []);
+      setArchivedSpaces(Array.isArray(spacesResp.data?.archived) ? spacesResp.data!.archived : []);
+      setGithubConnected(Boolean(githubResp.data?.connected));
+    } finally {
+      setLoadingSpaces(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -493,6 +492,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <aside
       className={`fixed left-0 top-0 z-50 h-screen shrink-0 overflow-hidden border-r transition-transform duration-300 ease-in-out md:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} ${sidebarWidth}`}
+      suppressHydrationWarning
       style={{ background: "var(--sidebar-bg)", borderColor: "var(--border)" }}
     >
       <div className="flex h-full flex-col">
@@ -598,7 +598,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 <Item
                   key={item.label}
                   item={item}
-                  active={item.label === "Overview" && pathname === "/board"}
+                  active={pathname === item.href || pathname.startsWith(`${item.href}/`)}
                   compact={collapsed}
                 />
               );

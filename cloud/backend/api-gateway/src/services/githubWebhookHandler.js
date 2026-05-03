@@ -2,6 +2,8 @@ const { taskProgressService } = require('./taskProgressService');
 const { prMetricsService } = require('./prMetricsService');
 const { githubAutoTaskService } = require('./githubAutoTaskService');
 
+const TASK_FACTORY_PRIMARY = String(process.env.GITHUB_TASK_FACTORY_PRIMARY || 'true').toLowerCase() !== 'false';
+
 function text(value) {
   return String(value || '').trim();
 }
@@ -121,12 +123,24 @@ async function handlePushEvent(orgPool, payload, repoName) {
   const developerId = await findDeveloperIdByGithubUsername(orgPool, actor);
 
   let linkedTaskId = null;
+  let autoCompletedTaskId = null;
 
   for (const commit of commits) {
     const message = text(commit?.message);
     const linked = await taskProgressService.resolveTask(orgPool, payload, `${branch || ''}\n${message}`, repoName);
     const taskId = linked.taskId || null;
     if (taskId) linkedTaskId = taskId;
+
+    if (taskId && !autoCompletedTaskId) {
+      const completion = await taskProgressService.onRelevantCommitPushed(orgPool, payload, {
+        commitMessage: message,
+        commitSha: commit?.id || null,
+        branch,
+      });
+      if (completion?.completed) {
+        autoCompletedTaskId = taskId;
+      }
+    }
 
     await insertGithubEvent(orgPool, {
       eventType: 'push',
@@ -191,7 +205,7 @@ async function handlePullRequestEvent(orgPool, payload, repoName) {
     }
   }
 
-  if (!taskId && action === 'opened') {
+  if (!taskId && action === 'opened' && !TASK_FACTORY_PRIMARY) {
     const created = await githubAutoTaskService.createTaskFromUnlinkedPr(orgPool, repoName, payload);
     if (created?.taskId) {
       taskId = created.taskId;
@@ -288,6 +302,10 @@ async function handlePullRequestEvent(orgPool, payload, repoName) {
 
 async function handleIssuesEvent(orgPool, payload, repoName) {
   const action = text(payload?.action).toLowerCase();
+
+  if (TASK_FACTORY_PRIMARY && (action === 'opened' || action === 'labeled')) {
+    return { ok: true, action, skipped: 'task_factory_primary' };
+  }
 
   if (action === 'opened') {
     const result = await githubAutoTaskService.handleIssueOpened(orgPool, repoName, payload);

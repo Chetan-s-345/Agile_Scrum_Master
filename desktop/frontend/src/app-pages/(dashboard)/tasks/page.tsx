@@ -176,13 +176,15 @@ export default function TaskBoardPage() {
     });
   }
 
-  const loadSprints = useCallback(async () => {
+  const loadSprints = useCallback(async (background = false) => {
     setError(null);
-    setLoading(true);
-    setShowCreateTask(false);
-    setNewTaskTitle("");
-    setNewTaskDescription("");
-    setNewTaskStoryPoints("");
+    if (!background) {
+      setLoading(true);
+      setShowCreateTask(false);
+      setNewTaskTitle("");
+      setNewTaskDescription("");
+      setNewTaskStoryPoints("");
+    }
     try {
       const respActive = await fetch(`/api/sprints?${new URLSearchParams({ status: "active" }).toString()}`, { cache: "no-store" });
       const dataActive = await respActive.json().catch(() => null);
@@ -202,17 +204,21 @@ export default function TaskBoardPage() {
       setSelectedSprintId("");
       setError(e instanceof Error ? e.message : "Failed to load sprints");
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }, [selectedSprintId]);
 
-  const loadBoard = useCallback(async (sprintId: string) => {
+  const loadBoard = useCallback(async (sprintId: string, background = false) => {
     setError(null);
-    setLoading(true);
-    setShowCreateTask(false);
-    setNewTaskTitle("");
-    setNewTaskDescription("");
-    setNewTaskStoryPoints("");
+    if (!background) {
+      setLoading(true);
+      setShowCreateTask(false);
+      setNewTaskTitle("");
+      setNewTaskDescription("");
+      setNewTaskStoryPoints("");
+    }
     try {
       const resp = await fetch(`/api/tasks/board/${encodeURIComponent(sprintId)}`, { cache: "no-store" });
       const data = await resp.json().catch(() => null);
@@ -228,7 +234,9 @@ export default function TaskBoardPage() {
       setBoard({ todo: [], in_progress: [], in_review: [], blocked: [], done: [] });
       setError(e instanceof Error ? e.message : "Failed to load board");
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -520,6 +528,17 @@ export default function TaskBoardPage() {
   useEffect(() => {
     if (selectedSprintId) void loadBoard(selectedSprintId);
   }, [selectedSprintId, loadBoard]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void loadSprints(true);
+      if (selectedSprintId) {
+        void loadBoard(selectedSprintId, true);
+      }
+    }, 15_000);
+
+    return () => window.clearInterval(id);
+  }, [loadBoard, loadSprints, selectedSprintId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -861,4 +880,3 @@ export default function TaskBoardPage() {
     </div>
   );
 }
-

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -43,66 +44,131 @@ def _extract_section_bullets(text: str, heading: str) -> List[str]:
 
 
 def _fallback_generated_tickets(*, project_details: str, max_tickets: int) -> List[AgenticSprintGeneratedTicket]:
-    features = _extract_section_bullets(project_details, "Features")
-    rules = _extract_section_bullets(project_details, "Rules")
+    count = max(1, int(max_tickets))
+    seeds = [part.strip() for part in re.split(r"[.\n;]+", project_details or "") if len(part.strip()) >= 8]
+    templates: List[Tuple[str, str, int, str, List[str], List[str]]] = [
+        (
+            "Project bootstrap and architecture skeleton",
+            (
+                "Create baseline project skeleton from the brief.\n\n"
+                "Acceptance Criteria:\n"
+                "- Core routes and UI shell are available.\n"
+                "- DB connectivity and environment wiring are in place.\n"
+                "- Setup instructions are documented."
+            ),
+            5,
+            "P1",
+            ["react", "node", "postgres"],
+            ["bootstrap", "fallback-generated"],
+        ),
+        (
+            "Define sprint scope and acceptance criteria",
+            (
+                "Translate the project brief into a realistic sprint scope.\n\n"
+                "Acceptance Criteria:\n"
+                "- Sprint goal is written clearly.\n"
+                "- Tickets have measurable outcomes.\n"
+                "- Scope fits available capacity."
+            ),
+            3,
+            "P1",
+            ["planning", "node", "postgres"],
+            ["scope", "fallback-generated"],
+        ),
+        (
+            "Implement core data flow",
+            (
+                "Implement the main project data flow from UI to API to persistence.\n\n"
+                "Acceptance Criteria:\n"
+                "- Create, read, and update paths work end-to-end.\n"
+                "- Validation failures return clear messages.\n"
+                "- Covered by a regression test."
+            ),
+            5,
+            "P1",
+            ["node", "postgres"],
+            ["data-flow", "fallback-generated"],
+        ),
+        (
+            "Add developer workflow and assignment support",
+            (
+                "Wire assignment logic and developer workflow support for the sprint.\n\n"
+                "Acceptance Criteria:\n"
+                "- Tasks can be assigned to developers.\n"
+                "- Capacity is reflected in planning output.\n"
+                "- Assignment results are visible in the UI."
+            ),
+            5,
+            "P2",
+            ["node", "react"],
+            ["assignment", "fallback-generated"],
+        ),
+        (
+            "Add validation and error handling",
+            (
+                "Harden the workflow with validation and clear error messages.\n\n"
+                "Acceptance Criteria:\n"
+                "- Invalid inputs are rejected early.\n"
+                "- Errors are actionable and user-facing.\n"
+                "- Failure cases have regression coverage."
+            ),
+            3,
+            "P2",
+            ["node", "typescript"],
+            ["validation", "fallback-generated"],
+        ),
+        (
+            "Improve observability and reporting",
+            (
+                "Add visibility into the sprint outcome and operational state.\n\n"
+                "Acceptance Criteria:\n"
+                "- Status appears in the dashboard.\n"
+                "- Failure warnings are actionable.\n"
+                "- Key metrics are captured."
+            ),
+            3,
+            "P2",
+            ["observability", "reporting"],
+            ["visibility", "fallback-generated"],
+        ),
+    ]
 
     candidates: List[Tuple[str, str, int, str, List[str], List[str]]] = []
+    if seeds:
+        for seed in seeds[:count]:
+            title = seed if len(seed) <= 80 else f"{seed[:77]}..."
+            candidates.append(
+                (
+                    title,
+                    (
+                        f"Implement: {seed}\n\n"
+                        "Acceptance Criteria:\n"
+                        "- The requested behavior is delivered end-to-end.\n"
+                        "- Invalid inputs are handled gracefully.\n"
+                        "- Regression coverage is added."
+                    ),
+                    5,
+                    "P1",
+                    ["react", "node", "postgres"],
+                    ["fallback-generated"],
+                )
+            )
 
-    for f in features:
+    while len(candidates) < count:
+        spec = templates[len(candidates) % len(templates)]
+        suffix = len(candidates) + 1
         candidates.append(
             (
-                f,
-                (
-                    f"Implement: {f}\n\n"
-                    "Acceptance Criteria:\n"
-                    "- Feature works end-to-end for valid inputs.\n"
-                    "- Validation and error messages are shown for invalid inputs.\n"
-                    "- Covered by at least one backend and one UI test scenario."
-                ),
-                5,
-                "P1",
-                ["react", "node", "postgres"],
-                ["feature", "fallback-generated"],
+                f"{spec[0]} {suffix}" if len(candidates) >= len(templates) else spec[0],
+                spec[1],
+                spec[2],
+                spec[3],
+                spec[4],
+                spec[5],
             )
         )
 
-    for r in rules:
-        candidates.append(
-            (
-                f"Enforce rule: {r}",
-                (
-                    f"Implement rule: {r}\n\n"
-                    "Acceptance Criteria:\n"
-                    "- Rule is enforced consistently across API and UI flows.\n"
-                    "- Violations return clear actionable errors.\n"
-                    "- Regression scenario added for this rule."
-                ),
-                3,
-                "P2",
-                ["node", "postgres"],
-                ["rule", "fallback-generated"],
-            )
-        )
-
-    if not candidates:
-        candidates = [
-            (
-                "Project bootstrap and architecture skeleton",
-                (
-                    "Create baseline project skeleton from provided brief.\n\n"
-                    "Acceptance Criteria:\n"
-                    "- App builds and runs locally.\n"
-                    "- Core routes and DB connectivity are wired.\n"
-                    "- Setup instructions are documented."
-                ),
-                5,
-                "P1",
-                ["react", "node", "postgres"],
-                ["fallback-generated"],
-            )
-        ]
-
-    trimmed = candidates[: max(1, int(max_tickets))]
+    trimmed = candidates[:count]
     return [
         AgenticSprintGeneratedTicket(
             title=title,
@@ -162,30 +228,42 @@ def run_project_bootstrap_conversation(
       - transcript
     """
 
-    AssistantAgent, GroupChat, GroupChatManager, UserProxyAgent = _require_autogen()
+    use_autogen = os.getenv("SPRINT_PLANNER_USE_AUTOGEN", "").strip().lower() in {"1", "true", "yes", "on"}
+    if not use_autogen:
+        fallback_tickets = _fallback_generated_tickets(project_details=project_details, max_tickets=max_tickets)
+        transcript = [
+            {
+                "name": "System",
+                "role": "system",
+                "content": "Deterministic sprint bootstrap used because SPRINT_PLANNER_USE_AUTOGEN is disabled.",
+            }
+        ]
+        return fallback_tickets, list(range(len(fallback_tickets))), sprint_name, transcript
 
-    llm_config = build_groq_llm_config(temperature=0.2)
+    try:
+        AssistantAgent, GroupChat, GroupChatManager, UserProxyAgent = _require_autogen()
+        llm_config = build_groq_llm_config(temperature=0.2)
 
-    scrum_master = AssistantAgent(
-        name="ScrumMasterAgent",
-        llm_config=llm_config,
-        system_message=(
-            "You are the ScrumMasterAgent. Run an agentic sprint bootstrap from a project brief. "
-            "Enforce Scrum: realistic scope, capacity awareness, testability, and value delivery. "
-            "Work with ProductOwner, QA, and Developer agents. "
-            "At the end, output ONLY one line starting with 'FINAL_BACKLOG_JSON:' followed by valid JSON. "
-            "JSON schema: {\n"
-            "  sprint_goal: string,\n"
-            "  tickets: [{title:string, description:string, story_points:int, priority:'P0'|'P1'|'P2'|'P3', required_skills:string[], labels:string[]}],\n"
-            "  selected_ticket_indices: int[],\n"
-            "  notes: string\n"
-            "}.\n"
-            "Requirements: tickets must be concrete, testable, and sized 1..13 story points (Fibonacci). "
-            "Keep total selected story points within team capacity unless allow_over_capacity is true."
-        ),
-    )
+        scrum_master = AssistantAgent(
+            name="ScrumMasterAgent",
+            llm_config=llm_config,
+            system_message=(
+                "You are the ScrumMasterAgent. Run an agentic sprint bootstrap from a project brief. "
+                "Enforce Scrum: realistic scope, capacity awareness, testability, and value delivery. "
+                "Work with ProductOwner, QA, and Developer agents. "
+                "At the end, output ONLY one line starting with 'FINAL_BACKLOG_JSON:' followed by valid JSON. "
+                "JSON schema: {\n"
+                "  sprint_goal: string,\n"
+                "  tickets: [{title:string, description:string, story_points:int, priority:'P0'|'P1'|'P2'|'P3', required_skills:string[], labels:string[]}],\n"
+                "  selected_ticket_indices: int[],\n"
+                "  notes: string\n"
+                "}.\n"
+                "Requirements: tickets must be concrete, testable, and sized 1..13 story points (Fibonacci). "
+                "Keep total selected story points within team capacity unless allow_over_capacity is true."
+            ),
+        )
 
-    product_owner = AssistantAgent(
+        product_owner = AssistantAgent(
         name="ProductOwnerAgent",
         llm_config=llm_config,
         system_message=(
@@ -194,7 +272,7 @@ def run_project_bootstrap_conversation(
         ),
     )
 
-    qa_agent = AssistantAgent(
+        qa_agent = AssistantAgent(
         name="QAAgent",
         llm_config=llm_config,
         system_message=(
@@ -203,104 +281,111 @@ def run_project_bootstrap_conversation(
         ),
     )
 
-    developer_agents = []
-    for d in developers:
-        developer_agents.append(
-            AssistantAgent(
-                name=f"DeveloperAgent_{d.id}",
-                llm_config=llm_config,
-                system_message=(
-                    "You are a DeveloperAgent. Provide feasibility notes and skill fit for proposed tickets. "
-                    f"Developer profile JSON: {json.dumps(_developer_brief(d), ensure_ascii=False)}"
-                ),
+        developer_agents = []
+        for d in developers:
+            developer_agents.append(
+                AssistantAgent(
+                    name=f"DeveloperAgent_{d.id}",
+                    llm_config=llm_config,
+                    system_message=(
+                        "You are a DeveloperAgent. Provide feasibility notes and skill fit for proposed tickets. "
+                        f"Developer profile JSON: {json.dumps(_developer_brief(d), ensure_ascii=False)}"
+                    ),
+                )
             )
+
+        user = UserProxyAgent(
+            name="System",
+            human_input_mode="NEVER",
+            max_consecutive_auto_reply=0,
+            code_execution_config=False,
         )
 
-    user = UserProxyAgent(
-        name="System",
-        human_input_mode="NEVER",
-        max_consecutive_auto_reply=0,
-        code_execution_config=False,
-    )
+        # Estimate team capacity in points (best-effort)
+        team_capacity = 0.0
+        for d in developers:
+            cap = float(d.sprint_capacity_points if d.sprint_capacity_points is not None else 40.0)
+            load = float(d.current_load_points if d.current_load_points is not None else 0.0)
+            team_capacity += max(0.0, cap - load)
 
-    # Estimate team capacity in points (best-effort)
-    team_capacity = 0.0
-    for d in developers:
-        cap = float(d.sprint_capacity_points if d.sprint_capacity_points is not None else 40.0)
-        load = float(d.current_load_points if d.current_load_points is not None else 0.0)
-        team_capacity += max(0.0, cap - load)
+        context_json = {
+            "sprint_name": sprint_name,
+            "project_details": project_details,
+            "constraints": constraints.model_dump(),
+            "team_capacity_points_estimate": team_capacity,
+            "max_tickets": int(max_tickets),
+            "developers": [_developer_brief(d) for d in developers],
+        }
 
-    context_json = {
-        "sprint_name": sprint_name,
-        "project_details": project_details,
-        "constraints": constraints.model_dump(),
-        "team_capacity_points_estimate": team_capacity,
-        "max_tickets": int(max_tickets),
-        "developers": [_developer_brief(d) for d in developers],
-    }
+        kickoff = (
+            "Bootstrap a sprint from project details. "
+            "Produce up to max_tickets tickets and select a realistic subset for this sprint. "
+            "Each ticket description MUST include acceptance criteria bullets.\n\n"
+            f"CONTEXT_JSON:\n{json.dumps(context_json, ensure_ascii=False)}"
+        )
 
-    kickoff = (
-        "Bootstrap a sprint from project details. "
-        "Produce up to max_tickets tickets and select a realistic subset for this sprint. "
-        "Each ticket description MUST include acceptance criteria bullets.\n\n"
-        f"CONTEXT_JSON:\n{json.dumps(context_json, ensure_ascii=False)}"
-    )
+        participants = [user, scrum_master, product_owner, qa_agent, *developer_agents]
+        group_chat = GroupChat(agents=participants, messages=[], max_round=max_rounds)
+        manager = GroupChatManager(groupchat=group_chat, llm_config=llm_config)
 
-    participants = [user, scrum_master, product_owner, qa_agent, *developer_agents]
-    group_chat = GroupChat(agents=participants, messages=[], max_round=max_rounds)
-    manager = GroupChatManager(groupchat=group_chat, llm_config=llm_config)
+        user.initiate_chat(manager, message=kickoff)
 
-    user.initiate_chat(manager, message=kickoff)
+        transcript: List[Dict[str, Any]] = []
+        for m in group_chat.messages:
+            transcript.append({"name": m.get("name"), "role": m.get("role"), "content": m.get("content")})
 
-    transcript: List[Dict[str, Any]] = []
-    for m in group_chat.messages:
-        transcript.append({"name": m.get("name"), "role": m.get("role"), "content": m.get("content")})
+        final_json: Optional[Dict[str, Any]] = None
+        for m in reversed(group_chat.messages):
+            if m.get("name") == "ScrumMasterAgent" and isinstance(m.get("content"), str):
+                final_json = _extract_final_json(m["content"])
+                if final_json:
+                    break
 
-    final_json: Optional[Dict[str, Any]] = None
-    for m in reversed(group_chat.messages):
-        if m.get("name") == "ScrumMasterAgent" and isinstance(m.get("content"), str):
-            final_json = _extract_final_json(m["content"])
-            if final_json:
-                break
+        if not final_json:
+            fallback_tickets = _fallback_generated_tickets(project_details=project_details, max_tickets=max_tickets)
+            return fallback_tickets, list(range(len(fallback_tickets))), sprint_name, transcript
 
-    if not final_json:
+        raw_tickets = final_json.get("tickets") or []
+        selected = final_json.get("selected_ticket_indices") or []
+        sprint_goal = final_json.get("sprint_goal")
+
+        tickets: List[AgenticSprintGeneratedTicket] = []
+        for t in raw_tickets:
+            try:
+                tickets.append(AgenticSprintGeneratedTicket.model_validate(t))
+            except Exception:
+                continue
+
+        if not tickets:
+            tickets = _fallback_generated_tickets(project_details=project_details, max_tickets=max_tickets)
+
+        selected_indices: List[int] = []
+        for i in selected:
+            try:
+                ii = int(i)
+            except Exception:
+                continue
+            if 0 <= ii < len(tickets):
+                selected_indices.append(ii)
+
+        seen = set()
+        selected_indices = [i for i in selected_indices if not (i in seen or seen.add(i))]
+
+        if tickets and not selected_indices:
+            n = max(1, min(int(max_tickets), len(tickets)))
+            selected_indices = list(range(n))
+
+        return tickets, selected_indices, str(sprint_goal) if sprint_goal else sprint_name, transcript
+    except Exception as exc:
         fallback_tickets = _fallback_generated_tickets(project_details=project_details, max_tickets=max_tickets)
+        transcript = [
+            {
+                "name": "System",
+                "role": "system",
+                "content": f"Fallback sprint bootstrap used because AutoGen/Groq planning failed: {exc}",
+            }
+        ]
         return fallback_tickets, list(range(len(fallback_tickets))), sprint_name, transcript
-
-    raw_tickets = final_json.get("tickets") or []
-    selected = final_json.get("selected_ticket_indices") or []
-    sprint_goal = final_json.get("sprint_goal")
-
-    tickets: List[AgenticSprintGeneratedTicket] = []
-    for t in raw_tickets:
-        try:
-            tickets.append(AgenticSprintGeneratedTicket.model_validate(t))
-        except Exception:
-            # Skip invalid items
-            continue
-
-    if not tickets:
-        tickets = _fallback_generated_tickets(project_details=project_details, max_tickets=max_tickets)
-
-    selected_indices: List[int] = []
-    for i in selected:
-        try:
-            ii = int(i)
-        except Exception:
-            continue
-        if 0 <= ii < len(tickets):
-            selected_indices.append(ii)
-
-    # De-dupe preserving order
-    seen = set()
-    selected_indices = [i for i in selected_indices if not (i in seen or seen.add(i))]
-
-    # Fallback: if model produced tickets but forgot to select scope, take top N tickets.
-    if tickets and not selected_indices:
-        n = max(1, min(int(max_tickets), len(tickets)))
-        selected_indices = list(range(n))
-
-    return tickets, selected_indices, str(sprint_goal) if sprint_goal else sprint_name, transcript
 
 
 def stable_ticket_id(title: str) -> str:

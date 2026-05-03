@@ -197,6 +197,84 @@ function buildInvitationContent({ orgName, role, invitedByName, acceptUrl }) {
   return { subject, htmlContent, textContent };
 }
 
+function formatMeetingDate(value) {
+  const date = new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) return String(value || '');
+
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    year: 'numeric',
+  });
+}
+
+async function sendMeetingInvite(meeting, attendees) {
+  if (!isEmailConfigured()) return;
+
+  const subject = `[${meeting.type}] ${meeting.title} - ${formatMeetingDate(meeting.scheduledStart)}`;
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+      <h2>${meeting.title}</h2>
+      <p>Scheduled: ${formatMeetingDate(meeting.scheduledStart)}</p>
+      <p><a href="${meeting.joinUrl}" style="background:#4F46E5;color:white;padding:12px 24px;border-radius:6px;text-decoration:none">Join meeting</a></p>
+    </div>
+  `;
+
+  for (const attendee of attendees || []) {
+    const to = String(attendee?.email || '').trim();
+    if (!to) continue;
+
+    try {
+      await sendTransactionalEmail({
+        to: { email: to, name: attendee?.name ? String(attendee.name) : undefined },
+        subject,
+        htmlContent,
+        replyTo: env.EMAIL_REPLY_TO ? { email: env.EMAIL_REPLY_TO } : undefined,
+      });
+    } catch {
+      // Best-effort email delivery should not fail meeting creation.
+    }
+  }
+}
+
+async function sendTaskAssignmentEmail(assignee, task, meeting) {
+  if (!isEmailConfigured()) return;
+
+  const to = String(assignee?.email || '').trim();
+  if (!to) return;
+
+  const sprintLabel = String(meeting?.sprintName || 'Current sprint').trim();
+  const boardUrl = meeting?.sprintId
+    ? `${normalizeBaseUrl(env.FRONTEND_URL)}/board?sprintId=${encodeURIComponent(String(meeting.sprintId))}`
+    : `${normalizeBaseUrl(env.FRONTEND_URL)}/board`;
+
+  const subject = `New task assigned: ${task.title}`;
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+      <h2>New Sprint Task Assigned</h2>
+      <p>Hello ${assignee.name || 'team member'},</p>
+      <p><strong>${task.title}</strong></p>
+      <p>${task.description || ''}</p>
+      <p>Priority: ${task.priority || 'medium'} | Story points: ${task.storyPoints ?? 'n/a'}</p>
+      <p>Sprint: ${sprintLabel}</p>
+      <p><a href="${boardUrl}" style="background:#111827;color:white;padding:10px 18px;border-radius:6px;text-decoration:none">Open Sprint Board</a></p>
+    </div>
+  `;
+
+  try {
+    await sendTransactionalEmail({
+      to: { email: to, name: assignee?.name ? String(assignee.name) : undefined },
+      subject,
+      htmlContent,
+      replyTo: env.EMAIL_REPLY_TO ? { email: env.EMAIL_REPLY_TO } : undefined,
+    });
+  } catch {
+    // Best-effort mail delivery.
+  }
+}
+
 class EmailService {
   isConfigured() {
     return isEmailConfigured();
@@ -250,4 +328,9 @@ class EmailService {
 
 const emailService = new EmailService();
 
-module.exports = { EmailService, emailService };
+module.exports = {
+  EmailService,
+  emailService,
+  sendMeetingInvite,
+  sendTaskAssignmentEmail,
+};

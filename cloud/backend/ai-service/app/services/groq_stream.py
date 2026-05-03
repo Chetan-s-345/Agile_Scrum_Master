@@ -89,3 +89,43 @@ async def groq_stream_chat(
 
                 if isinstance(delta, str) and delta:
                     yield delta
+
+
+async def groq_chat(
+    *,
+    system: Optional[str],
+    user: str,
+    temperature: float = 0.2,
+    max_tokens: int = 900,
+) -> str:
+    """Request a non-stream chat completion from Groq and return full text."""
+
+    url = f"{_groq_base_url()}/chat/completions"
+
+    messages: List[Dict[str, str]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": user})
+
+    headers = {
+        "Authorization": f"Bearer {_groq_api_key()}",
+        "Content-Type": "application/json",
+    }
+
+    body = {
+        "model": _groq_model(),
+        "stream": False,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(url, headers=headers, json=body)
+        resp.raise_for_status()
+        payload = resp.json()
+
+    try:
+        return str(payload["choices"][0]["message"]["content"] or "")
+    except Exception:
+        return ""

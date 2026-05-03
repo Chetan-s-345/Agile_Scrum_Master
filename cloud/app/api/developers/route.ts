@@ -8,11 +8,21 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const qs = url.searchParams.toString();
 
-  return proxyToApiGateway({
+  const upstream = await proxyToApiGateway({
     upstreamPath: `/api/v1/developers${qs ? `?${qs}` : ""}`,
     method: "GET",
     token,
   });
+
+  if (upstream.status >= 500) {
+    const data = await upstream.clone().json().catch(() => null) as { error?: string; code?: string; detail?: string } | null;
+    const text = `${String(data?.error || "")} ${String(data?.code || "")} ${String(data?.detail || "")}`.toLowerCase();
+    if (text.includes("tenant schema") || text.includes("org db") || text.includes("timedout") || text.includes("not provisioned")) {
+      return NextResponse.json({ items: [], requiresOrgSetup: true, upstreamError: data?.error || "Tenant database unavailable" }, { status: 200 });
+    }
+  }
+
+  return upstream;
 }
 
 export async function POST(request: Request) {

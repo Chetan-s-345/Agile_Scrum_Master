@@ -64,6 +64,8 @@ let formResponses = [
   },
 ];
 
+let customForms = [];
+
 function asString(value, fallback = "") {
   const text = String(value ?? fallback).trim();
   return text || fallback;
@@ -196,6 +198,25 @@ function registerFormsIpcHandlers(ipcMain) {
     }
 
     return cloneResponse(nextResponse);
+  });
+
+  ipcMain.handle(CHANNELS.FORMS.CREATE_FORM, async (_event, payload) => {
+    const name = asString(payload?.name);
+    const description = asString(payload?.description);
+
+    if (!name) {
+      throw new Error("name is required");
+    }
+
+    const item = {
+      id: `form-${Date.now()}`,
+      name,
+      description,
+      createdAt: new Date().toISOString(),
+    };
+
+    customForms.unshift(item);
+    return { success: true, form: { ...item } };
   });
 }
 

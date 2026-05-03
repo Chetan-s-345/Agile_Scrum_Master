@@ -1,28 +1,17 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { getApiGatewayBaseUrl } from "@/lib/api-gateway";
-
-function getGatewayBaseUrl() {
-  return getApiGatewayBaseUrl();
-}
-
-async function getAuthToken() {
-  const cookieStore = await cookies();
-  return cookieStore.get("auth_token")?.value || null;
-}
+import { getAuthTokenFromCookies, proxyToApiGateway } from "@/lib/api-gateway";
 
 export async function GET() {
-  const token = await getAuthToken();
-  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const token = await getAuthTokenFromCookies();
+  
+  // Allow unauthenticated requests in development mode
+  if (!token && process.env.NODE_ENV !== "development") {
+    return NextResponse.json({ error: "Unauthorized", code: 401, detail: "Missing auth token" }, { status: 401 });
+  }
 
-  const gatewayResp = await fetch(`${getGatewayBaseUrl()}/api/v1/integrations/github/status`, {
+  return proxyToApiGateway({
+    upstreamPath: "/api/v1/integrations/github/status",
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    cache: "no-store",
+    token: token || undefined,
   });
-
-  const data = await gatewayResp.json().catch(() => null);
-  return NextResponse.json(data || { error: "Upstream error" }, { status: gatewayResp.status });
 }

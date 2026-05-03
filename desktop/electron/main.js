@@ -1,10 +1,22 @@
+require("dotenv").config({ path: require("path").join(__dirname, "..", ".env.production") });
+
 const path = require("path");
 const fs = require("fs");
 const { randomUUID } = require("crypto");
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const CHANNELS = require("./ipc/channels");
 const IPCResponse = require("./utils/ipc-response");
-const { registerAuthIpcHandlers, processDesktopAuthCallback } = require("./ipc/auth");
+const { registerAdminIpcHandlers } = require("./ipc/admin");
+const { registerAssignIpcHandlers } = require("./ipc/assign");
+const { registerBacklogIpcHandlers } = require("./ipc/backlog");
+const { registerBoardIpcHandlers } = require("./ipc/board");
+const { registerDashboardIpcHandlers } = require("./ipc/dashboard");
+const { registerDevelopersIpcHandlers: registerDirectoryDevelopersIpcHandlers } = require("./ipc/developers");
+const { registerFormsIpcHandlers } = require("./ipc/forms");
+const { registerNavbarDataIpcHandlers } = require("./ipc/navbar-data");
+const { registerPagesIpcHandlers } = require("./ipc/pages");
+const { registerTimelineIpcHandlers } = require("./ipc/timeline");
+const { registerAuthIpcHandlers, processDesktopAuthCallback, getStoredSession } = require("./ipc/auth");
 
 const AUTH_PROTOCOL = "asmdesktop";
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -290,6 +302,167 @@ function integrationsDbPath() {
   return path.join(app.getPath("userData"), "integrations.db.json");
 }
 
+function jiraMappingsDbPath() {
+  return path.join(app.getPath("userData"), "jira.project-mappings.db.json");
+}
+
+function createWebhookSecret() {
+  return randomUUID().replace(/-/g, "");
+}
+
+function baseIntegrationConfig(type) {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  if (normalizedType === "github") {
+    return {
+      connected: false,
+      connectedAccount: "",
+      webhookUrl: "",
+      webhookSecret: createWebhookSecret(),
+      syncFrequency: "hourly",
+      githubWebhookRepos: [],
+      githubWebhookDeliveries: [],
+      publicGatewayUrlConfigured: false,
+      webhookConfigured: false,
+      lastEventAt: null,
+    };
+  }
+  if (normalizedType === "jira") {
+    return {
+      connected: false,
+      connectedWorkspace: "",
+      baseUrl: "",
+      email: "",
+      projectKey: "",
+      boardId: null,
+      storyPointsField: "",
+      webhookUrl: "",
+      webhookSecret: createWebhookSecret(),
+      syncFrequency: "daily",
+      syncStatus: {
+        syncing: false,
+        processed: 0,
+        total: 0,
+        message: null,
+      },
+      schedule: {
+        enabled: false,
+        projectKey: null,
+        boardId: null,
+        mode: "incremental",
+        time: "09:00",
+        timezone: "UTC",
+      },
+      webhookLogs: {
+        lastEvent: null,
+        failures: [],
+      },
+      totalSynced: 0,
+      totalFailed: 0,
+      pendingSync: 0,
+      lastSyncAt: null,
+      lastWebhookReceivedAt: null,
+      lastWebhookEvent: null,
+      syncError: null,
+    };
+  }
+  if (normalizedType === "slack") {
+    return {
+      connected: false,
+      connectedWorkspace: "",
+      syncFrequency: "realtime",
+      notificationChannels: {
+        taskCreated: "#general",
+        taskUpdated: "#general",
+        sprintSummary: "#general",
+      },
+    };
+  }
+  return {
+    connected: false,
+    syncFrequency: "manual",
+  };
+}
+
+function normalizeIntegrationConfig(type, configInput, connectedFallback = false) {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  const defaults = baseIntegrationConfig(normalizedType);
+  const input = configInput && typeof configInput === "object" ? configInput : {};
+  const merged = {
+    ...defaults,
+    ...input,
+  };
+
+  if ((normalizedType === "jira" || normalizedType === "github") && !String(merged.webhookSecret || "").trim()) {
+    merged.webhookSecret = createWebhookSecret();
+  }
+
+  if (normalizedType === "jira") {
+    const webhookLogs = merged.webhookLogs && typeof merged.webhookLogs === "object" ? merged.webhookLogs : {};
+    merged.webhookLogs = {
+      lastEvent: webhookLogs.lastEvent || null,
+      failures: Array.isArray(webhookLogs.failures) ? webhookLogs.failures : [],
+    };
+    const schedule = merged.schedule && typeof merged.schedule === "object" ? merged.schedule : {};
+    merged.schedule = {
+      ...defaults.schedule,
+      ...schedule,
+    };
+    const syncStatus = merged.syncStatus && typeof merged.syncStatus === "object" ? merged.syncStatus : {};
+    merged.syncStatus = {
+      ...defaults.syncStatus,
+      ...syncStatus,
+    };
+  }
+
+  if (normalizedType === "slack") {
+    merged.notificationChannels =
+      merged.notificationChannels && typeof merged.notificationChannels === "object"
+        ? merged.notificationChannels
+        : defaults.notificationChannels;
+  }
+
+  const explicitConnected = typeof merged.connected === "boolean" ? merged.connected : null;
+  merged.connected = explicitConnected == null ? Boolean(connectedFallback) : explicitConnected;
+  return merged;
+}
+
+function readJiraProjectMappings() {
+  try {
+    const filePath = jiraMappingsDbPath();
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, JSON.stringify([], null, 2), "utf8");
+      return [];
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .map((item) => {
+        const jiraProjectId = String(item?.jiraProjectId || "").trim();
+        const internalProjectId = String(item?.internalProjectId || "").trim();
+        if (!jiraProjectId || !internalProjectId) {
+          return null;
+        }
+        return {
+          id: String(item?.id || randomUUID()),
+          jiraProjectId,
+          internalProjectId,
+          updatedAt: item?.updatedAt || new Date().toISOString(),
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function writeJiraProjectMappings(mappings) {
+  fs.writeFileSync(jiraMappingsDbPath(), JSON.stringify(mappings, null, 2), "utf8");
+}
+
 function defaultIntegrations() {
   return [
     {
@@ -299,6 +472,7 @@ function defaultIntegrations() {
       description: "Code repositories, pull requests, and issue linking.",
       logo: "GH",
       connected: false,
+      config: baseIntegrationConfig("github"),
       lastSyncAt: null,
       settingsPath: "/settings/integrations"
     },
@@ -309,6 +483,7 @@ function defaultIntegrations() {
       description: "Sprint sync, issues, and webhook event processing.",
       logo: "JI",
       connected: false,
+      config: baseIntegrationConfig("jira"),
       lastSyncAt: null,
       settingsPath: "/settings/integrations"
     },
@@ -319,6 +494,7 @@ function defaultIntegrations() {
       description: "Channel notifications and standup summaries.",
       logo: "SL",
       connected: false,
+      config: baseIntegrationConfig("slack"),
       lastSyncAt: null,
       settingsPath: "/settings/integrations"
     },
@@ -329,6 +505,7 @@ function defaultIntegrations() {
       description: "Documentation and sprint wiki sync.",
       logo: "NO",
       connected: false,
+      config: baseIntegrationConfig("notion"),
       lastSyncAt: null,
       settingsPath: "/settings/integrations"
     },
@@ -339,6 +516,7 @@ function defaultIntegrations() {
       description: "Issue sync and roadmap alignment.",
       logo: "LI",
       connected: false,
+      config: baseIntegrationConfig("linear"),
       lastSyncAt: null,
       settingsPath: "/settings/integrations"
     }
@@ -360,7 +538,11 @@ function readIntegrations() {
     const byType = new Map(parsed.map((item) => [String(item.type || ""), item]));
     return defaultIntegrations().map((seed) => {
       const existing = byType.get(seed.type);
-      return existing ? { ...seed, ...existing } : seed;
+      const merged = existing ? { ...seed, ...existing } : seed;
+      return {
+        ...merged,
+        config: normalizeIntegrationConfig(merged.type, merged.config, merged.connected),
+      };
     });
   } catch {
     return defaultIntegrations();
@@ -398,6 +580,15 @@ function registerIntegrationHandlers() {
         ...integrations[index],
         connected: true,
         credentials: payload.credentials && typeof payload.credentials === "object" ? payload.credentials : {},
+        config: normalizeIntegrationConfig(
+          type,
+          {
+            ...integrations[index].config,
+            ...(payload.config && typeof payload.config === "object" ? payload.config : {}),
+            connected: true,
+          },
+          true
+        ),
         updatedAt: new Date().toISOString()
       };
       integrations[index] = integration;
@@ -425,6 +616,14 @@ function registerIntegrationHandlers() {
       integrations[index] = {
         ...integrations[index],
         connected: false,
+        config: normalizeIntegrationConfig(
+          integrations[index].type,
+          {
+            ...integrations[index].config,
+            connected: false,
+          },
+          false
+        ),
         lastSyncAt: null,
         updatedAt: new Date().toISOString()
       };
@@ -455,6 +654,14 @@ function registerIntegrationHandlers() {
 
       integrations[index] = {
         ...integrations[index],
+        config: normalizeIntegrationConfig(
+          integrations[index].type,
+          {
+            ...integrations[index].config,
+            lastSyncAt: new Date().toISOString(),
+          },
+          integrations[index].connected
+        ),
         lastSyncAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -463,6 +670,155 @@ function registerIntegrationHandlers() {
       return IPCResponse.success({ success: true });
     } catch (error) {
       return IPCResponse.internalError("Failed to run integration sync", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.INTEGRATIONS.GET_CONFIG, async (_event, payload = {}) => {
+    try {
+      const type = String(payload.type || "").trim().toLowerCase();
+      if (!type) {
+        return IPCResponse.validation("type", "type is required");
+      }
+
+      const integrations = readIntegrations();
+      const integration = integrations.find((item) => String(item.type || "") === type);
+      if (!integration) {
+        return IPCResponse.notFound("Integration config");
+      }
+
+      const config = normalizeIntegrationConfig(type, integration.config, integration.connected);
+      return IPCResponse.success(config);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load integration config", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.INTEGRATIONS.UPDATE_CONFIG, async (_event, payload = {}) => {
+    try {
+      const type = String(payload.type || "").trim().toLowerCase();
+      if (!type) {
+        return IPCResponse.validation("type", "type is required");
+      }
+      if (!payload.config || typeof payload.config !== "object") {
+        return IPCResponse.validation("config", "config must be an object");
+      }
+
+      const integrations = readIntegrations();
+      const index = integrations.findIndex((item) => String(item.type || "") === type);
+      if (index < 0) {
+        return IPCResponse.notFound("Integration config");
+      }
+
+      const mergedConfig = normalizeIntegrationConfig(
+        type,
+        {
+          ...integrations[index].config,
+          ...payload.config,
+        },
+        integrations[index].connected
+      );
+
+      integrations[index] = {
+        ...integrations[index],
+        connected: Boolean(mergedConfig.connected),
+        config: mergedConfig,
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (type === "jira" && Array.isArray(payload.config.projectMappings)) {
+        const nextMappings = payload.config.projectMappings
+          .map((item) => ({
+            id: String(item?.id || randomUUID()),
+            jiraProjectId: String(item?.jiraProjectId || "").trim(),
+            internalProjectId: String(item?.internalProjectId || "").trim(),
+            updatedAt: new Date().toISOString(),
+          }))
+          .filter((item) => item.jiraProjectId && item.internalProjectId);
+        writeJiraProjectMappings(nextMappings);
+      }
+
+      writeIntegrations(integrations);
+      return IPCResponse.success(mergedConfig);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update integration config", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.INTEGRATIONS.REGENERATE_WEBHOOK_SECRET, async (_event, payload = {}) => {
+    try {
+      const type = String(payload.type || "").trim().toLowerCase();
+      if (!type) {
+        return IPCResponse.validation("type", "type is required");
+      }
+
+      const integrations = readIntegrations();
+      const index = integrations.findIndex((item) => String(item.type || "") === type);
+      if (index < 0) {
+        return IPCResponse.notFound("Integration config");
+      }
+
+      const secret = createWebhookSecret();
+      const nextConfig = normalizeIntegrationConfig(
+        type,
+        {
+          ...integrations[index].config,
+          webhookSecret: secret,
+        },
+        integrations[index].connected
+      );
+
+      integrations[index] = {
+        ...integrations[index],
+        config: nextConfig,
+        updatedAt: new Date().toISOString(),
+      };
+      writeIntegrations(integrations);
+
+      return IPCResponse.success({ secret });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to regenerate webhook secret", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.INTEGRATIONS.GET_JIRA_PROJECT_MAPPINGS, async () => {
+    try {
+      return IPCResponse.success(readJiraProjectMappings());
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load Jira project mappings", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.INTEGRATIONS.SAVE_JIRA_MAPPING, async (_event, payload = {}) => {
+    try {
+      const jiraProjectId = String(payload.jiraProjectId || "").trim();
+      const internalProjectId = String(payload.internalProjectId || "").trim();
+
+      if (!jiraProjectId) {
+        return IPCResponse.validation("jiraProjectId", "jiraProjectId is required");
+      }
+      if (!internalProjectId) {
+        return IPCResponse.validation("internalProjectId", "internalProjectId is required");
+      }
+
+      const mappings = readJiraProjectMappings();
+      const index = mappings.findIndex((item) => String(item.jiraProjectId) === jiraProjectId);
+      const next = {
+        id: index >= 0 ? String(mappings[index].id) : randomUUID(),
+        jiraProjectId,
+        internalProjectId,
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (index >= 0) {
+        mappings[index] = next;
+      } else {
+        mappings.push(next);
+      }
+
+      writeJiraProjectMappings(mappings);
+      return IPCResponse.success(next);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to save Jira project mapping", String(error));
     }
   });
 }
@@ -602,104 +958,180 @@ function applyToggleState(data, repoId, enabled) {
 }
 
 function registerGithubRepoHandlers() {
-  ipcMain.handle(CHANNELS.GITHUB.GET_AVAILABLE_REPOS, async (_event, payload = {}) => {
-    try {
-      const data = readGithubRepoData();
-      const query = String(payload.query || "").trim().toLowerCase();
-
-      const linkedByRepoId = new Map(
-        data.linkedRepos.map((entry) => [String(entry.repoId || ""), Boolean(entry.enabled)])
-      );
-
-      const repos = data.availableRepos
-        .map((repo) => {
-          const repoId = toRepoKey(repo);
-          return {
-            ...repo,
-            hasWebhook: linkedByRepoId.has(repoId) ? linkedByRepoId.get(repoId) : Boolean(repo.hasWebhook)
-          };
-        })
-        .filter((repo) => {
-          if (!query) return true;
-          const name = String(repo.name || "").toLowerCase();
-          const fullName = String(repo.fullName || "").toLowerCase();
-          const language = String(repo.language || "").toLowerCase();
-          return name.includes(query) || fullName.includes(query) || language.includes(query);
-        });
-
-      return IPCResponse.success(repos);
-    } catch (error) {
-      return IPCResponse.internalError("Failed to load available GitHub repositories", String(error));
+  function getLinkedReposWithMetadata(data) {
+    const availableByKey = new Map();
+    for (const repo of data.availableRepos) {
+      const key = toRepoKey(repo);
+      if (key) availableByKey.set(key, repo);
+      const id = String(repo.id || "").trim();
+      if (id && !availableByKey.has(id)) {
+        availableByKey.set(id, repo);
+      }
     }
+
+    return data.linkedRepos.map((entry) => {
+      const repoId = String(entry.repoId || "").trim();
+      const repo = availableByKey.get(repoId) || null;
+      const fullName = String(repo?.fullName || repoId || repo?.name || "").trim();
+      const name = String(repo?.name || fullName.split("/").pop() || fullName || "Repository").trim();
+      const lastCommit = String(repo?.updatedAt || entry.updatedAt || entry.linkedAt || new Date().toISOString());
+      const openPrsCount = Math.max(0, Number(repo?.openPRs ?? entry.openPRs ?? 0));
+
+      return {
+        repoId,
+        enabled: Boolean(entry.enabled),
+        projectId: entry.projectId || null,
+        linkedAt: String(entry.linkedAt || ""),
+        id: String(repo?.id || repoId || fullName),
+        name,
+        fullName,
+        visibility: repo?.private ? "private" : "public",
+        lastCommit,
+        openPrsCount,
+        syncStatus: Boolean(entry.enabled) ? "synced" : "paused",
+      };
+    });
+  }
+
+  ipcMain.handle(CHANNELS.GITHUB.GET_AVAILABLE_REPOS, async (_event, payload = {}) => {
+    const data = readGithubRepoData();
+    const query = String(payload.query || "").trim().toLowerCase();
+
+    const linkedByRepoId = new Map(
+      data.linkedRepos.map((entry) => [String(entry.repoId || ""), Boolean(entry.enabled)])
+    );
+
+    return data.availableRepos
+      .map((repo) => {
+        const repoId = toRepoKey(repo);
+        return {
+          ...repo,
+          hasWebhook: linkedByRepoId.has(repoId) ? linkedByRepoId.get(repoId) : Boolean(repo.hasWebhook)
+        };
+      })
+      .filter((repo) => {
+        if (!query) return true;
+        const name = String(repo.name || "").toLowerCase();
+        const fullName = String(repo.fullName || "").toLowerCase();
+        const language = String(repo.language || "").toLowerCase();
+        return name.includes(query) || fullName.includes(query) || language.includes(query);
+      });
+  });
+
+  ipcMain.handle(CHANNELS.GITHUB.GET_CONNECTION_STATUS, async () => {
+    const data = readGithubRepoData();
+    const linkedRepos = getLinkedReposWithMetadata(data);
+    const connected = linkedRepos.some((repo) => repo.enabled);
+
+    let org = "agile-org";
+    const firstRepoWithOrg = linkedRepos.find((repo) => String(repo.fullName || "").includes("/"));
+    if (firstRepoWithOrg) {
+      org = String(firstRepoWithOrg.fullName).split("/")[0] || org;
+    }
+
+    const latestTimestamp = linkedRepos
+      .map((repo) => new Date(repo.lastCommit).getTime())
+      .filter(Number.isFinite)
+      .sort((a, b) => b - a)[0];
+
+    return {
+      connected,
+      org,
+      lastSynced: Number.isFinite(latestTimestamp) ? new Date(latestTimestamp).toISOString() : new Date().toISOString(),
+    };
   });
 
   ipcMain.handle(CHANNELS.GITHUB.GET_LINKED_REPOS, async () => {
-    try {
-      const data = readGithubRepoData();
-      return IPCResponse.success(data.linkedRepos);
-    } catch (error) {
-      return IPCResponse.internalError("Failed to load linked GitHub repositories", String(error));
-    }
+    const data = readGithubRepoData();
+    return getLinkedReposWithMetadata(data);
+  });
+
+  ipcMain.handle(CHANNELS.GITHUB.GET_RECENT_PRS, async () => {
+    const data = readGithubRepoData();
+    const linkedRepos = getLinkedReposWithMetadata(data).filter((repo) => repo.enabled);
+    const now = Date.now();
+
+    return linkedRepos
+      .slice(0, 10)
+      .map((repo, index) => ({
+        id: `pr-${index + 1}`,
+        title: `Sync update for ${repo.name}`,
+        author: "automation-bot",
+        status: index % 3 === 0 ? "merged" : "open",
+        linkedTask: null,
+        repo: repo.fullName,
+        createdAt: new Date(now - index * 90 * 60 * 1000).toISOString(),
+        htmlUrl: `https://github.com/${repo.fullName}/pull/${100 + index}`,
+      }));
   });
 
   ipcMain.handle(CHANNELS.GITHUB.TOGGLE_REPO_SYNC, async (_event, payload = {}) => {
-    try {
-      const repoId = String(payload.repoId || "").trim();
-      if (!repoId) {
-        return IPCResponse.validation("repoId", "repoId is required");
-      }
-
-      const enabled = Boolean(payload.enabled);
-      const data = readGithubRepoData();
-      const updated = applyToggleState(data, repoId, enabled);
-      writeGithubRepoData(data);
-      return IPCResponse.success(updated);
-    } catch (error) {
-      return IPCResponse.internalError("Failed to toggle repository sync", String(error));
+    const repoId = String(payload.repoId || "").trim();
+    if (!repoId) {
+      throw new Error("repoId is required");
     }
+
+    const enabled = Boolean(payload.enabled);
+    const data = readGithubRepoData();
+    const updated = applyToggleState(data, repoId, enabled);
+    writeGithubRepoData(data);
+    return updated;
+  });
+
+  ipcMain.handle(CHANNELS.GITHUB.SYNC_NOW, async () => {
+    const data = readGithubRepoData();
+    const now = new Date().toISOString();
+
+    data.availableRepos = data.availableRepos.map((repo) => ({
+      ...repo,
+      updatedAt: now,
+      hasWebhook: Boolean(repo.hasWebhook),
+    }));
+    data.linkedRepos = data.linkedRepos.map((repo) => ({
+      ...repo,
+      updatedAt: now,
+    }));
+
+    writeGithubRepoData(data);
+    return {
+      success: true,
+      synced: data.linkedRepos.filter((repo) => Boolean(repo.enabled)).length,
+    };
   });
 
   ipcMain.handle(CHANNELS.GITHUB.LINK_REPO_TO_PROJECT, async (_event, payload = {}) => {
-    try {
-      const repoId = String(payload.repoId || "").trim();
-      const projectId = String(payload.projectId || "").trim();
+    const repoId = String(payload.repoId || "").trim();
+    const projectId = String(payload.projectId || "").trim();
 
-      if (!repoId) {
-        return IPCResponse.validation("repoId", "repoId is required");
-      }
-      if (!projectId) {
-        return IPCResponse.validation("projectId", "projectId is required");
-      }
-
-      const data = readGithubRepoData();
-      const linked = applyToggleState(data, repoId, true);
-      if (linked) {
-        linked.projectId = projectId;
-        linked.updatedAt = new Date().toISOString();
-      }
-
-      writeGithubRepoData(data);
-      return IPCResponse.success({ success: true });
-    } catch (error) {
-      return IPCResponse.internalError("Failed to link repository to project", String(error));
+    if (!repoId) {
+      throw new Error("repoId is required");
     }
+    if (!projectId) {
+      throw new Error("projectId is required");
+    }
+
+    const data = readGithubRepoData();
+    const linked = applyToggleState(data, repoId, true);
+    if (linked) {
+      linked.projectId = projectId;
+      linked.updatedAt = new Date().toISOString();
+    }
+
+    writeGithubRepoData(data);
+    return { success: true };
   });
 
   ipcMain.handle(CHANNELS.GITHUB.BULK_TOGGLE, async (_event, payload = {}) => {
-    try {
-      const repoIds = Array.isArray(payload.repoIds) ? payload.repoIds.map((id) => String(id || "").trim()).filter(Boolean) : [];
-      if (repoIds.length === 0) {
-        return IPCResponse.validation("repoIds", "repoIds must contain at least one repository id");
-      }
-
-      const enabled = Boolean(payload.enabled);
-      const data = readGithubRepoData();
-      const updated = repoIds.map((repoId) => applyToggleState(data, repoId, enabled)).filter(Boolean);
-      writeGithubRepoData(data);
-      return IPCResponse.success(updated);
-    } catch (error) {
-      return IPCResponse.internalError("Failed to bulk toggle repository sync", String(error));
+    const repoIds = Array.isArray(payload.repoIds) ? payload.repoIds.map((id) => String(id || "").trim()).filter(Boolean) : [];
+    if (repoIds.length === 0) {
+      throw new Error("repoIds must contain at least one repository id");
     }
+
+    const enabled = Boolean(payload.enabled);
+    const data = readGithubRepoData();
+    const updated = repoIds.map((repoId) => applyToggleState(data, repoId, enabled)).filter(Boolean);
+    writeGithubRepoData(data);
+    return updated;
   });
 }
 
@@ -893,6 +1325,343 @@ function registerMonitoringHandlers() {
   });
 }
 
+function webhooksDbPath() {
+  return path.join(app.getPath("userData"), "webhooks.db.json");
+}
+
+function defaultWebhookData() {
+  const now = new Date().toISOString();
+  const previous = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+
+  return {
+    webhooks: [
+      {
+        id: "webhook-1",
+        url: "https://hooks.example.com/agile/events",
+        events: ["task.updated", "sprint.completed"],
+        status: "active",
+        secret: "whsec_demo_123",
+        lastTriggered: previous,
+        successRate: 100,
+        createdAt: previous,
+        updatedAt: previous
+      }
+    ],
+    deliveries: [
+      {
+        id: "delivery-1",
+        webhookId: "webhook-1",
+        eventType: "task.updated",
+        status: "success",
+        responseCode: 200,
+        requestBody: { id: "task-1", status: "in_progress" },
+        responseBody: { ok: true },
+        triggeredAt: previous,
+        attempts: 1
+      },
+      {
+        id: "delivery-2",
+        webhookId: "webhook-1",
+        eventType: "sprint.completed",
+        status: "failed",
+        responseCode: 502,
+        requestBody: { id: "sprint-24", outcome: "completed" },
+        responseBody: { error: "Bad gateway" },
+        triggeredAt: now,
+        attempts: 1
+      }
+    ]
+  };
+}
+
+function normalizeWebhookStatus(value) {
+  return String(value || "active").trim().toLowerCase() === "inactive" ? "inactive" : "active";
+}
+
+function normalizeWebhookRecord(value) {
+  return {
+    id: String(value?.id || `webhook-${randomUUID()}`),
+    url: String(value?.url || "").trim(),
+    events: Array.isArray(value?.events) ? value.events.map((event) => String(event || "").trim()).filter(Boolean) : [],
+    status: normalizeWebhookStatus(value?.status),
+    secret: String(value?.secret || "").trim(),
+    lastTriggered: value?.lastTriggered ? String(value.lastTriggered) : null,
+    successRate: Math.max(0, Math.min(100, Number(value?.successRate || 0))),
+    createdAt: String(value?.createdAt || new Date().toISOString()),
+    updatedAt: String(value?.updatedAt || new Date().toISOString())
+  };
+}
+
+function normalizeDeliveryRecord(value) {
+  return {
+    id: String(value?.id || `delivery-${randomUUID()}`),
+    webhookId: String(value?.webhookId || "").trim(),
+    eventType: String(value?.eventType || "manual"),
+    status: String(value?.status || "success"),
+    responseCode: Number(value?.responseCode || 0),
+    requestBody: value?.requestBody || {},
+    responseBody: value?.responseBody || {},
+    triggeredAt: String(value?.triggeredAt || new Date().toISOString()),
+    attempts: Math.max(1, Number(value?.attempts || 1))
+  };
+}
+
+function readWebhooksData() {
+  try {
+    const filePath = webhooksDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultWebhookData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const defaults = defaultWebhookData();
+    return {
+      webhooks: Array.isArray(parsed?.webhooks) ? parsed.webhooks.map((item) => normalizeWebhookRecord(item)) : defaults.webhooks,
+      deliveries: Array.isArray(parsed?.deliveries) ? parsed.deliveries.map((item) => normalizeDeliveryRecord(item)) : defaults.deliveries
+    };
+  } catch {
+    return defaultWebhookData();
+  }
+}
+
+function writeWebhooksData(data) {
+  fs.writeFileSync(webhooksDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function computeWebhookSuccessRate(webhookId, deliveries) {
+  const items = deliveries.filter((entry) => String(entry.webhookId || "") === String(webhookId || ""));
+  if (!items.length) return 0;
+  const successCount = items.filter((entry) => String(entry.status || "") === "success").length;
+  return Math.round((successCount / items.length) * 100);
+}
+
+function mapWebhookView(webhook, deliveries) {
+  const last = deliveries
+    .filter((entry) => String(entry.webhookId || "") === String(webhook.id || ""))
+    .sort((a, b) => new Date(String(b.triggeredAt || 0)).getTime() - new Date(String(a.triggeredAt || 0)).getTime())[0];
+
+  return {
+    ...webhook,
+    lastTriggered: webhook.lastTriggered || last?.triggeredAt || null,
+    successRate: computeWebhookSuccessRate(webhook.id, deliveries)
+  };
+}
+
+function isValidWebhookUrl(url) {
+  try {
+    const parsed = new URL(String(url || ""));
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function retryDeliveryInStores(deliveryId) {
+  const id = String(deliveryId || "").trim();
+  if (!id) return false;
+
+  const webhookData = readWebhooksData();
+  const deliveryIndex = webhookData.deliveries.findIndex((entry) => String(entry.id || "") === id);
+  if (deliveryIndex >= 0) {
+    const now = new Date().toISOString();
+    const current = webhookData.deliveries[deliveryIndex];
+    webhookData.deliveries[deliveryIndex] = {
+      ...current,
+      status: "success",
+      responseCode: 200,
+      responseBody: { ok: true, retried: true },
+      triggeredAt: now,
+      attempts: Number(current.attempts || 1) + 1
+    };
+
+    const webhookIndex = webhookData.webhooks.findIndex((entry) => String(entry.id || "") === String(current.webhookId || ""));
+    if (webhookIndex >= 0) {
+      webhookData.webhooks[webhookIndex] = {
+        ...webhookData.webhooks[webhookIndex],
+        lastTriggered: now,
+        updatedAt: now
+      };
+    }
+
+    writeWebhooksData(webhookData);
+    return true;
+  }
+
+  const monitoringData = readMonitoringData();
+  const dlqIndex = monitoringData.webhookDlq.findIndex((entry) => String(entry.id || "") === id);
+  if (dlqIndex >= 0) {
+    monitoringData.webhookDlq.splice(dlqIndex, 1);
+    writeMonitoringData(monitoringData);
+    return true;
+  }
+
+  return false;
+}
+
+function registerWebhookHandlers() {
+  ipcMain.handle(CHANNELS.WEBHOOKS.GET_ALL, async () => {
+    try {
+      const data = readWebhooksData();
+      const items = data.webhooks
+        .map((webhook) => mapWebhookView(webhook, data.deliveries))
+        .sort((a, b) => new Date(String(b.updatedAt || 0)).getTime() - new Date(String(a.updatedAt || 0)).getTime());
+      return IPCResponse.success(items);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load webhooks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.CREATE, async (_event, payload = {}) => {
+    try {
+      const url = String(payload.url || "").trim();
+      const events = Array.isArray(payload.events) ? payload.events.map((event) => String(event || "").trim()).filter(Boolean) : [];
+      const secret = String(payload.secret || "").trim();
+
+      if (!url) return IPCResponse.validation("url", "url is required");
+      if (!isValidWebhookUrl(url)) return IPCResponse.validation("url", "url must be a valid HTTP(S) URL");
+      if (!events.length) return IPCResponse.validation("events", "events must include at least one event");
+
+      const data = readWebhooksData();
+      const now = new Date().toISOString();
+      const created = normalizeWebhookRecord({
+        id: `webhook-${randomUUID()}`,
+        url,
+        events,
+        secret,
+        status: "active",
+        lastTriggered: null,
+        successRate: 0,
+        createdAt: now,
+        updatedAt: now
+      });
+
+      data.webhooks.unshift(created);
+      writeWebhooksData(data);
+      return IPCResponse.success(mapWebhookView(created, data.deliveries));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to create webhook", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.UPDATE, async (_event, payload = {}) => {
+    try {
+      const webhookId = String(payload.webhookId || "").trim();
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+      if (!webhookId) return IPCResponse.validation("webhookId", "webhookId is required");
+      if (!changes) return IPCResponse.validation("changes", "changes is required");
+
+      const data = readWebhooksData();
+      const index = data.webhooks.findIndex((entry) => String(entry.id || "") === webhookId);
+      if (index < 0) return IPCResponse.notFound("Webhook");
+
+      const current = data.webhooks[index];
+      const nextUrl = Object.prototype.hasOwnProperty.call(changes, "url") ? String(changes.url || "").trim() : current.url;
+      if (!nextUrl || !isValidWebhookUrl(nextUrl)) {
+        return IPCResponse.validation("url", "url must be a valid HTTP(S) URL");
+      }
+
+      const updated = normalizeWebhookRecord({
+        ...current,
+        ...changes,
+        url: nextUrl,
+        events: Object.prototype.hasOwnProperty.call(changes, "events") ? changes.events : current.events,
+        status: Object.prototype.hasOwnProperty.call(changes, "status") ? changes.status : current.status,
+        updatedAt: new Date().toISOString()
+      });
+
+      data.webhooks[index] = updated;
+      writeWebhooksData(data);
+      return IPCResponse.success(mapWebhookView(updated, data.deliveries));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update webhook", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.DELETE, async (_event, payload = {}) => {
+    try {
+      const webhookId = String(payload.webhookId || "").trim();
+      if (!webhookId) return IPCResponse.validation("webhookId", "webhookId is required");
+
+      const data = readWebhooksData();
+      const before = data.webhooks.length;
+      data.webhooks = data.webhooks.filter((entry) => String(entry.id || "") !== webhookId);
+      if (data.webhooks.length === before) return IPCResponse.notFound("Webhook");
+
+      data.deliveries = data.deliveries.filter((entry) => String(entry.webhookId || "") !== webhookId);
+      writeWebhooksData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete webhook", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.TEST, async (_event, payload = {}) => {
+    try {
+      const webhookId = String(payload.webhookId || "").trim();
+      if (!webhookId) return IPCResponse.validation("webhookId", "webhookId is required");
+
+      const data = readWebhooksData();
+      const index = data.webhooks.findIndex((entry) => String(entry.id || "") === webhookId);
+      if (index < 0) return IPCResponse.notFound("Webhook");
+
+      const now = new Date().toISOString();
+      const delivery = normalizeDeliveryRecord({
+        id: `delivery-${randomUUID()}`,
+        webhookId,
+        eventType: "webhook.test",
+        status: "success",
+        responseCode: 200,
+        requestBody: { webhookId, test: true },
+        responseBody: { ok: true },
+        triggeredAt: now,
+        attempts: 1
+      });
+
+      data.deliveries.unshift(delivery);
+      data.webhooks[index] = normalizeWebhookRecord({
+        ...data.webhooks[index],
+        lastTriggered: now,
+        updatedAt: now
+      });
+
+      writeWebhooksData(data);
+      return IPCResponse.success({ success: true, responseCode: 200 });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to test webhook", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.GET_DELIVERY_LOG, async (_event, payload = {}) => {
+    try {
+      const webhookId = String(payload.webhookId || "").trim();
+      if (!webhookId) return IPCResponse.validation("webhookId", "webhookId is required");
+
+      const data = readWebhooksData();
+      const rows = data.deliveries
+        .filter((entry) => String(entry.webhookId || "") === webhookId)
+        .sort((a, b) => new Date(String(b.triggeredAt || 0)).getTime() - new Date(String(a.triggeredAt || 0)).getTime());
+      return IPCResponse.success(rows);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load webhook delivery log", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.WEBHOOKS.RETRY_DELIVERY, async (_event, payload = {}) => {
+    try {
+      const deliveryId = String(payload.deliveryId || "").trim();
+      if (!deliveryId) return IPCResponse.validation("deliveryId", "deliveryId is required");
+
+      const retried = retryDeliveryInStores(deliveryId);
+      if (!retried) return IPCResponse.notFound("Delivery");
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to retry webhook delivery", String(error));
+    }
+  });
+}
+
 function onboardingDbPath() {
   return path.join(app.getPath("userData"), "onboarding.db.json");
 }
@@ -1049,14 +1818,20 @@ function profileDbPath() {
 function defaultProfileData() {
   return {
     userProfile: {
-      id: "user-1",
-      name: "Demo User",
-      email: "demo@agilescrummaster.dev",
-      role: "member",
-      bio: "Scrum practitioner focused on team flow and delivery quality.",
+      id: "",
+      displayName: "",
+      name: "",
+      email: "",
+      role: "",
+      title: "",
+      phone: "",
+      bio: "",
       timezone: "UTC",
-      githubUsername: "demo-user",
-      slack: "@demo-user",
+      githubUsername: "",
+      slack: "",
+      ssoProviders: [],
+      twoFactorEnabled: false,
+      twoFactorQrCodeUrl: null,
       avatarUrl: null,
       notifications: {
         emailDailyDigest: true,
@@ -1064,12 +1839,13 @@ function defaultProfileData() {
         standupReminders: true
       }
     },
+    sessions: [],
     activityStats: {
-      tasksCompleted: 42,
-      prsReviewed: 17,
-      standupsAttended: 29
+      tasksCompleted: 0,
+      prsReviewed: 0,
+      standupsAttended: 0
     },
-    passwordHashHint: "desktop-local"
+    passwordHashHint: ""
   };
 }
 
@@ -1084,17 +1860,46 @@ function readProfileData() {
 
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
     const defaults = defaultProfileData();
-    return {
+    const merged = {
       userProfile: {
         ...defaults.userProfile,
-        ...(parsed?.userProfile && typeof parsed.userProfile === "object" ? parsed.userProfile : {})
+        ...(parsed?.userProfile && typeof parsed.userProfile === "object" ? parsed.userProfile : {}),
+        displayName: String(
+          parsed?.userProfile?.displayName || parsed?.userProfile?.name || defaults.userProfile.displayName
+        ),
+        name: String(parsed?.userProfile?.name || parsed?.userProfile?.displayName || defaults.userProfile.name),
+        title: String(parsed?.userProfile?.title || defaults.userProfile.title),
+        phone: String(parsed?.userProfile?.phone || defaults.userProfile.phone),
+        ssoProviders: Array.isArray(parsed?.userProfile?.ssoProviders)
+          ? parsed.userProfile.ssoProviders
+          : defaults.userProfile.ssoProviders,
+        twoFactorEnabled: Boolean(parsed?.userProfile?.twoFactorEnabled),
+        twoFactorQrCodeUrl: parsed?.userProfile?.twoFactorQrCodeUrl || null,
       },
+      sessions: Array.isArray(parsed?.sessions) ? parsed.sessions : defaults.sessions,
       activityStats: {
         ...defaults.activityStats,
         ...(parsed?.activityStats && typeof parsed.activityStats === "object" ? parsed.activityStats : {})
       },
       passwordHashHint: parsed?.passwordHashHint || defaults.passwordHashHint
     };
+
+    const normalizedEmail = String(merged?.userProfile?.email || "").trim().toLowerCase();
+    if (normalizedEmail === "demo@agilescrummaster.dev") {
+      merged.userProfile = {
+        ...defaults.userProfile,
+        notifications: {
+          ...defaults.userProfile.notifications,
+          ...(merged?.userProfile?.notifications && typeof merged.userProfile.notifications === "object"
+            ? merged.userProfile.notifications
+            : {}),
+        },
+      };
+      merged.sessions = [];
+      writeProfileData(merged);
+    }
+
+    return merged;
   } catch {
     return defaultProfileData();
   }
@@ -1104,11 +1909,201 @@ function writeProfileData(data) {
   fs.writeFileSync(profileDbPath(), JSON.stringify(data, null, 2), "utf8");
 }
 
+function getDesktopGatewayBaseUrl() {
+  const candidate = String(
+    process.env.DESKTOP_API_GATEWAY_URL ||
+      process.env.API_GATEWAY_URL ||
+      process.env.NEXT_PUBLIC_API_URL ||
+      "http://localhost:4000"
+  ).trim();
+
+  const normalized = candidate.replace(/\/+$/, "").replace(/\/api(?:\/v1)?$/i, "");
+  console.log("[GATEWAY] Base URL resolved:", normalized, {
+    DESKTOP_API_GATEWAY_URL: process.env.DESKTOP_API_GATEWAY_URL,
+    API_GATEWAY_URL: process.env.API_GATEWAY_URL
+  });
+  return normalized;
+}
+
+function getDesktopSessionToken() {
+  const session = getStoredSession();
+  const token = String(session?.accessToken || "").trim();
+  if (!token) {
+    throw new Error("Desktop session not found. Please sign in.");
+  }
+  return token;
+}
+
+async function desktopGatewayRequest(method, pathname, body) {
+  console.log("[GATEWAY] Request:", { method, pathname });
+  
+  try {
+    const token = getDesktopSessionToken();
+    console.log("[GATEWAY] Token found:", token.substring(0, 20) + "...");
+  } catch (tokenError) {
+    console.log("[GATEWAY] Token error:", String(tokenError));
+    throw tokenError;
+  }
+
+  const token = getDesktopSessionToken();
+  const baseUrl = getDesktopGatewayBaseUrl();
+  const url = `${baseUrl}${pathname}`;
+  console.log("[GATEWAY] Fetching:", url);
+  
+  const timeoutMs = 30000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        "Content-Type": "application/json"
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+      signal: controller.signal
+    });
+    console.log("[GATEWAY] Response status:", response.status);
+  } catch (error) {
+    console.log("[GATEWAY] Fetch error:", String(error));
+    const detail = String(error instanceof Error ? error.message : error).trim();
+    const lowered = detail.toLowerCase();
+    const timedOut = lowered.includes("abort") || lowered.includes("timeout");
+    throw new Error(
+      timedOut
+        ? `Gateway timeout after ${Math.round(timeoutMs / 1000)}s. Ensure API gateway is reachable at ${baseUrl}.`
+        : `Unable to reach API gateway at ${baseUrl}. ${detail}`
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    console.log("[GATEWAY] Error response:", { status: response.status, payload });
+    const detail = String(payload?.detail || payload?.error || response.statusText || "Request failed").trim();
+    throw new Error(`Gateway request failed (${response.status}): ${detail}`);
+  }
+
+  console.log("[GATEWAY] Success");
+  return payload;
+}
+
+function firstArray(payload, preferredKeys = []) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+
+  for (const key of preferredKeys) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+
+  const found = Object.values(payload).find((value) => Array.isArray(value));
+  return Array.isArray(found) ? found : [];
+}
+
+function normalizeRole(value) {
+  const role = String(value || "").trim().toLowerCase();
+  if (role === "owner" || role === "admin" || role === "member" || role === "viewer") {
+    return role;
+  }
+  return "member";
+}
+
+function sessionUserFallback() {
+  const session = getStoredSession();
+  const user = session?.user && typeof session.user === "object" ? session.user : {};
+  return {
+    id: String(user?.id || "").trim(),
+    name: String(user?.fullName || user?.name || user?.email || "").trim(),
+    email: String(user?.email || "").trim(),
+  };
+}
+
+function buildProfileFromLocalAndIdentity(identity, localProfile, timezone) {
+  const displayName = String(identity?.name || localProfile?.displayName || localProfile?.name || identity?.email || "").trim();
+  const email = String(identity?.email || localProfile?.email || "").trim();
+
+  return {
+    id: String(identity?.id || localProfile?.id || "").trim(),
+    name: displayName,
+    displayName,
+    email,
+    role: normalizeRole(identity?.role || localProfile?.role),
+    title: String(localProfile?.title || "").trim(),
+    bio: String(localProfile?.bio || "").trim(),
+    phone: String(localProfile?.phone || "").trim(),
+    timezone: String(timezone || localProfile?.timezone || "UTC").trim() || "UTC",
+    githubUsername: String(localProfile?.githubUsername || "").trim(),
+    slack: String(localProfile?.slack || "").trim(),
+    avatarUrl: localProfile?.avatarUrl || null,
+    notifications:
+      localProfile?.notifications && typeof localProfile.notifications === "object"
+        ? {
+            emailDailyDigest: Boolean(localProfile.notifications.emailDailyDigest),
+            sprintAlerts: Boolean(localProfile.notifications.sprintAlerts),
+            standupReminders: Boolean(localProfile.notifications.standupReminders),
+          }
+        : {
+            emailDailyDigest: true,
+            sprintAlerts: true,
+            standupReminders: true,
+          },
+  };
+}
+
+async function resolveCurrentProfile() {
+  const localData = readProfileData();
+  const localProfile = localData?.userProfile && typeof localData.userProfile === "object" ? localData.userProfile : {};
+
+  try {
+    const [mePayload, orgPayload] = await Promise.all([
+      desktopGatewayRequest("GET", "/api/v1/auth/me"),
+      desktopGatewayRequest("GET", "/api/v1/org").catch(() => null)
+    ]);
+
+    const user = mePayload?.user && typeof mePayload.user === "object" ? mePayload.user : {};
+    const memberships = Array.isArray(mePayload?.memberships) ? mePayload.memberships : [];
+    const activeOrgId = String(mePayload?.activeOrgId || "").trim();
+    const activeMembership =
+      memberships.find((item) => String(item?.org?.id || "") === activeOrgId) ||
+      memberships[0] ||
+      null;
+
+    const identity = {
+      id: String(user?.id || "").trim(),
+      name: String(user?.fullName || user?.name || user?.email || "").trim(),
+      email: String(user?.email || "").trim(),
+      role: normalizeRole(activeMembership?.role),
+    };
+
+    return buildProfileFromLocalAndIdentity(identity, localProfile, String(orgPayload?.org?.timezone || "UTC").trim());
+  } catch {
+    const fallbackIdentity = sessionUserFallback();
+    if (!fallbackIdentity.id && !fallbackIdentity.email) {
+      throw new Error("Desktop session not found. Please sign in.");
+    }
+    return buildProfileFromLocalAndIdentity(fallbackIdentity, localProfile, String(localProfile?.timezone || "UTC").trim());
+  }
+}
+
 function registerProfileHandlers() {
+  ipcMain.handle(CHANNELS.PROFILE.GET, async () => {
+    try {
+      const profile = await resolveCurrentProfile();
+      return IPCResponse.success(profile);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load profile", String(error));
+    }
+  });
+
   ipcMain.handle(CHANNELS.PROFILE.GET_CURRENT, async () => {
     try {
-      const data = readProfileData();
-      return IPCResponse.success(data.userProfile);
+      const profile = await resolveCurrentProfile();
+      return IPCResponse.success(profile);
     } catch (error) {
       return IPCResponse.internalError("Failed to load profile", String(error));
     }
@@ -1119,10 +2114,15 @@ function registerProfileHandlers() {
       const data = readProfileData();
       const changes = payload && typeof payload === "object" ? payload : {};
 
+      const nextDisplayName = String(changes.displayName || changes.name || data.userProfile.displayName || data.userProfile.name);
+
       data.userProfile = {
         ...data.userProfile,
-        name: String(changes.name || data.userProfile.name),
+        displayName: nextDisplayName,
+        name: nextDisplayName,
+        title: String(changes.title || data.userProfile.title || ""),
         bio: String(changes.bio || data.userProfile.bio || ""),
+        phone: String(changes.phone || data.userProfile.phone || ""),
         timezone: String(changes.timezone || data.userProfile.timezone || "UTC"),
         notifications:
           changes.notifications && typeof changes.notifications === "object"
@@ -1134,26 +2134,39 @@ function registerProfileHandlers() {
       writeProfileData(data);
       return IPCResponse.success(data.userProfile);
     } catch (error) {
-      return IPCResponse.internalError("Failed to update profile", String(error));
+      return IPCResponse.internalError("Profile update is not available in API yet", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PROFILE.CHANGE_EMAIL, async (_event, payload = {}) => {
+    try {
+      const newEmail = String(payload.newEmail || "").trim().toLowerCase();
+      const password = String(payload.password || "");
+
+      if (!newEmail || !newEmail.includes("@")) {
+        return IPCResponse.validation("newEmail", "newEmail must be a valid email");
+      }
+      if (!password) {
+        return IPCResponse.validation("password", "password is required");
+      }
+
+      const data = readProfileData();
+      data.userProfile.email = newEmail;
+      data.userProfile.updatedAt = new Date().toISOString();
+      writeProfileData(data);
+
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to change email", String(error));
     }
   });
 
   ipcMain.handle(CHANNELS.PROFILE.CHANGE_PASSWORD, async (_event, payload = {}) => {
     try {
-      const currentPassword = String(payload.currentPassword || "");
-      const newPassword = String(payload.newPassword || "");
-
-      if (!currentPassword) {
-        return IPCResponse.validation("currentPassword", "currentPassword is required");
-      }
-      if (!newPassword || newPassword.length < 6) {
-        return IPCResponse.validation("newPassword", "newPassword must be at least 6 characters");
-      }
-
-      const data = readProfileData();
-      data.passwordHashHint = `changed-${new Date().toISOString()}`;
-      writeProfileData(data);
-      return IPCResponse.success({ success: true });
+      return IPCResponse.validation(
+        "currentPassword",
+        "Password change endpoint is not exposed by API. Use forgot/reset password flow."
+      );
     } catch (error) {
       return IPCResponse.internalError("Failed to change password", String(error));
     }
@@ -1161,16 +2174,7 @@ function registerProfileHandlers() {
 
   ipcMain.handle(CHANNELS.PROFILE.UPLOAD_AVATAR, async (_event, payload = {}) => {
     try {
-      const base64Image = String(payload.base64Image || "").trim();
-      if (!base64Image) {
-        return IPCResponse.validation("base64Image", "base64Image is required");
-      }
-
-      const data = readProfileData();
-      data.userProfile.avatarUrl = base64Image;
-      data.userProfile.updatedAt = new Date().toISOString();
-      writeProfileData(data);
-      return IPCResponse.success({ avatarUrl: base64Image });
+      return IPCResponse.validation("base64Image", "Avatar update endpoint is not exposed by API yet.");
     } catch (error) {
       return IPCResponse.internalError("Failed to upload avatar", String(error));
     }
@@ -1178,10 +2182,1061 @@ function registerProfileHandlers() {
 
   ipcMain.handle(CHANNELS.PROFILE.GET_ACTIVITY_STATS, async () => {
     try {
-      const data = readProfileData();
-      return IPCResponse.success(data.activityStats);
+      const [tasksPayload, standupsPayload] = await Promise.all([
+        desktopGatewayRequest("GET", "/api/v1/tasks").catch(() => ({ items: [] })),
+        desktopGatewayRequest("GET", "/api/v1/standup").catch(() => ({ items: [] }))
+      ]);
+
+      const tasks = firstArray(tasksPayload, ["items", "tasks"]);
+      const standups = firstArray(standupsPayload, ["items", "standups"]);
+
+      const tasksCompleted = tasks.filter((task) => {
+        const status = String(task?.status || "").trim().toLowerCase();
+        return status === "done" || status === "completed" || status === "closed";
+      }).length;
+
+      return IPCResponse.success({
+        tasksCompleted,
+        prsReviewed: 0,
+        standupsAttended: standups.length
+      });
     } catch (error) {
-      return IPCResponse.internalError("Failed to load profile activity stats", String(error));
+      try {
+        const data = readProfileData();
+        return IPCResponse.success(data?.activityStats || defaultProfileData().activityStats);
+      } catch {
+        return IPCResponse.internalError("Failed to load profile activity stats", String(error));
+      }
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PROFILE.GET_SESSIONS, async () => {
+    try {
+      const data = readProfileData();
+      const session = getStoredSession();
+      const currentSession = {
+        sessionId: "session-current",
+        device: `Desktop App (${process.platform})`,
+        ipAddress: "127.0.0.1",
+        lastActiveAt: new Date().toISOString(),
+        current: true,
+      };
+
+      const historicalSessions = Array.isArray(data.sessions)
+        ? data.sessions.filter((item) => !Boolean(item?.current))
+        : [];
+
+      if (!session?.accessToken) {
+        return IPCResponse.success([]);
+      }
+
+      return IPCResponse.success([currentSession, ...historicalSessions]);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load active sessions", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PROFILE.REVOKE_SESSION, async (_event, payload = {}) => {
+    try {
+      const sessionId = String(payload.sessionId || "").trim();
+      if (!sessionId) {
+        return IPCResponse.validation("sessionId", "sessionId is required");
+      }
+
+      const data = readProfileData();
+      const index = (Array.isArray(data.sessions) ? data.sessions : []).findIndex(
+        (session) => String(session.sessionId || "") === sessionId
+      );
+      if (index < 0) {
+        return IPCResponse.notFound("Session");
+      }
+
+      if (Boolean(data.sessions[index]?.current)) {
+        return IPCResponse.validation("sessionId", "current session cannot be revoked");
+      }
+
+      data.sessions.splice(index, 1);
+      writeProfileData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to revoke session", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PROFILE.TOGGLE_2FA, async (_event, payload = {}) => {
+    try {
+      const enabled = Boolean(payload.enabled);
+      const data = readProfileData();
+
+      data.userProfile.twoFactorEnabled = enabled;
+      data.userProfile.twoFactorQrCodeUrl = enabled
+        ? `otpauth://totp/AgileScrumMaster:${encodeURIComponent(String(data.userProfile.email || "user"))}?secret=ASM${Math.random().toString(36).slice(2, 12).toUpperCase()}&issuer=AgileScrumMaster`
+        : null;
+      data.userProfile.updatedAt = new Date().toISOString();
+      writeProfileData(data);
+
+      return IPCResponse.success({
+        success: true,
+        qrCodeUrl: data.userProfile.twoFactorQrCodeUrl || undefined,
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to toggle 2FA", String(error));
+    }
+  });
+}
+
+function standupDbPath() {
+  return path.join(app.getPath("userData"), "standup.db.json");
+}
+
+function defaultStandupData() {
+  return {
+    entries: []
+  };
+}
+
+function readStandupData() {
+  try {
+    const filePath = standupDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultStandupData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return {
+      entries: Array.isArray(parsed?.entries) ? parsed.entries : []
+    };
+  } catch {
+    return defaultStandupData();
+  }
+}
+
+function writeStandupData(data) {
+  fs.writeFileSync(standupDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function standupDateKey(dateInput) {
+  const raw = String(dateInput || "").trim();
+  if (raw) {
+    const dt = new Date(raw);
+    if (Number.isFinite(dt.getTime())) {
+      return dt.toISOString().slice(0, 10);
+    }
+  }
+  return new Date().toISOString().slice(0, 10);
+}
+
+function standupSummaryText(entries, date) {
+  const rows = Array.isArray(entries) ? entries : [];
+  if (!rows.length) {
+    return `Standup summary for ${date}: No updates submitted.`;
+  }
+
+  const lines = [`Standup summary for ${date}`];
+  for (const row of rows) {
+    const name = String(row.userName || row.userId || "Team member");
+    const yesterday = String(row.yesterday || "No update").trim();
+    const today = String(row.today || "No update").trim();
+    const blockers = String(row.blockers || "None").trim();
+    lines.push(`- ${name}: Yesterday ${yesterday}; Today ${today}; Blockers ${blockers}.`);
+  }
+  return lines.join("\n");
+}
+
+function registerStandupHandlers() {
+  ipcMain.handle(CHANNELS.STANDUP.GET_TODAY, async () => {
+    try {
+      const date = standupDateKey();
+      const data = readStandupData();
+      const items = data.entries.filter((entry) => String(entry.date || "") === date);
+      return IPCResponse.success(items);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load today's standup entries", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.STANDUP.SUBMIT, async (_event, payload = {}) => {
+    try {
+      const userId = String(payload.userId || "").trim();
+      const yesterday = String(payload.yesterday || "").trim();
+      const today = String(payload.today || "").trim();
+      const blockers = String(payload.blockers || "").trim();
+
+      if (!userId) return IPCResponse.validation("userId", "userId is required");
+      if (!yesterday && !today && !blockers) {
+        return IPCResponse.validation("today", "At least one standup field is required");
+      }
+
+      const profile = readProfileData();
+      const date = standupDateKey();
+      const data = readStandupData();
+      const idx = data.entries.findIndex((entry) => String(entry.userId || "") === userId && String(entry.date || "") === date);
+      const userName = String(profile?.userProfile?.displayName || profile?.userProfile?.name || userId);
+
+      const nextEntry = {
+        id: idx >= 0 ? String(data.entries[idx].id || `standup-${Date.now()}`) : `standup-${Date.now()}`,
+        date,
+        userId,
+        userName,
+        yesterday,
+        today,
+        blockers,
+        submittedAt: new Date().toISOString()
+      };
+
+      if (idx >= 0) {
+        data.entries[idx] = nextEntry;
+      } else {
+        data.entries.push(nextEntry);
+      }
+      writeStandupData(data);
+      return IPCResponse.success(nextEntry);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to submit standup", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.STANDUP.GET_HISTORY, async (_event, payload = {}) => {
+    try {
+      const date = standupDateKey(payload.date);
+      const data = readStandupData();
+      const items = data.entries.filter((entry) => String(entry.date || "") === date);
+      return IPCResponse.success(items);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load standup history", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.STANDUP.GENERATE_SUMMARY, async (_event, payload = {}) => {
+    try {
+      const date = standupDateKey(payload.date);
+      const data = readStandupData();
+      const items = data.entries.filter((entry) => String(entry.date || "") === date);
+      const summary = standupSummaryText(items, date);
+      return IPCResponse.success({ summary });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to generate standup summary", String(error));
+    }
+  });
+}
+
+function sprintOverviewDbPath() {
+  return path.join(app.getPath("userData"), "sprint.overview.db.json");
+}
+
+function defaultSprintOverviewData() {
+  return {
+    currentSprintId: "sprint-24",
+    sprints: {
+      "sprint-24": {
+        id: "sprint-24",
+        name: "Sprint 24",
+        goal: "Stabilize desktop IPC wiring for settings and sprint workflows.",
+        startDate: "2026-04-01",
+        endDate: "2026-04-15",
+        status: "active",
+      },
+    },
+    tasksBySprint: {
+      "sprint-24": [
+        { id: "sp24-1", title: "Wire settings profile IPC", status: "done", assignee: "Demo User" },
+        { id: "sp24-2", title: "Wire settings team IPC", status: "in_progress", assignee: "Sprint Lead" },
+        { id: "sp24-3", title: "Wire skill-gap IPC", status: "blocked", assignee: "Frontend Engineer" },
+        { id: "sp24-4", title: "Validate sprint overview flow", status: "todo", assignee: "Demo User" },
+      ],
+    },
+    eventsBySprint: {
+      "sprint-24": [
+        { id: "sp24-ev-1", type: "review", title: "Sprint Review", scheduledAt: "2026-04-16T14:00:00.000Z" },
+        { id: "sp24-ev-2", type: "retro", title: "Sprint Retrospective", scheduledAt: "2026-04-17T14:00:00.000Z" },
+      ],
+    },
+  };
+}
+
+function readSprintOverviewData() {
+  try {
+    const filePath = sprintOverviewDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultSprintOverviewData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const defaults = defaultSprintOverviewData();
+    return {
+      currentSprintId: String(parsed?.currentSprintId || defaults.currentSprintId),
+      sprints: parsed?.sprints && typeof parsed.sprints === "object" ? parsed.sprints : defaults.sprints,
+      tasksBySprint:
+        parsed?.tasksBySprint && typeof parsed.tasksBySprint === "object"
+          ? parsed.tasksBySprint
+          : defaults.tasksBySprint,
+      eventsBySprint:
+        parsed?.eventsBySprint && typeof parsed.eventsBySprint === "object"
+          ? parsed.eventsBySprint
+          : defaults.eventsBySprint,
+    };
+  } catch {
+    return defaultSprintOverviewData();
+  }
+}
+
+function writeSprintOverviewData(data) {
+  fs.writeFileSync(sprintOverviewDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function resolveSprintRecord(data, sprintId) {
+  const requested = String(sprintId || "").trim();
+  const byRequested = requested ? data.sprints?.[requested] : null;
+  const byCurrent = data.sprints?.[String(data.currentSprintId || "")] || null;
+  return byRequested || byCurrent || null;
+}
+
+function applySprintChanges(current, changes) {
+  const source = changes && typeof changes === "object" ? changes : {};
+  const next = { ...current };
+
+  if (Object.prototype.hasOwnProperty.call(source, "name")) {
+    next.name = String(source.name || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "goal")) {
+    next.goal = String(source.goal || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "startDate")) {
+    next.startDate = String(source.startDate || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "endDate")) {
+    next.endDate = String(source.endDate || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "status")) {
+    next.status = String(source.status || "").trim().toLowerCase();
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "plannedPoints")) {
+    next.plannedPoints = Number(source.plannedPoints || 0);
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "completedPoints")) {
+    next.completedPoints = Number(source.completedPoints || 0);
+  }
+
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+function registerSprintHandlers() {
+  ipcMain.handle(CHANNELS.SPRINT.GET_BY_ID, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const data = readSprintOverviewData();
+      const sprint = data.sprints?.[sprintId] || null;
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+      return IPCResponse.success(sprint);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint by id", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT.GET_CURRENT, async (_event, payload = {}) => {
+    try {
+      const data = readSprintOverviewData();
+      const sprint = resolveSprintRecord(data, payload.sprintId);
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+      return IPCResponse.success(sprint);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load current sprint", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT.GET_TASKS, async (_event, payload = {}) => {
+    try {
+      const data = readSprintOverviewData();
+      const sprint = resolveSprintRecord(data, payload.sprintId);
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+      const tasks = Array.isArray(data.tasksBySprint?.[String(sprint.id || "")])
+        ? data.tasksBySprint[String(sprint.id || "")]
+        : [];
+      return IPCResponse.success(tasks);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint tasks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT.UPDATE, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+      if (!changes) {
+        return IPCResponse.validation("changes", "changes is required");
+      }
+
+      const data = readSprintOverviewData();
+      const current = data.sprints?.[sprintId] || null;
+      if (!current) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const next = applySprintChanges(current, changes);
+      const status = String(next.status || "").trim().toLowerCase();
+      if (status && !["planning", "active", "completed", "cancelled"].includes(status)) {
+        return IPCResponse.validation("status", "status must be planning|active|completed|cancelled");
+      }
+      if (!String(next.name || "").trim()) {
+        return IPCResponse.validation("name", "name cannot be empty");
+      }
+
+      data.sprints[sprintId] = next;
+      if (!data.currentSprintId) {
+        data.currentSprintId = sprintId;
+      }
+      writeSprintOverviewData(data);
+      return IPCResponse.success(next);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update sprint", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT.UPDATE_STATUS, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      const status = String(payload.status || "").trim().toLowerCase();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+      if (!["planning", "active", "completed", "cancelled"].includes(status)) {
+        return IPCResponse.validation("status", "status must be planning|active|completed|cancelled");
+      }
+
+      const data = readSprintOverviewData();
+      const current = data.sprints?.[sprintId] || null;
+      if (!current) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const updated = applySprintChanges(current, { status });
+      data.sprints[sprintId] = updated;
+      if (!data.currentSprintId) {
+        data.currentSprintId = sprintId;
+      }
+      writeSprintOverviewData(data);
+      return IPCResponse.success(updated);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update sprint status", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT.DELETE, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const data = readSprintOverviewData();
+      if (!data.sprints?.[sprintId]) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      delete data.sprints[sprintId];
+      delete data.tasksBySprint[sprintId];
+      delete data.eventsBySprint[sprintId];
+
+      if (String(data.currentSprintId || "") === sprintId) {
+        const remainingIds = Object.keys(data.sprints || {});
+        data.currentSprintId = remainingIds.length ? remainingIds[0] : "";
+      }
+
+      writeSprintOverviewData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete sprint", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT.GET_EVENTS, async (_event, payload = {}) => {
+    try {
+      const data = readSprintOverviewData();
+      const sprint = resolveSprintRecord(data, payload.sprintId);
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+      const events = Array.isArray(data.eventsBySprint?.[String(sprint.id || "")])
+        ? data.eventsBySprint[String(sprint.id || "")]
+        : [];
+      return IPCResponse.success(events);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint events", String(error));
+    }
+  });
+}
+
+function registerSprintsHandlers() {
+  function getSprintProjectMaps() {
+    const projects = readProjectsData();
+    const projectNameById = new Map((Array.isArray(projects.projects) ? projects.projects : []).map((p) => [String(p.id || ""), String(p.name || "")]));
+    const projectBySprintId = new Map();
+    for (const [projectId, list] of Object.entries(projects.sprintsByProject || {})) {
+      const rows = Array.isArray(list) ? list : [];
+      for (const item of rows) {
+        const sprintId = String(item?.id || "").trim();
+        if (sprintId) {
+          projectBySprintId.set(sprintId, String(projectId || ""));
+        }
+      }
+    }
+    return { projects, projectBySprintId, projectNameById };
+  }
+
+  ipcMain.handle(CHANNELS.SPRINTS.GET_ALL, async (_event, payload = {}) => {
+    try {
+      const statusFilter = String(payload.status || "").trim().toLowerCase();
+      const projectFilter = String(payload.projectId || "").trim();
+      const startFilter = String(payload.startDate || "").trim();
+      const endFilter = String(payload.endDate || "").trim();
+
+      const overview = readSprintOverviewData();
+      const { projectBySprintId, projectNameById } = getSprintProjectMaps();
+
+      const startMs = startFilter ? new Date(startFilter).getTime() : NaN;
+      const endMs = endFilter ? new Date(endFilter).getTime() : NaN;
+
+      const items = Object.values(overview.sprints || {})
+        .map((row) => {
+          const id = String(row?.id || "");
+          const projectId = String(projectBySprintId.get(id) || "");
+          const plannedPoints = Math.max(0, Number(row?.plannedPoints || 0));
+          const completedPoints = Math.max(0, Number(row?.completedPoints || 0));
+          const completionPct = plannedPoints > 0 ? Math.round((completedPoints / plannedPoints) * 100) : 0;
+          return {
+            ...row,
+            projectId,
+            projectName: projectNameById.get(projectId) || "",
+            plannedPoints,
+            completedPoints,
+            velocity: completedPoints,
+            completionPct
+          };
+        })
+        .filter((row) => {
+          if (statusFilter && String(row.status || "").toLowerCase() !== statusFilter) {
+            return false;
+          }
+          if (projectFilter && String(row.projectId || "") !== projectFilter) {
+            return false;
+          }
+
+          const sprintStartMs = row.startDate ? new Date(String(row.startDate)).getTime() : NaN;
+          const sprintEndMs = row.endDate ? new Date(String(row.endDate)).getTime() : NaN;
+          if (Number.isFinite(startMs) && Number.isFinite(sprintEndMs) && sprintEndMs < startMs) {
+            return false;
+          }
+          if (Number.isFinite(endMs) && Number.isFinite(sprintStartMs) && sprintStartMs > endMs) {
+            return false;
+          }
+          return true;
+        })
+        .sort((a, b) => {
+          const priority = { active: 0, planning: 1, completed: 2, cancelled: 3 };
+          const aPriority = priority[String(a.status || "").toLowerCase()] ?? 9;
+          const bPriority = priority[String(b.status || "").toLowerCase()] ?? 9;
+          if (aPriority !== bPriority) {
+            return aPriority - bPriority;
+          }
+          const aStart = new Date(String(a.startDate || 0)).getTime();
+          const bStart = new Date(String(b.startDate || 0)).getTime();
+          return bStart - aStart;
+        });
+
+      return IPCResponse.success(items);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprints", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.GET_BY_ID, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const overview = readSprintOverviewData();
+      const sprint = overview.sprints?.[sprintId] || null;
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const { projectBySprintId, projectNameById } = getSprintProjectMaps();
+      const projectId = String(projectBySprintId.get(sprintId) || "");
+
+      return IPCResponse.success({
+        ...sprint,
+        projectId,
+        projectName: projectNameById.get(projectId) || ""
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint by id", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.GET_TASKS, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const overview = readSprintOverviewData();
+      if (!overview.sprints?.[sprintId]) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const tasks = Array.isArray(overview.tasksBySprint?.[sprintId]) ? overview.tasksBySprint[sprintId] : [];
+      return IPCResponse.success(tasks);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint tasks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.GET_SUMMARY, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const overview = readSprintOverviewData();
+      const sprint = overview.sprints?.[sprintId] || null;
+      if (!sprint) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const tasks = Array.isArray(overview.tasksBySprint?.[sprintId]) ? overview.tasksBySprint[sprintId] : [];
+      const done = tasks.filter((task) => {
+        const normalized = String(task.status || "").trim().toLowerCase();
+        return normalized === "done" || normalized === "completed";
+      }).length;
+      const total = tasks.length;
+      const plannedPoints = Math.max(0, Number(sprint.plannedPoints || 0));
+      const completedPoints = Math.max(0, Number(sprint.completedPoints || 0));
+      const completionPct = total > 0 ? Math.round((done / total) * 100) : 0;
+      const eventRows = Array.isArray(overview.eventsBySprint?.[sprintId]) ? overview.eventsBySprint[sprintId] : [];
+
+      return IPCResponse.success({
+        sprintId,
+        totalTasks: total,
+        completedTasks: done,
+        blockedTasks: tasks.filter((task) => String(task.status || "").toLowerCase() === "blocked").length,
+        plannedPoints,
+        completedPoints,
+        velocity: completedPoints,
+        completionPct,
+        burndown: {
+          idealRemaining: Math.max(0, total - done),
+          actualRemaining: Math.max(0, total - done)
+        },
+        upcomingEvents: eventRows
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint summary", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.GET_CONTRIBUTIONS, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const overview = readSprintOverviewData();
+      if (!overview.sprints?.[sprintId]) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const tasks = Array.isArray(overview.tasksBySprint?.[sprintId]) ? overview.tasksBySprint[sprintId] : [];
+      const byMember = new Map();
+      for (const task of tasks) {
+        const memberName = String(task.assignee || "Unassigned");
+        const current = byMember.get(memberName) || {
+          memberId: memberName.toLowerCase().replace(/\s+/g, "-"),
+          name: memberName,
+          tasksCompleted: 0,
+          totalTasks: 0,
+          pointsCompleted: 0
+        };
+        current.totalTasks += 1;
+        const status = String(task.status || "").toLowerCase();
+        if (status === "done" || status === "completed") {
+          current.tasksCompleted += 1;
+          current.pointsCompleted += Math.max(0, Number(task.story_points || 0));
+        }
+        byMember.set(memberName, current);
+      }
+
+      return IPCResponse.success(Array.from(byMember.values()));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint contributions", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.UPDATE, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+      if (!changes) {
+        return IPCResponse.validation("changes", "changes is required");
+      }
+
+      const overview = readSprintOverviewData();
+      const current = overview.sprints?.[sprintId] || null;
+      if (!current) {
+        return IPCResponse.notFound("Sprint");
+      }
+
+      const next = applySprintChanges(current, changes);
+      const status = String(next.status || "").trim().toLowerCase();
+      if (status && !["planning", "active", "completed", "cancelled"].includes(status)) {
+        return IPCResponse.validation("status", "status must be planning|active|completed|cancelled");
+      }
+      if (!String(next.name || "").trim()) {
+        return IPCResponse.validation("name", "name cannot be empty");
+      }
+
+      overview.sprints[sprintId] = next;
+      writeSprintOverviewData(overview);
+
+      const projects = readProjectsData();
+      for (const [projectId, list] of Object.entries(projects.sprintsByProject || {})) {
+        const rows = Array.isArray(list) ? list : [];
+        const rowIndex = rows.findIndex((row) => String(row?.id || "") === sprintId);
+        if (rowIndex >= 0) {
+          rows[rowIndex] = {
+            ...rows[rowIndex],
+            id: sprintId,
+            name: String(next.name || ""),
+            status: String(next.status || "planning"),
+            startDate: String(next.startDate || ""),
+            endDate: String(next.endDate || "")
+          };
+          projects.sprintsByProject[projectId] = rows;
+          break;
+        }
+      }
+      writeProjectsData(projects);
+
+      return IPCResponse.success(next);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update sprint", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.DELETE, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "").trim();
+      if (!sprintId) {
+        return IPCResponse.validation("sprintId", "sprintId is required");
+      }
+
+      const overview = readSprintOverviewData();
+      if (!overview.sprints?.[sprintId]) {
+        return IPCResponse.notFound("Sprint");
+      }
+      delete overview.sprints[sprintId];
+      delete overview.tasksBySprint[sprintId];
+      delete overview.eventsBySprint[sprintId];
+      if (String(overview.currentSprintId || "") === sprintId) {
+        const remainingIds = Object.keys(overview.sprints || {});
+        overview.currentSprintId = remainingIds.length ? remainingIds[0] : "";
+      }
+      writeSprintOverviewData(overview);
+
+      const projects = readProjectsData();
+      for (const [projectId, list] of Object.entries(projects.sprintsByProject || {})) {
+        const rows = Array.isArray(list) ? list : [];
+        projects.sprintsByProject[projectId] = rows.filter((row) => String(row?.id || "") !== sprintId);
+      }
+      writeProjectsData(projects);
+
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete sprint", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINTS.CREATE, async (_event, payload = {}) => {
+    try {
+      const name = String(payload.name || "").trim();
+      const goal = String(payload.goal || "").trim();
+      const startDate = String(payload.startDate || "").trim();
+      const endDate = String(payload.endDate || "").trim();
+      const projectId = String(payload.projectId || "").trim();
+
+      if (!name) return IPCResponse.validation("name", "name is required");
+      if (!startDate) return IPCResponse.validation("startDate", "startDate is required");
+      if (!endDate) return IPCResponse.validation("endDate", "endDate is required");
+      if (!projectId) return IPCResponse.validation("projectId", "projectId is required");
+
+      const sprintId = `sprint-${Date.now()}`;
+      const overview = readSprintOverviewData();
+      overview.sprints[sprintId] = {
+        id: sprintId,
+        name,
+        goal,
+        startDate,
+        endDate,
+        status: "planning",
+        plannedPoints: 0,
+        completedPoints: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      overview.tasksBySprint[sprintId] = [];
+      overview.eventsBySprint[sprintId] = [];
+      writeSprintOverviewData(overview);
+
+      const projects = readProjectsData();
+      const rows = Array.isArray(projects.sprintsByProject?.[projectId]) ? projects.sprintsByProject[projectId] : [];
+      projects.sprintsByProject[projectId] = [
+        ...rows,
+        { id: sprintId, name, status: "planning", startDate, endDate }
+      ];
+      writeProjectsData(projects);
+
+      return IPCResponse.success({
+        id: sprintId,
+        name,
+        goal,
+        startDate,
+        endDate,
+        status: "planning",
+        projectId,
+        plannedPoints: 0,
+        completedPoints: 0,
+        velocity: 0,
+        completionPct: 0
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to create sprint", String(error));
+    }
+  });
+}
+
+function sprintPlanDbPath() {
+  return path.join(app.getPath("userData"), "sprint.plan.db.json");
+}
+
+function defaultSprintPlanData() {
+  return {
+    backlog: [
+      { id: "bl-101", title: "Harden auth refresh flow", story_points: 5, priority: "high", tech_tags: ["auth", "backend"], project_id: "agile-scrum-master", status: "ready" },
+      { id: "bl-102", title: "Improve board loading states", story_points: 3, priority: "medium", tech_tags: ["frontend"], project_id: "agile-scrum-master", status: "ready" },
+      { id: "bl-103", title: "Add webhook retry policy", story_points: 8, priority: "high", tech_tags: ["integrations"], project_id: "agile-scrum-master", status: "ready" },
+      { id: "bl-104", title: "Refine sprint report export", story_points: 5, priority: "medium", tech_tags: ["reports"], project_id: "agile-scrum-master", status: "ready" },
+      { id: "bl-105", title: "Stabilize desktop session restore", story_points: 8, priority: "high", tech_tags: ["electron"], project_id: "agile-scrum-master", status: "ready" },
+      { id: "bl-106", title: "Add roadmap filtering", story_points: 2, priority: "low", tech_tags: ["ui"], project_id: "agile-scrum-master", status: "ready" }
+    ]
+  };
+}
+
+function readSprintPlanData() {
+  try {
+    const filePath = sprintPlanDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultSprintPlanData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const defaults = defaultSprintPlanData();
+    return {
+      backlog: Array.isArray(parsed?.backlog) ? parsed.backlog : defaults.backlog
+    };
+  } catch {
+    return defaultSprintPlanData();
+  }
+}
+
+function writeSprintPlanData(data) {
+  fs.writeFileSync(sprintPlanDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function sprintPlanPriorityValue(priority) {
+  const normalized = String(priority || "").trim().toLowerCase();
+  if (normalized === "high") return 3;
+  if (normalized === "medium") return 2;
+  return 1;
+}
+
+function sprintLengthInDays(startDate, endDate) {
+  const startMs = new Date(String(startDate || "")).getTime();
+  const endMs = new Date(String(endDate || "")).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return 10;
+  }
+  return Math.max(1, Math.round((endMs - startMs) / (24 * 60 * 60 * 1000)) + 1);
+}
+
+function registerSprintPlanHandlers() {
+  ipcMain.handle(CHANNELS.SPRINT_PLAN.GET_BACKLOG, async () => {
+    try {
+      const data = readSprintPlanData();
+      const items = Array.isArray(data.backlog) ? data.backlog : [];
+      return IPCResponse.success(items);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load sprint backlog", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT_PLAN.GET_TEAM_CAPACITY, async (_event, payload = {}) => {
+    try {
+      const startDate = String(payload.startDate || "").trim();
+      const endDate = String(payload.endDate || "").trim();
+      const lengthDays = sprintLengthInDays(startDate, endDate);
+      const developers = readDevelopersData();
+      const members = (Array.isArray(developers.members) ? developers.members : [])
+        .filter((member) => String(member.status || "active") === "active")
+        .map((member) => {
+          const maxCapacity = Math.max(2, Math.round(lengthDays * 1.5));
+          return {
+            developerId: String(member.id || ""),
+            name: String(member.name || "Unknown"),
+            availabilityStatus: "available",
+            maxCapacity,
+            currentLoad: 0,
+            availableCapacity: maxCapacity
+          };
+        });
+
+      const totalPoints = members.reduce((sum, member) => sum + Number(member.availableCapacity || 0), 0);
+      return IPCResponse.success({ totalPoints, members });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load team capacity", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT_PLAN.AI_SUGGEST, async (_event, payload = {}) => {
+    try {
+      const capacity = Math.max(1, Number(payload.capacity || 0));
+      const sprintLength = Math.max(1, Number(payload.sprintLength || 10));
+      const data = readSprintPlanData();
+      const readyBacklog = (Array.isArray(data.backlog) ? data.backlog : [])
+        .filter((item) => String(item.status || "ready").toLowerCase() === "ready")
+        .sort((a, b) => {
+          const byPriority = sprintPlanPriorityValue(b.priority) - sprintPlanPriorityValue(a.priority);
+          if (byPriority !== 0) return byPriority;
+          return Number(a.story_points || 0) - Number(b.story_points || 0);
+        });
+
+      const normalizedCapacity = Math.max(capacity, Math.round(sprintLength * 2));
+      const selected = [];
+      let usedPoints = 0;
+      for (const item of readyBacklog) {
+        const points = Math.max(0, Number(item.story_points || 0));
+        if (selected.length > 0 && usedPoints + points > normalizedCapacity) {
+          continue;
+        }
+        selected.push(item);
+        usedPoints += points;
+        if (usedPoints >= normalizedCapacity) {
+          break;
+        }
+      }
+
+      return IPCResponse.success(selected);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to generate AI sprint suggestion", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SPRINT_PLAN.SAVE_PLAN, async (_event, payload = {}) => {
+    try {
+      const name = String(payload.name || "").trim();
+      const goal = String(payload.goal || "").trim();
+      const startDate = String(payload.startDate || "").trim();
+      const endDate = String(payload.endDate || "").trim();
+      const taskIds = Array.isArray(payload.taskIds) ? payload.taskIds.map((id) => String(id || "").trim()).filter(Boolean) : [];
+
+      if (!name) return IPCResponse.validation("name", "name is required");
+      if (!startDate) return IPCResponse.validation("startDate", "startDate is required");
+      if (!endDate) return IPCResponse.validation("endDate", "endDate is required");
+
+      const sprintId = `sprint-${Date.now()}`;
+      const sprintData = readSprintOverviewData();
+      const planData = readSprintPlanData();
+
+      const createdSprint = {
+        id: sprintId,
+        name,
+        goal,
+        startDate,
+        endDate,
+        status: "planning",
+        createdAt: new Date().toISOString(),
+        plannedPoints: 0,
+        completedPoints: 0
+      };
+
+      sprintData.sprints[sprintId] = createdSprint;
+      sprintData.currentSprintId = sprintData.currentSprintId || sprintId;
+
+      const selectedBacklog = (Array.isArray(planData.backlog) ? planData.backlog : []).filter((item) => taskIds.includes(String(item.id || "")));
+      sprintData.tasksBySprint[sprintId] = selectedBacklog.map((item) => ({
+        id: String(item.id),
+        title: String(item.title || "Task"),
+        status: "todo",
+        assignee: "Unassigned",
+        story_points: Number(item.story_points || 0),
+        priority: String(item.priority || "medium")
+      }));
+
+      createdSprint.plannedPoints = sprintData.tasksBySprint[sprintId].reduce((sum, task) => sum + Number(task.story_points || 0), 0);
+      sprintData.eventsBySprint[sprintId] = [
+        { id: `${sprintId}-ev-review`, type: "review", title: "Sprint Review", scheduledAt: `${endDate}T14:00:00.000Z` },
+        { id: `${sprintId}-ev-retro`, type: "retro", title: "Sprint Retrospective", scheduledAt: `${endDate}T15:00:00.000Z` }
+      ];
+      writeSprintOverviewData(sprintData);
+
+      const projectsData = readProjectsData();
+      const projectId = String(payload.projectId || projectsData.projects?.[0]?.id || "agile-scrum-master");
+      const existingSprints = Array.isArray(projectsData.sprintsByProject?.[projectId]) ? projectsData.sprintsByProject[projectId] : [];
+      projectsData.sprintsByProject[projectId] = [
+        ...existingSprints,
+        { id: sprintId, name, status: "planning", startDate, endDate }
+      ];
+      writeProjectsData(projectsData);
+
+      const usedTaskIds = new Set(taskIds);
+      const remainingBacklog = (Array.isArray(planData.backlog) ? planData.backlog : []).map((item) => {
+        if (usedTaskIds.has(String(item.id || ""))) {
+          return { ...item, status: "planned", sprint_id: sprintId };
+        }
+        return item;
+      });
+      writeSprintPlanData({ backlog: remainingBacklog });
+
+      return IPCResponse.success(createdSprint);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to save sprint plan", String(error));
     }
   });
 }
@@ -1270,6 +3325,58 @@ function resolveProjectId(data, projectId) {
 }
 
 function registerProjectHandlers() {
+  ipcMain.handle(CHANNELS.PROJECTS.GET_ALL, async () => {
+    try {
+      const data = readProjectsData();
+      return IPCResponse.success(Array.isArray(data.projects) ? data.projects : []);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load projects", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PROJECTS.CREATE, async (_event, payload = {}) => {
+    try {
+      const name = String(payload.name || "").trim();
+      const description = String(payload.description || "").trim();
+      if (!name) {
+        return IPCResponse.validation("name", "name is required");
+      }
+
+      const data = readProjectsData();
+      const slug = name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || `project-${Date.now()}`;
+      const projectId = `project-${Date.now()}`;
+      const project = {
+        id: projectId,
+        name,
+        slug,
+        description,
+        status: "active",
+        owner: "Demo User",
+        startDate: new Date().toISOString().slice(0, 10),
+        endDate: null,
+        linkedRepos: [],
+        github_repo: "",
+        jira_project_key: "",
+        tech_stack: [],
+        stats: { totalTasks: 0, openTasks: 0, completedTasks: 0 },
+        activityFeed: [],
+        archived: false,
+        createdAt: new Date().toISOString()
+      };
+
+      data.projects = [...(Array.isArray(data.projects) ? data.projects : []), project];
+      data.sprintsByProject[projectId] = [];
+      data.membersByProject[projectId] = [];
+      writeProjectsData(data);
+      return IPCResponse.success(project);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to create project", String(error));
+    }
+  });
+
   ipcMain.handle(CHANNELS.PROJECTS.GET_BY_ID, async (_event, payload = {}) => {
     try {
       const data = readProjectsData();
@@ -2023,6 +4130,14 @@ function defaultTasksData() {
           { id: "task-2", title: "Validate prompt 26 wiring", status: "todo", relation: "linked" },
           { id: "task-3", title: "Review task risk thresholds", status: "in_review", relation: "blocked-by" }
         ],
+        attachments: [
+          {
+            id: "att-1",
+            fileName: "task-note.txt",
+            filePath: "C:/attachments/task-note.txt",
+            createdAt
+          }
+        ],
         createdAt,
         updatedAt
       }
@@ -2106,6 +4221,7 @@ function ensureTask(taskId, data) {
     blockers: [],
     comments: [],
     relatedTasks: [],
+    attachments: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -2131,6 +4247,307 @@ function appendTaskEvent(data, taskId, event) {
   const id = String(taskId || "").trim();
   const list = Array.isArray(data.activityByTask[id]) ? data.activityByTask[id] : [];
   data.activityByTask[id] = [event, ...list].slice(0, 100);
+}
+
+function normalizeTaskStatus(value) {
+  const raw = String(value || "todo").trim().toLowerCase();
+  const aliases = {
+    "to do": "todo",
+    doing: "in_progress",
+    "in progress": "in_progress",
+    "in-progress": "in_progress",
+    "in review": "in_review",
+    "in-review": "in_review"
+  };
+  const normalized = aliases[raw] || raw;
+  const allowed = new Set(["todo", "in_progress", "in_review", "blocked", "done", "archived"]);
+  return allowed.has(normalized) ? normalized : "todo";
+}
+
+function normalizeTaskPriority(value, fallback = "medium") {
+  const normalized = String(value || fallback).trim().toLowerCase();
+  if (normalized === "low" || normalized === "medium" || normalized === "high") {
+    return normalized;
+  }
+  return fallback;
+}
+
+function normalizeTaskLabels(task) {
+  if (Array.isArray(task.labels)) {
+    return task.labels.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+
+  if (Array.isArray(task.techTags)) {
+    return task.techTags.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+
+  return [];
+}
+
+function normalizeStoryPoints(value) {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed >= 0) {
+    return Math.round(parsed);
+  }
+  return 0;
+}
+
+function resolveAssigneeById(assigneeId) {
+  const id = String(assigneeId || "").trim();
+  if (!id) return null;
+
+  const developers = readDevelopersData();
+  const person = Array.isArray(developers?.developers)
+    ? developers.developers.find((item) => String(item.id || "") === id)
+    : null;
+
+  return {
+    id,
+    name: String(person?.name || person?.full_name || `Member ${id}`)
+  };
+}
+
+function resolveSprintContext(sprintId) {
+  const normalizedSprintId = String(sprintId || "").trim();
+  if (!normalizedSprintId) {
+    return { sprintId: "", sprintName: "Unscheduled", projectId: "" };
+  }
+
+  const projectsData = readProjectsData();
+  const sprintsByProject =
+    projectsData?.sprintsByProject && typeof projectsData.sprintsByProject === "object"
+      ? projectsData.sprintsByProject
+      : {};
+
+  for (const [projectId, sprints] of Object.entries(sprintsByProject)) {
+    const found = Array.isArray(sprints)
+      ? sprints.find((item) => String(item?.id || "") === normalizedSprintId)
+      : null;
+    if (found) {
+      return {
+        sprintId: normalizedSprintId,
+        sprintName: String(found.name || `Sprint ${normalizedSprintId}`),
+        projectId: String(projectId || "")
+      };
+    }
+  }
+
+  return {
+    sprintId: normalizedSprintId,
+    sprintName: `Sprint ${normalizedSprintId}`,
+    projectId: ""
+  };
+}
+
+function toBoardTask(task, index) {
+  const labels = normalizeTaskLabels(task);
+  const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+  const doneCount = subtasks.filter((item) => normalizeTaskStatus(item?.status) === "done").length;
+  const assignee = task?.assignee && typeof task.assignee === "object"
+    ? {
+        id: String(task.assignee.id || ""),
+        name: String(task.assignee.name || "Unassigned")
+      }
+    : null;
+
+  return {
+    ...task,
+    id: String(task.id || `task-${index + 1}`),
+    taskKey: String(task.taskKey || `TSK-${index + 1}`),
+    title: String(task.title || "Untitled task"),
+    description: String(task.description || ""),
+    status: normalizeTaskStatus(task.status),
+    priority: normalizeTaskPriority(task.priority),
+    storyPoints: normalizeStoryPoints(task.storyPoints ?? task.points),
+    techTags: labels,
+    labels,
+    aiRiskScore: Number.isFinite(Number(task.aiRiskScore)) ? Number(task.aiRiskScore) : null,
+    subtaskProgress: {
+      done: doneCount,
+      total: subtasks.length
+    },
+    assignee
+  };
+}
+
+function taskMatchesFilters(task, filters) {
+  const sprintId = String(filters?.sprintId || "").trim();
+  const status = String(filters?.status || "").trim();
+  const assigneeId = String(filters?.assigneeId || "").trim();
+  const priority = String(filters?.priority || "").trim().toLowerCase();
+  const query = String(filters?.query || filters?.q || "").trim().toLowerCase();
+
+  if (sprintId && String(task.sprintId || "") !== sprintId) return false;
+  if (status && normalizeTaskStatus(task.status) !== normalizeTaskStatus(status)) return false;
+  if (assigneeId && String(task.assignee?.id || "") !== assigneeId) return false;
+  if (priority && normalizeTaskPriority(task.priority) !== normalizeTaskPriority(priority)) return false;
+
+  if (query) {
+    const haystack = [
+      String(task.title || ""),
+      String(task.description || ""),
+      String(task.assignee?.name || ""),
+      ...normalizeTaskLabels(task)
+    ]
+      .join(" ")
+      .toLowerCase();
+    if (!haystack.includes(query)) return false;
+  }
+
+  if (Boolean(filters?.riskOnly)) {
+    const score = Number(task.aiRiskScore || 0);
+    if (!Number.isFinite(score) || score < 70) return false;
+  }
+
+  return true;
+}
+
+function syncParentSubtaskStatus(data, task) {
+  const parentId = String(task?.parentTaskId || "").trim();
+  if (!parentId) return;
+
+  const parentIndex = data.tasks.findIndex((item) => String(item.id || "") === parentId);
+  if (parentIndex < 0) return;
+
+  const parent = data.tasks[parentIndex];
+  const subtasks = Array.isArray(parent.subtasks) ? parent.subtasks : [];
+  const nextSubtasks = subtasks.map((item) => {
+    if (String(item.id || "") !== String(task.id || "")) return item;
+    return {
+      ...item,
+      status: normalizeTaskStatus(task.status),
+      title: String(task.title || item.title || "Untitled subtask"),
+      assignee: task.assignee || item.assignee || null
+    };
+  });
+
+  data.tasks[parentIndex] = {
+    ...parent,
+    subtasks: nextSubtasks,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function buildTaskWithRelations(task, data) {
+  const relatedTasks = Array.isArray(task.relatedTasks) ? task.relatedTasks : [];
+  const parentTaskId = String(task.parentTaskId || "").trim();
+  const parentTask = parentTaskId
+    ? data.tasks.find((item) => String(item.id || "") === parentTaskId) || null
+    : null;
+
+  return {
+    ...task,
+    comments: Array.isArray(task.comments) ? task.comments : [],
+    blockers: Array.isArray(task.blockers) ? task.blockers : [],
+    attachments: Array.isArray(task.attachments) ? task.attachments : [],
+    labels: normalizeTaskLabels(task),
+    techTags: normalizeTaskLabels(task),
+    relatedTasks,
+    blockedByTasks: relatedTasks.filter((item) => String(item?.relation || "") === "blocked-by"),
+    parentTask: parentTask
+      ? {
+          id: String(parentTask.id || ""),
+          title: String(parentTask.title || ""),
+          status: normalizeTaskStatus(parentTask.status)
+        }
+      : null
+  };
+}
+
+function applyTaskChanges(task, changes) {
+  const next = { ...task };
+
+  if (Object.prototype.hasOwnProperty.call(changes, "title")) {
+    next.title = String(changes.title || "").trim() || next.title;
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "description")) {
+    next.description = String(changes.description || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "acceptanceCriteria")) {
+    next.acceptanceCriteria = String(changes.acceptanceCriteria || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "status")) {
+    next.status = normalizeTaskStatus(changes.status);
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "priority")) {
+    next.priority = normalizeTaskPriority(changes.priority, normalizeTaskPriority(next.priority));
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "dueDate")) {
+    next.dueDate = String(changes.dueDate || "").trim();
+  }
+
+  if (Object.prototype.hasOwnProperty.call(changes, "points") || Object.prototype.hasOwnProperty.call(changes, "storyPoints")) {
+    next.storyPoints = normalizeStoryPoints(changes.points ?? changes.storyPoints);
+    next.points = next.storyPoints;
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "labels")) {
+    const labels = Array.isArray(changes.labels)
+      ? changes.labels.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    next.labels = labels;
+    next.techTags = labels;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(changes, "assigneeId")) {
+    next.assignee = resolveAssigneeById(changes.assigneeId);
+    next.assigneeId = String(next.assignee?.id || "");
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "projectId")) {
+    next.projectId = String(changes.projectId || "").trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "sprintId")) {
+    const sprintContext = resolveSprintContext(changes.sprintId);
+    next.sprintId = sprintContext.sprintId;
+    next.sprint = sprintContext.sprintName;
+    next.projectId = String(next.projectId || sprintContext.projectId || "");
+  }
+
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+function removeTaskReferences(data, deletedTaskId) {
+  data.tasks = data.tasks.map((task) => {
+    const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+    const relatedTasks = Array.isArray(task.relatedTasks) ? task.relatedTasks : [];
+    const nextParentTaskId = String(task.parentTaskId || "") === deletedTaskId ? "" : task.parentTaskId;
+
+    return {
+      ...task,
+      parentTaskId: nextParentTaskId,
+      subtasks: subtasks.filter((item) => String(item?.id || "") !== deletedTaskId),
+      relatedTasks: relatedTasks.filter((item) => String(item?.id || "") !== deletedTaskId)
+    };
+  });
+}
+
+function deleteCommentById(data, commentId) {
+  for (let i = 0; i < data.tasks.length; i += 1) {
+    const task = data.tasks[i];
+    const comments = Array.isArray(task.comments) ? task.comments : [];
+    const index = comments.findIndex((comment) => String(comment.id || "") === commentId);
+    if (index < 0) continue;
+
+    const [removed] = comments.splice(index, 1);
+    data.tasks[i] = {
+      ...task,
+      comments,
+      updatedAt: new Date().toISOString()
+    };
+
+    appendTaskEvent(data, String(task.id || ""), {
+      id: `evt-${randomUUID()}`,
+      type: "comment_removed",
+      title: "Comment deleted",
+      detail: String(removed?.content || "Comment removed"),
+      status: "updated",
+      time: new Date().toISOString()
+    });
+
+    return true;
+  }
+
+  return false;
 }
 
 function buildTaskAnalysis(task, events) {
@@ -2161,6 +4578,405 @@ function buildTaskAnalysis(task, events) {
 }
 
 function registerTaskHandlers() {
+  ipcMain.handle(CHANNELS.TASKS.GET_ALL, async (_event, payload = {}) => {
+    try {
+      const filters =
+        payload?.filters && typeof payload.filters === "object"
+          ? payload.filters
+          : payload && typeof payload === "object"
+            ? payload
+            : {};
+
+      const data = readTasksData();
+      const normalized = data.tasks.map((task, index) => toBoardTask(task, index));
+      const filtered = normalized.filter((task) => taskMatchesFilters(task, filters));
+
+      return IPCResponse.success({
+        items: filtered,
+        total: filtered.length
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load tasks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.CREATE, async (_event, payload = {}) => {
+    try {
+      const title = String(payload.title || "").trim();
+      if (!title) {
+        return IPCResponse.validation("title", "title is required");
+      }
+
+      const now = new Date().toISOString();
+      const assignee = resolveAssigneeById(payload.assigneeId);
+      const sprintContext = resolveSprintContext(payload.sprintId);
+      const taskId = `task-${randomUUID()}`;
+      const priority = normalizeTaskPriority(payload.priority);
+      const points = normalizeStoryPoints(payload.points ?? payload.storyPoints);
+      const labels = Array.isArray(payload.labels)
+        ? payload.labels.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      const parentTaskId = String(payload.parentTaskId || "").trim();
+      const data = readTasksData();
+
+      const created = {
+        id: taskId,
+        taskKey: `TSK-${data.tasks.length + 1}`,
+        title,
+        description: String(payload.description || "").trim(),
+        status: normalizeTaskStatus(payload.status || "todo"),
+        priority,
+        storyPoints: points,
+        points,
+        labels,
+        techTags: labels,
+        aiRiskScore: priority === "high" ? 78 : priority === "medium" ? 52 : 24,
+        assignee,
+        assigneeId: assignee?.id || "",
+        projectId: String(payload.projectId || sprintContext.projectId || "").trim(),
+        sprintId: String(payload.sprintId || sprintContext.sprintId || "").trim(),
+        sprint: String(payload.sprint || sprintContext.sprintName || "Unscheduled"),
+        parentTaskId,
+        subtasks: [],
+        blockers: [],
+        comments: [],
+        relatedTasks: [],
+        attachments: [],
+        createdAt: now,
+        updatedAt: now
+      };
+
+      data.tasks.push(created);
+
+      if (parentTaskId) {
+        const parentIndex = data.tasks.findIndex((item) => String(item.id || "") === parentTaskId);
+        if (parentIndex >= 0) {
+          const parent = data.tasks[parentIndex];
+          const parentSubtasks = Array.isArray(parent.subtasks) ? parent.subtasks : [];
+          data.tasks[parentIndex] = {
+            ...parent,
+            subtasks: [
+              ...parentSubtasks,
+              {
+                id: created.id,
+                title: created.title,
+                status: created.status,
+                taskKey: created.taskKey,
+                assignee: created.assignee
+              }
+            ],
+            updatedAt: now
+          };
+        }
+      }
+
+      appendTaskEvent(data, created.id, {
+        id: `evt-${randomUUID()}`,
+        type: "created",
+        title: "Task created",
+        detail: `Task ${created.title} created via desktop board`,
+        status: "created",
+        time: now
+      });
+
+      writeTasksData(data);
+      return IPCResponse.success(toBoardTask(created, data.tasks.length - 1));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to create task", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.BULK_UPDATE, async (_event, payload = {}) => {
+    try {
+      const ids = Array.isArray(payload.ids)
+        ? payload.ids.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+
+      if (!ids.length) {
+        return IPCResponse.validation("ids", "ids is required");
+      }
+      if (!changes) {
+        return IPCResponse.validation("changes", "changes is required");
+      }
+
+      const now = new Date().toISOString();
+      const data = readTasksData();
+      const updatedTasks = [];
+
+      for (const id of ids) {
+        const index = data.tasks.findIndex((item) => String(item.id || "") === id);
+        if (index < 0) continue;
+
+        const current = data.tasks[index];
+        const next = { ...current };
+
+        if (Object.prototype.hasOwnProperty.call(changes, "title")) {
+          next.title = String(changes.title || "").trim() || next.title;
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "description")) {
+          next.description = String(changes.description || "").trim();
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "status")) {
+          next.status = normalizeTaskStatus(changes.status);
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "priority")) {
+          next.priority = normalizeTaskPriority(changes.priority, normalizeTaskPriority(next.priority));
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "points") || Object.prototype.hasOwnProperty.call(changes, "storyPoints")) {
+          next.storyPoints = normalizeStoryPoints(changes.points ?? changes.storyPoints);
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "sprintId")) {
+          const sprintContext = resolveSprintContext(changes.sprintId);
+          next.sprintId = sprintContext.sprintId;
+          next.sprint = sprintContext.sprintName;
+          next.projectId = String(next.projectId || sprintContext.projectId || "");
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "projectId")) {
+          next.projectId = String(changes.projectId || "").trim();
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "assigneeId")) {
+          next.assignee = resolveAssigneeById(changes.assigneeId);
+          next.assigneeId = String(next.assignee?.id || "");
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, "labels")) {
+          const labels = Array.isArray(changes.labels)
+            ? changes.labels.map((item) => String(item || "").trim()).filter(Boolean)
+            : [];
+          next.labels = labels;
+          next.techTags = labels;
+        }
+
+        next.updatedAt = now;
+        data.tasks[index] = next;
+        syncParentSubtaskStatus(data, next);
+
+        appendTaskEvent(data, id, {
+          id: `evt-${randomUUID()}`,
+          type: "updated",
+          title: "Task updated",
+          detail: "Task fields updated from board action",
+          status: normalizeTaskStatus(next.status),
+          time: now
+        });
+
+        updatedTasks.push(toBoardTask(next, index));
+      }
+
+      writeTasksData(data);
+      return IPCResponse.success({
+        updated: updatedTasks,
+        count: updatedTasks.length
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update tasks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.BULK_DELETE, async (_event, payload = {}) => {
+    try {
+      const ids = Array.isArray(payload.ids)
+        ? payload.ids.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      if (!ids.length) {
+        return IPCResponse.validation("ids", "ids is required");
+      }
+
+      const idSet = new Set(ids);
+      const data = readTasksData();
+
+      data.tasks = data.tasks
+        .filter((task) => !idSet.has(String(task.id || "")))
+        .map((task) => {
+          const subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+          return {
+            ...task,
+            subtasks: subtasks.filter((item) => !idSet.has(String(item?.id || "")))
+          };
+        });
+
+      for (const id of ids) {
+        delete data.activityByTask[id];
+      }
+
+      writeTasksData(data);
+      return IPCResponse.success({
+        deletedIds: ids,
+        count: ids.length
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete tasks", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.UPDATE, async (_event, payload = {}) => {
+    try {
+      const taskId = String(payload.taskId || "").trim();
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+      if (!taskId) {
+        return IPCResponse.validation("taskId", "taskId is required");
+      }
+      if (!changes) {
+        return IPCResponse.validation("changes", "changes is required");
+      }
+
+      const data = readTasksData();
+      const { task, index } = ensureTask(taskId, data);
+      const updated = applyTaskChanges(task, changes);
+      data.tasks[index] = updated;
+      syncParentSubtaskStatus(data, updated);
+
+      appendTaskEvent(data, taskId, {
+        id: `evt-${randomUUID()}`,
+        type: "updated",
+        title: "Task updated",
+        detail: "Task edited from detail page",
+        status: normalizeTaskStatus(updated.status),
+        time: new Date().toISOString()
+      });
+
+      writeTasksData(data);
+      return IPCResponse.success(buildTaskWithRelations(updated, data));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update task", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.DELETE_COMMENT, async (_event, payload = {}) => {
+    try {
+      const commentId = String(payload.commentId || "").trim();
+      if (!commentId) {
+        return IPCResponse.validation("commentId", "commentId is required");
+      }
+
+      const data = readTasksData();
+      const removed = deleteCommentById(data, commentId);
+      if (!removed) {
+        return IPCResponse.notFound("Comment");
+      }
+
+      writeTasksData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete comment", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.ADD_ATTACHMENT, async (_event, payload = {}) => {
+    try {
+      const taskId = String(payload.taskId || "").trim();
+      const filePath = String(payload.filePath || "").trim();
+      if (!taskId) {
+        return IPCResponse.validation("taskId", "taskId is required");
+      }
+      if (!filePath) {
+        return IPCResponse.validation("filePath", "filePath is required");
+      }
+
+      const data = readTasksData();
+      const { task, index } = ensureTask(taskId, data);
+      const attachment = {
+        id: `att-${randomUUID()}`,
+        fileName: path.basename(filePath),
+        filePath,
+        createdAt: new Date().toISOString()
+      };
+
+      data.tasks[index] = {
+        ...task,
+        attachments: [...(Array.isArray(task.attachments) ? task.attachments : []), attachment],
+        updatedAt: new Date().toISOString()
+      };
+
+      appendTaskEvent(data, taskId, {
+        id: `evt-${randomUUID()}`,
+        type: "attachment_added",
+        title: "Attachment added",
+        detail: attachment.fileName,
+        status: "updated",
+        time: attachment.createdAt
+      });
+
+      writeTasksData(data);
+      return IPCResponse.success(attachment);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to add attachment", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.LINK_TASK, async (_event, payload = {}) => {
+    try {
+      const taskId = String(payload.taskId || "").trim();
+      const targetId = String(payload.targetId || "").trim();
+      const linkType = String(payload.linkType || "linked").trim() || "linked";
+      if (!taskId) {
+        return IPCResponse.validation("taskId", "taskId is required");
+      }
+      if (!targetId) {
+        return IPCResponse.validation("targetId", "targetId is required");
+      }
+
+      const data = readTasksData();
+      const { task, index } = ensureTask(taskId, data);
+      const { task: targetTask } = ensureTask(targetId, data);
+
+      const link = {
+        id: String(targetTask.id || targetId),
+        title: String(targetTask.title || `Task ${targetId}`),
+        status: normalizeTaskStatus(targetTask.status),
+        relation: linkType
+      };
+
+      const relatedTasks = Array.isArray(task.relatedTasks) ? task.relatedTasks : [];
+      const deduped = relatedTasks.filter(
+        (item) => !(String(item?.id || "") === link.id && String(item?.relation || "") === link.relation)
+      );
+
+      data.tasks[index] = {
+        ...task,
+        relatedTasks: [link, ...deduped],
+        updatedAt: new Date().toISOString()
+      };
+
+      appendTaskEvent(data, taskId, {
+        id: `evt-${randomUUID()}`,
+        type: "task_linked",
+        title: "Task linked",
+        detail: `${link.relation}: ${link.title}`,
+        status: "updated",
+        time: new Date().toISOString()
+      });
+
+      writeTasksData(data);
+      return IPCResponse.success(link);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to link task", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TASKS.DELETE, async (_event, payload = {}) => {
+    try {
+      const taskId = String(payload.taskId || "").trim();
+      if (!taskId) {
+        return IPCResponse.validation("taskId", "taskId is required");
+      }
+
+      const data = readTasksData();
+      const existingIndex = data.tasks.findIndex((item) => String(item.id || "") === taskId);
+      if (existingIndex < 0) {
+        return IPCResponse.notFound("Task");
+      }
+
+      data.tasks.splice(existingIndex, 1);
+      delete data.activityByTask[taskId];
+      removeTaskReferences(data, taskId);
+      writeTasksData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete task", String(error));
+    }
+  });
+
   ipcMain.handle(CHANNELS.TASKS.GET_BY_ID, async (_event, payload = {}) => {
     try {
       const taskId = String(payload.taskId || "").trim();
@@ -2171,7 +4987,7 @@ function registerTaskHandlers() {
       const data = readTasksData();
       const { task } = ensureTask(taskId, data);
       writeTasksData(data);
-      return IPCResponse.success(task);
+      return IPCResponse.success(buildTaskWithRelations(task, data));
     } catch (error) {
       return IPCResponse.internalError("Failed to load task", String(error));
     }
@@ -2783,8 +5599,27 @@ function readBillingData() {
 function registerBillingHandlers() {
   ipcMain.handle(CHANNELS.BILLING.GET_PLAN, async () => {
     try {
-      const data = readBillingData();
-      return IPCResponse.success(data.plan);
+      const [billingPayload, membersPayload] = await Promise.all([
+        desktopGatewayRequest("GET", "/api/v1/org/billing"),
+        desktopGatewayRequest("GET", "/api/v1/org/members").catch(() => ({ members: [] }))
+      ]);
+
+      const subscription =
+        billingPayload?.subscription && typeof billingPayload.subscription === "object"
+          ? billingPayload.subscription
+          : null;
+
+      const seatsUsed = Array.isArray(membersPayload?.members) ? membersPayload.members.length : 0;
+      const maxMembers = Number(subscription?.max_members || 0);
+
+      return IPCResponse.success({
+        name: String(subscription?.plan_name || "Free"),
+        slug: String(subscription?.plan_slug || "free"),
+        price: subscription?.billing_cycle === "yearly" ? "Yearly" : "Monthly",
+        renewalDate: String(subscription?.current_period_end || subscription?.trial_end || ""),
+        seatsUsed,
+        seatsAvailable: maxMembers > 0 ? maxMembers : seatsUsed
+      });
     } catch (error) {
       return IPCResponse.internalError("Failed to load billing plan", String(error));
     }
@@ -2792,8 +5627,7 @@ function registerBillingHandlers() {
 
   ipcMain.handle(CHANNELS.BILLING.GET_PAYMENT_METHOD, async () => {
     try {
-      const data = readBillingData();
-      return IPCResponse.success(data.paymentMethod);
+      return IPCResponse.success({});
     } catch (error) {
       return IPCResponse.internalError("Failed to load payment method", String(error));
     }
@@ -2801,8 +5635,7 @@ function registerBillingHandlers() {
 
   ipcMain.handle(CHANNELS.BILLING.GET_INVOICES, async () => {
     try {
-      const data = readBillingData();
-      return IPCResponse.success(data.invoices);
+      return IPCResponse.success([]);
     } catch (error) {
       return IPCResponse.internalError("Failed to load invoices", String(error));
     }
@@ -2810,8 +5643,17 @@ function registerBillingHandlers() {
 
   ipcMain.handle(CHANNELS.BILLING.GET_USAGE, async () => {
     try {
-      const data = readBillingData();
-      return IPCResponse.success(data.usage);
+      const billingPayload = await desktopGatewayRequest("GET", "/api/v1/org/billing");
+      const usage =
+        billingPayload?.usageMonthToDate && typeof billingPayload.usageMonthToDate === "object"
+          ? billingPayload.usageMonthToDate
+          : {};
+
+      return IPCResponse.success({
+        seatsUsed: 0,
+        apiCallsThisMonth: Number(usage.total_requests || 0),
+        storageUsedGb: 0
+      });
     } catch (error) {
       return IPCResponse.internalError("Failed to load usage metrics", String(error));
     }
@@ -2819,10 +5661,677 @@ function registerBillingHandlers() {
 
   ipcMain.handle(CHANNELS.BILLING.GET_BILLING_PORTAL_URL, async () => {
     try {
-      const data = readBillingData();
-      return IPCResponse.success({ url: data.billingPortalUrl });
+      const frontendBase = String(process.env.FRONTEND_URL || "http://localhost:3000").trim().replace(/\/+$/, "");
+      return IPCResponse.success({ url: `${frontendBase}/settings/billing` });
     } catch (error) {
       return IPCResponse.internalError("Failed to get billing portal URL", String(error));
+    }
+  });
+}
+
+function teamsDbPath() {
+  return path.join(app.getPath("userData"), "teams.db.json");
+}
+
+function defaultTeamsData() {
+  return {
+    teams: [
+      {
+        id: "team-1",
+        name: "Platform",
+        description: "Build and maintain the core platform.",
+        leadId: "user-1",
+        projectIds: ["project-1", "project-2"],
+        memberIds: ["user-1", "user-2"],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: "team-2",
+        name: "Web",
+        description: "Deliver dashboard and web experiences.",
+        leadId: "user-3",
+        projectIds: ["project-3"],
+        memberIds: ["user-3"],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  };
+}
+
+function normalizeTeamRecord(input) {
+  return {
+    id: String(input?.id || randomUUID()),
+    name: String(input?.name || "").trim(),
+    description: String(input?.description || "").trim(),
+    leadId: String(input?.leadId || "").trim(),
+    projectIds: Array.isArray(input?.projectIds)
+      ? input.projectIds.map((id) => String(id || "").trim()).filter(Boolean)
+      : [],
+    memberIds: Array.isArray(input?.memberIds)
+      ? input.memberIds.map((id) => String(id || "").trim()).filter(Boolean)
+      : [],
+    createdAt: String(input?.createdAt || new Date().toISOString()),
+    updatedAt: String(input?.updatedAt || new Date().toISOString()),
+  };
+}
+
+function readTeamsData() {
+  try {
+    const filePath = teamsDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultTeamsData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const seeded = defaultTeamsData();
+    return {
+      teams: Array.isArray(parsed?.teams)
+        ? parsed.teams.map((team) => normalizeTeamRecord(team)).filter((team) => Boolean(team.name))
+        : seeded.teams,
+    };
+  } catch {
+    return defaultTeamsData();
+  }
+}
+
+function writeTeamsData(data) {
+  fs.writeFileSync(teamsDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function buildTeamView(team, members) {
+  const memberLookup = new Map(members.map((member) => [String(member.id || ""), member]));
+  const normalizedMemberIds = Array.isArray(team.memberIds)
+    ? team.memberIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+
+  return {
+    id: String(team.id || ""),
+    name: String(team.name || ""),
+    description: String(team.description || ""),
+    leadId: String(team.leadId || ""),
+    lead:
+      memberLookup.has(String(team.leadId || ""))
+        ? {
+            id: String(memberLookup.get(String(team.leadId || ""))?.id || ""),
+            fullName: String(
+              memberLookup.get(String(team.leadId || ""))?.fullName ||
+                memberLookup.get(String(team.leadId || ""))?.name ||
+                ""
+            ),
+            email: String(memberLookup.get(String(team.leadId || ""))?.email || ""),
+          }
+        : null,
+    membersCount: normalizedMemberIds.length,
+    projectsCount: Array.isArray(team.projectIds) ? team.projectIds.length : 0,
+    members: normalizedMemberIds.map((memberId) => {
+      const member = memberLookup.get(memberId) || {};
+      return {
+        id: memberId,
+        fullName: String(member.fullName || member.name || ""),
+        email: String(member.email || ""),
+        role: String(member.role || "member"),
+      };
+    }),
+    projectIds: Array.isArray(team.projectIds) ? team.projectIds : [],
+    createdAt: String(team.createdAt || ""),
+    updatedAt: String(team.updatedAt || ""),
+  };
+}
+
+function registerTeamsHandlers() {
+  ipcMain.handle(CHANNELS.TEAMS.GET_ALL, async () => {
+    try {
+      const data = readTeamsData();
+      const developers = readDevelopersData();
+      const teams = data.teams.map((team) => buildTeamView(team, developers.members));
+      return IPCResponse.success(teams);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load teams", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TEAMS.GET_DETAIL, async (_event, payload = {}) => {
+    try {
+      const teamId = String(payload.teamId || "").trim();
+      if (!teamId) {
+        return IPCResponse.validation("teamId", "teamId is required");
+      }
+
+      const data = readTeamsData();
+      const developers = readDevelopersData();
+      const team = data.teams.find((item) => String(item.id || "") === teamId);
+      if (!team) {
+        return IPCResponse.notFound("Team");
+      }
+
+      const teamView = buildTeamView(team, developers.members);
+      const members = Array.isArray(teamView.members)
+        ? teamView.members.map((member) => ({
+            id: String(member.id || ""),
+            fullName: String(member.fullName || ""),
+            email: String(member.email || ""),
+            role: String(member.role || "developer")
+          }))
+        : [];
+
+      const memberIdSet = new Set(members.map((member) => String(member.id || "")).filter(Boolean));
+      const tasksData = readTasksData();
+      const currentTasks = Array.isArray(tasksData?.tasks)
+        ? tasksData.tasks
+            .filter((task) => {
+              const assigneeId = String(task?.assignee?.id || task?.assigneeId || "").trim();
+              return Boolean(assigneeId) && memberIdSet.has(assigneeId);
+            })
+            .map((task, index) => toBoardTask(task, index))
+        : [];
+
+      const velocity = Array.from({ length: 6 }, (_item, index) => {
+        const sprintLabel = `S-${index + 1}`;
+        const completed = currentTasks.filter((task) => String(task.status || "") === "done").length;
+        const points = currentTasks.reduce((sum, task) => sum + Number(task.storyPoints || 0), 0);
+        return {
+          sprint: sprintLabel,
+          completedTasks: Math.max(0, completed - (5 - index)),
+          velocity: Math.max(0, Math.round(points / Math.max(1, members.length)) - (5 - index))
+        };
+      });
+
+      return IPCResponse.success({
+        team: teamView,
+        members,
+        currentTasks,
+        velocity
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load team detail", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TEAMS.CREATE, async (_event, payload = {}) => {
+    try {
+      const name = String(payload.name || "").trim();
+      const description = String(payload.description || "").trim();
+      const leadId = String(payload.leadId || "").trim();
+
+      if (!name) {
+        return IPCResponse.validation("name", "name is required");
+      }
+
+      const developers = readDevelopersData();
+      if (leadId && !developers.members.some((member) => String(member.id || "") === leadId)) {
+        return IPCResponse.validation("leadId", "leadId must be an existing org member");
+      }
+
+      const data = readTeamsData();
+      const next = normalizeTeamRecord({
+        id: randomUUID(),
+        name,
+        description,
+        leadId,
+        projectIds: [],
+        memberIds: leadId ? [leadId] : [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+
+      data.teams.unshift(next);
+      writeTeamsData(data);
+
+      return IPCResponse.success(buildTeamView(next, developers.members));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to create team", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TEAMS.UPDATE, async (_event, payload = {}) => {
+    try {
+      const teamId = String(payload.teamId || "").trim();
+      const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : null;
+      if (!teamId) {
+        return IPCResponse.validation("teamId", "teamId is required");
+      }
+      if (!changes) {
+        return IPCResponse.validation("changes", "changes is required");
+      }
+
+      const data = readTeamsData();
+      const index = data.teams.findIndex((team) => String(team.id || "") === teamId);
+      if (index < 0) {
+        return IPCResponse.notFound("Team");
+      }
+
+      const developers = readDevelopersData();
+      const current = data.teams[index];
+      const nextName =
+        Object.prototype.hasOwnProperty.call(changes, "name")
+          ? String(changes.name || "").trim()
+          : current.name;
+
+      if (!nextName) {
+        return IPCResponse.validation("name", "name cannot be empty");
+      }
+
+      const nextLeadId =
+        Object.prototype.hasOwnProperty.call(changes, "leadId")
+          ? String(changes.leadId || "").trim()
+          : String(current.leadId || "").trim();
+
+      if (nextLeadId && !developers.members.some((member) => String(member.id || "") === nextLeadId)) {
+        return IPCResponse.validation("leadId", "leadId must be an existing org member");
+      }
+
+      let nextMemberIds = Array.isArray(current.memberIds)
+        ? current.memberIds.map((id) => String(id || "").trim()).filter(Boolean)
+        : [];
+      if (nextLeadId && !nextMemberIds.includes(nextLeadId)) {
+        nextMemberIds = [nextLeadId, ...nextMemberIds];
+      }
+
+      const updated = normalizeTeamRecord({
+        ...current,
+        name: nextName,
+        description:
+          Object.prototype.hasOwnProperty.call(changes, "description")
+            ? String(changes.description || "").trim()
+            : String(current.description || ""),
+        leadId: nextLeadId,
+        memberIds: nextMemberIds,
+        updatedAt: new Date().toISOString(),
+      });
+
+      data.teams[index] = updated;
+      writeTeamsData(data);
+
+      return IPCResponse.success(buildTeamView(updated, developers.members));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update team", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TEAMS.DELETE, async (_event, payload = {}) => {
+    try {
+      const teamId = String(payload.teamId || "").trim();
+      if (!teamId) {
+        return IPCResponse.validation("teamId", "teamId is required");
+      }
+
+      const data = readTeamsData();
+      const before = data.teams.length;
+      data.teams = data.teams.filter((team) => String(team.id || "") !== teamId);
+      const deleted = data.teams.length < before;
+      if (!deleted) {
+        return IPCResponse.notFound("Team");
+      }
+
+      writeTeamsData(data);
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete team", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TEAMS.ADD_MEMBER, async (_event, payload = {}) => {
+    try {
+      const teamId = String(payload.teamId || "").trim();
+      const userId = String(payload.userId || "").trim();
+      if (!teamId) {
+        return IPCResponse.validation("teamId", "teamId is required");
+      }
+      if (!userId) {
+        return IPCResponse.validation("userId", "userId is required");
+      }
+
+      const developers = readDevelopersData();
+      if (!developers.members.some((member) => String(member.id || "") === userId)) {
+        return IPCResponse.validation("userId", "userId must be an existing org member");
+      }
+
+      const data = readTeamsData();
+      const index = data.teams.findIndex((team) => String(team.id || "") === teamId);
+      if (index < 0) {
+        return IPCResponse.notFound("Team");
+      }
+
+      const current = data.teams[index];
+      const nextMemberIds = Array.isArray(current.memberIds)
+        ? current.memberIds.map((id) => String(id || "").trim()).filter(Boolean)
+        : [];
+      if (!nextMemberIds.includes(userId)) {
+        nextMemberIds.push(userId);
+      }
+
+      const updated = normalizeTeamRecord({
+        ...current,
+        memberIds: nextMemberIds,
+        updatedAt: new Date().toISOString(),
+      });
+      data.teams[index] = updated;
+      writeTeamsData(data);
+
+      return IPCResponse.success(buildTeamView(updated, developers.members));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to add team member", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.TEAMS.REMOVE_MEMBER, async (_event, payload = {}) => {
+    try {
+      const teamId = String(payload.teamId || "").trim();
+      const userId = String(payload.userId || "").trim();
+      if (!teamId) {
+        return IPCResponse.validation("teamId", "teamId is required");
+      }
+      if (!userId) {
+        return IPCResponse.validation("userId", "userId is required");
+      }
+
+      const developers = readDevelopersData();
+      const data = readTeamsData();
+      const index = data.teams.findIndex((team) => String(team.id || "") === teamId);
+      if (index < 0) {
+        return IPCResponse.notFound("Team");
+      }
+
+      const current = data.teams[index];
+      const nextMemberIds = (Array.isArray(current.memberIds) ? current.memberIds : [])
+        .map((id) => String(id || "").trim())
+        .filter((id) => Boolean(id) && id !== userId);
+
+      if (String(current.leadId || "") === userId) {
+        return IPCResponse.validation("userId", "cannot remove team lead; set a different lead first");
+      }
+
+      const updated = normalizeTeamRecord({
+        ...current,
+        memberIds: nextMemberIds,
+        updatedAt: new Date().toISOString(),
+      });
+      data.teams[index] = updated;
+      writeTeamsData(data);
+
+      return IPCResponse.success(buildTeamView(updated, developers.members));
+    } catch (error) {
+      return IPCResponse.internalError("Failed to remove team member", String(error));
+    }
+  });
+}
+
+function skillGapDbPath() {
+  return path.join(app.getPath("userData"), "skill-gap.db.json");
+}
+
+function defaultSkillGapData() {
+  return {
+    skills: [
+      { id: "skill-frontend", name: "Frontend", category: "Frontend", importance: 5, defaultLevel: 2 },
+      { id: "skill-backend", name: "Backend", category: "Backend", importance: 5, defaultLevel: 2 },
+      { id: "skill-devops", name: "DevOps", category: "DevOps", importance: 4, defaultLevel: 2 },
+      { id: "skill-testing", name: "Testing", category: "Testing", importance: 5, defaultLevel: 2 },
+      { id: "skill-database", name: "Database", category: "Backend", importance: 4, defaultLevel: 2 },
+      { id: "skill-security", name: "Security", category: "Platform", importance: 4, defaultLevel: 2 },
+    ],
+    matrixByMember: {},
+    trainingAssignments: [],
+  };
+}
+
+function clampSkillLevel(value) {
+  return Math.max(1, Math.min(5, Number(value || 1)));
+}
+
+function normalizeSkillGapData(input) {
+  const defaults = defaultSkillGapData();
+  const source = input && typeof input === "object" ? input : {};
+  const normalizedSkills = Array.isArray(source.skills)
+    ? source.skills
+        .map((skill) => ({
+          id: String(skill?.id || "").trim(),
+          name: String(skill?.name || "").trim(),
+          category: String(skill?.category || "General").trim(),
+          importance: Math.max(1, Math.min(5, Number(skill?.importance || 3))),
+          defaultLevel: clampSkillLevel(skill?.defaultLevel || 2),
+        }))
+        .filter((skill) => Boolean(skill.id) && Boolean(skill.name))
+    : defaults.skills;
+
+  const matrixByMember =
+    source.matrixByMember && typeof source.matrixByMember === "object" ? source.matrixByMember : {};
+
+  return {
+    skills: normalizedSkills.length ? normalizedSkills : defaults.skills,
+    matrixByMember,
+    trainingAssignments: Array.isArray(source.trainingAssignments)
+      ? source.trainingAssignments
+      : defaults.trainingAssignments,
+  };
+}
+
+function readSkillGapData() {
+  try {
+    const filePath = skillGapDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultSkillGapData();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return normalizeSkillGapData(parsed);
+  } catch {
+    return defaultSkillGapData();
+  }
+}
+
+function writeSkillGapData(data) {
+  fs.writeFileSync(skillGapDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function mapSkillGapMembers(developers) {
+  return developers.map((member) => ({
+    id: String(member.id || ""),
+    fullName: String(member.fullName || member.name || ""),
+    email: String(member.email || ""),
+    role: String(member.role || "developer"),
+  }));
+}
+
+function buildSkillGapMatrix(members, skills, matrixByMember) {
+  return members.map((member) =>
+    skills.map((skill) =>
+      clampSkillLevel(matrixByMember?.[String(member.id || "")]?.[String(skill.id || "")] ?? skill.defaultLevel ?? 2)
+    )
+  );
+}
+
+function detectRequiredSkills(sprintId, skills, members, matrix) {
+  const labelMap = {
+    "ui": ["skill-frontend", "skill-testing"],
+    "frontend": ["skill-frontend", "skill-testing"],
+    "api": ["skill-backend", "skill-database", "skill-testing"],
+    "backend": ["skill-backend", "skill-database"],
+    "devops": ["skill-devops", "skill-security"],
+    "infra": ["skill-devops", "skill-security"],
+    "qa": ["skill-testing"],
+    "security": ["skill-security", "skill-backend"],
+  };
+
+  const sprintKey = String(sprintId || "").toLowerCase();
+  const upcomingLabels = sprintKey.includes("24")
+    ? ["frontend", "api", "qa", "devops"]
+    : sprintKey.includes("23")
+      ? ["backend", "security", "qa"]
+      : ["frontend", "backend", "qa"];
+
+  const pressureBySkill = new Map();
+  upcomingLabels.forEach((label) => {
+    const skillsForLabel = Array.isArray(labelMap[label]) ? labelMap[label] : [];
+    skillsForLabel.forEach((skillId) => {
+      pressureBySkill.set(skillId, Number(pressureBySkill.get(skillId) || 0) + 1);
+    });
+  });
+
+  const skillIndex = new Map(skills.map((skill, index) => [String(skill.id || ""), index]));
+  const required = skills
+    .filter((skill) => pressureBySkill.has(String(skill.id || "")))
+    .map((skill) => {
+      const skillId = String(skill.id || "");
+      const col = Number(skillIndex.get(skillId));
+      const demand = Number(pressureBySkill.get(skillId) || 0);
+      const availability = matrix.reduce(
+        (count, row) => count + (Number(row[col] || 0) >= 3 ? 1 : 0),
+        0
+      );
+      const importance = Math.max(1, Math.min(5, Number(skill.importance || 3)));
+      const gapScore = Math.max(0, demand + importance - availability);
+
+      return {
+        skillId,
+        name: String(skill.name || ""),
+        category: String(skill.category || "General"),
+        demand,
+        importance,
+        availability,
+        gapScore,
+        membersCount: members.length,
+      };
+    })
+    .sort((a, b) => {
+      if (b.gapScore !== a.gapScore) return b.gapScore - a.gapScore;
+      if (b.importance !== a.importance) return b.importance - a.importance;
+      return a.name.localeCompare(b.name);
+    });
+
+  return required;
+}
+
+function registerSkillGapHandlers() {
+  ipcMain.handle(CHANNELS.SKILL_GAP.GET_MATRIX, async () => {
+    try {
+      const data = readSkillGapData();
+      const developers = readDevelopersData();
+      const members = mapSkillGapMembers(developers.members);
+      const matrix = buildSkillGapMatrix(members, data.skills, data.matrixByMember);
+
+      return IPCResponse.success({
+        members,
+        skills: data.skills,
+        matrix,
+      });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load skill-gap matrix", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SKILL_GAP.UPDATE_SKILL_LEVEL, async (_event, payload = {}) => {
+    try {
+      const memberId = String(payload.memberId || "").trim();
+      const skillId = String(payload.skillId || "").trim();
+      const level = clampSkillLevel(payload.level);
+
+      if (!memberId) {
+        return IPCResponse.validation("memberId", "memberId is required");
+      }
+      if (!skillId) {
+        return IPCResponse.validation("skillId", "skillId is required");
+      }
+
+      const developers = readDevelopersData();
+      const memberExists = developers.members.some((member) => String(member.id || "") === memberId);
+      if (!memberExists) {
+        return IPCResponse.notFound("Member");
+      }
+
+      const data = readSkillGapData();
+      const skillExists = data.skills.some((skill) => String(skill.id || "") === skillId);
+      if (!skillExists) {
+        return IPCResponse.notFound("Skill");
+      }
+
+      if (!data.matrixByMember || typeof data.matrixByMember !== "object") {
+        data.matrixByMember = {};
+      }
+      if (!data.matrixByMember[memberId] || typeof data.matrixByMember[memberId] !== "object") {
+        data.matrixByMember[memberId] = {};
+      }
+
+      data.matrixByMember[memberId][skillId] = level;
+      writeSkillGapData(data);
+
+      const row = data.skills.map((skill) =>
+        clampSkillLevel(data.matrixByMember?.[memberId]?.[String(skill.id || "")] ?? skill.defaultLevel ?? 2)
+      );
+
+      return IPCResponse.success(row);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update skill level", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SKILL_GAP.GET_REQUIRED_SKILLS, async (_event, payload = {}) => {
+    try {
+      const sprintId = String(payload.sprintId || "sprint-24").trim();
+      const data = readSkillGapData();
+      const developers = readDevelopersData();
+      const members = mapSkillGapMembers(developers.members);
+      const matrix = buildSkillGapMatrix(members, data.skills, data.matrixByMember);
+      const required = detectRequiredSkills(sprintId, data.skills, members, matrix);
+      return IPCResponse.success(required);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load required skills", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.SKILL_GAP.ASSIGN_TRAINING, async (_event, payload = {}) => {
+    try {
+      const memberId = String(payload.memberId || "").trim();
+      const skillId = String(payload.skillId || "").trim();
+      const resourceUrl = String(payload.resourceUrl || "").trim();
+
+      if (!memberId) {
+        return IPCResponse.validation("memberId", "memberId is required");
+      }
+      if (!skillId) {
+        return IPCResponse.validation("skillId", "skillId is required");
+      }
+      if (!resourceUrl || !/^https?:\/\//i.test(resourceUrl)) {
+        return IPCResponse.validation("resourceUrl", "resourceUrl must be a valid http(s) url");
+      }
+
+      const developers = readDevelopersData();
+      const memberExists = developers.members.some((member) => String(member.id || "") === memberId);
+      if (!memberExists) {
+        return IPCResponse.notFound("Member");
+      }
+
+      const data = readSkillGapData();
+      const skillExists = data.skills.some((skill) => String(skill.id || "") === skillId);
+      if (!skillExists) {
+        return IPCResponse.notFound("Skill");
+      }
+
+      const assignment = {
+        id: `training-${randomUUID()}`,
+        memberId,
+        skillId,
+        resourceUrl,
+        assignedAt: new Date().toISOString(),
+      };
+
+      data.trainingAssignments = [
+        assignment,
+        ...(Array.isArray(data.trainingAssignments) ? data.trainingAssignments : []).filter(
+          (item) => !(String(item.memberId || "") === memberId && String(item.skillId || "") === skillId)
+        ),
+      ];
+      writeSkillGapData(data);
+
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to assign training", String(error));
     }
   });
 }
@@ -2832,49 +6341,10 @@ function developersDbPath() {
 }
 
 function defaultDevelopersData() {
-  const now = new Date();
   return {
     seatLimit: 20,
-    members: [
-      {
-        id: "user-1",
-        name: "Demo User",
-        email: "demo@agilescrummaster.dev",
-        role: "admin",
-        teams: ["Platform"],
-        lastActive: now.toISOString(),
-        status: "active"
-      },
-      {
-        id: "user-2",
-        name: "Sprint Lead",
-        email: "lead@agilescrummaster.dev",
-        role: "manager",
-        teams: ["Core Scrum"],
-        lastActive: new Date(now.getTime() - 4 * 60 * 60 * 1000).toISOString(),
-        status: "active"
-      },
-      {
-        id: "user-3",
-        name: "Frontend Engineer",
-        email: "frontend@agilescrummaster.dev",
-        role: "developer",
-        teams: ["Web"],
-        lastActive: new Date(now.getTime() - 9 * 60 * 60 * 1000).toISOString(),
-        status: "active"
-      }
-    ],
-    invitations: [
-      {
-        id: "inv-dev-1",
-        email: "newhire@agilescrummaster.dev",
-        role: "developer",
-        invitedBy: "Demo User",
-        createdAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString(),
-        status: "pending"
-      }
-    ]
+    members: [],
+    invitations: []
   };
 }
 
@@ -2889,11 +6359,23 @@ function readDevelopersData() {
 
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
     const defaults = defaultDevelopersData();
-    return {
+    const merged = {
       seatLimit: Math.max(1, Number(parsed?.seatLimit || defaults.seatLimit)),
       members: Array.isArray(parsed?.members) ? parsed.members : defaults.members,
       invitations: Array.isArray(parsed?.invitations) ? parsed.invitations : defaults.invitations
     };
+
+    const filteredMembers = merged.members.filter((member) => {
+      const email = String(member?.email || "").trim().toLowerCase();
+      return email !== "demo@agilescrummaster.dev";
+    });
+
+    if (filteredMembers.length !== merged.members.length) {
+      merged.members = filteredMembers;
+      writeDevelopersData(merged);
+    }
+
+    return merged;
   } catch {
     return defaultDevelopersData();
   }
@@ -2906,10 +6388,24 @@ function writeDevelopersData(data) {
 function registerDevelopersHandlers() {
   ipcMain.handle(CHANNELS.DEVELOPERS.GET_ORG_MEMBERS, async () => {
     try {
-      const data = readDevelopersData();
-      return IPCResponse.success(data.members);
+      const payload = await desktopGatewayRequest("GET", "/api/v1/org/members");
+      const members = firstArray(payload, ["members", "items"]).map((member) => ({
+        id: String(member?.id || member?.memberId || member?.userId || ""),
+        name: String(member?.name || member?.fullName || member?.email || "Member"),
+        email: String(member?.email || ""),
+        role: String(member?.role || "member"),
+        teams: Array.isArray(member?.teams) ? member.teams : [],
+        lastActive: String(member?.lastActive || member?.updatedAt || ""),
+        status: String(member?.status || "active"),
+      }));
+      return IPCResponse.success(members);
     } catch (error) {
-      return IPCResponse.internalError("Failed to load org members", String(error));
+      try {
+        const data = readDevelopersData();
+        return IPCResponse.success(data.members);
+      } catch {
+        return IPCResponse.internalError("Failed to load org members", String(error));
+      }
     }
   });
 
@@ -2924,20 +6420,29 @@ function registerDevelopersHandlers() {
         return IPCResponse.validation("role", "role is required");
       }
 
-      const data = readDevelopersData();
-      const index = data.members.findIndex((member) => String(member.id || "") === userId);
-      if (index < 0) {
-        return IPCResponse.notFound("Org member");
-      }
+      try {
+        const updated = await desktopGatewayRequest(
+          "PATCH",
+          `/api/v1/org/members/${encodeURIComponent(userId)}/role`,
+          { role }
+        );
+        return IPCResponse.success(updated?.member || updated?.user || updated);
+      } catch {
+        const data = readDevelopersData();
+        const index = data.members.findIndex((member) => String(member.id || "") === userId);
+        if (index < 0) {
+          return IPCResponse.notFound("Org member");
+        }
 
-      const updated = {
-        ...data.members[index],
-        role,
-        updatedAt: new Date().toISOString()
-      };
-      data.members[index] = updated;
-      writeDevelopersData(data);
-      return IPCResponse.success(updated);
+        const updated = {
+          ...data.members[index],
+          role,
+          updatedAt: new Date().toISOString()
+        };
+        data.members[index] = updated;
+        writeDevelopersData(data);
+        return IPCResponse.success(updated);
+      }
     } catch (error) {
       return IPCResponse.internalError("Failed to update org member role", String(error));
     }
@@ -2950,14 +6455,19 @@ function registerDevelopersHandlers() {
         return IPCResponse.validation("userId", "userId is required");
       }
 
-      const data = readDevelopersData();
-      const before = data.members.length;
-      data.members = data.members.filter((member) => String(member.id || "") !== userId);
-      const removed = data.members.length < before;
-      if (removed) {
-        writeDevelopersData(data);
+      try {
+        await desktopGatewayRequest("DELETE", `/api/v1/org/members/${encodeURIComponent(userId)}`);
+        return IPCResponse.success({ success: true });
+      } catch {
+        const data = readDevelopersData();
+        const before = data.members.length;
+        data.members = data.members.filter((member) => String(member.id || "") !== userId);
+        const removed = data.members.length < before;
+        if (removed) {
+          writeDevelopersData(data);
+        }
+        return IPCResponse.success({ success: removed });
       }
-      return IPCResponse.success({ success: removed });
     } catch (error) {
       return IPCResponse.internalError("Failed to remove org member", String(error));
     }
@@ -2971,27 +6481,41 @@ function registerDevelopersHandlers() {
         return IPCResponse.validation("email", "email is required");
       }
 
-      const data = readDevelopersData();
-      const existingPending = data.invitations.find(
-        (inv) => String(inv.email || "").toLowerCase() === email && String(inv.status || "").toLowerCase() === "pending"
-      );
-      if (existingPending) {
-        return IPCResponse.success(existingPending);
+      try {
+        const response = await desktopGatewayRequest("POST", "/api/v1/org/members/invite", { email, role });
+        const invitation = response?.invitation || response?.invite || response;
+        return IPCResponse.success({
+          id: String(invitation?.id || invitation?.inviteId || `inv-${Date.now()}`),
+          email,
+          role,
+          invitedBy: String(invitation?.invitedBy || ""),
+          createdAt: String(invitation?.createdAt || new Date().toISOString()),
+          expiresAt: String(invitation?.expiresAt || ""),
+          status: String(invitation?.status || "pending"),
+        });
+      } catch {
+        const data = readDevelopersData();
+        const existingPending = data.invitations.find(
+          (inv) => String(inv.email || "").toLowerCase() === email && String(inv.status || "").toLowerCase() === "pending"
+        );
+        if (existingPending) {
+          return IPCResponse.success(existingPending);
+        }
+
+        const invitation = {
+          id: `inv-${randomUUID()}`,
+          email,
+          role,
+          invitedBy: String(sessionUserFallback()?.name || sessionUserFallback()?.email || "Workspace Admin"),
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          status: "pending"
+        };
+
+        data.invitations.unshift(invitation);
+        writeDevelopersData(data);
+        return IPCResponse.success(invitation);
       }
-
-      const invitation = {
-        id: `inv-${randomUUID()}`,
-        email,
-        role,
-        invitedBy: "Demo User",
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-        status: "pending"
-      };
-
-      data.invitations.unshift(invitation);
-      writeDevelopersData(data);
-      return IPCResponse.success(invitation);
     } catch (error) {
       return IPCResponse.internalError("Failed to invite org member", String(error));
     }
@@ -2999,9 +6523,17 @@ function registerDevelopersHandlers() {
 
   ipcMain.handle(CHANNELS.DEVELOPERS.GET_PENDING_INVITATIONS, async () => {
     try {
-      const data = readDevelopersData();
-      const pending = data.invitations.filter((inv) => String(inv.status || "").toLowerCase() === "pending");
-      return IPCResponse.success(pending);
+      try {
+        const payload = await desktopGatewayRequest("GET", "/api/v1/org/invitations");
+        const invitations = firstArray(payload, ["invitations", "items"]).filter(
+          (inv) => String(inv?.status || "pending").toLowerCase() === "pending"
+        );
+        return IPCResponse.success(invitations);
+      } catch {
+        const data = readDevelopersData();
+        const pending = data.invitations.filter((inv) => String(inv.status || "").toLowerCase() === "pending");
+        return IPCResponse.success(pending);
+      }
     } catch (error) {
       return IPCResponse.internalError("Failed to load pending invitations", String(error));
     }
@@ -3014,21 +6546,446 @@ function registerDevelopersHandlers() {
         return IPCResponse.validation("invitationId", "invitationId is required");
       }
 
-      const data = readDevelopersData();
-      const index = data.invitations.findIndex((inv) => String(inv.id || "") === invitationId);
-      if (index < 0) {
-        return IPCResponse.notFound("Invitation");
-      }
+      try {
+        await desktopGatewayRequest("DELETE", `/api/v1/org/invitations/${encodeURIComponent(invitationId)}`);
+        return IPCResponse.success({ success: true });
+      } catch {
+        const data = readDevelopersData();
+        const index = data.invitations.findIndex((inv) => String(inv.id || "") === invitationId);
+        if (index < 0) {
+          return IPCResponse.notFound("Invitation");
+        }
 
-      data.invitations[index] = {
-        ...data.invitations[index],
-        status: "revoked",
-        revokedAt: new Date().toISOString()
-      };
-      writeDevelopersData(data);
-      return IPCResponse.success({ success: true });
+        data.invitations[index] = {
+          ...data.invitations[index],
+          status: "revoked",
+          revokedAt: new Date().toISOString()
+        };
+        writeDevelopersData(data);
+        return IPCResponse.success({ success: true });
+      }
     } catch (error) {
       return IPCResponse.internalError("Failed to revoke invitation", String(error));
+    }
+  });
+}
+
+function orgSettingsDbPath() {
+  return path.join(app.getPath("userData"), "org.settings.db.json");
+}
+
+function defaultOrgSettings() {
+  const now = new Date().toISOString();
+  return {
+    id: "org-default",
+    name: "Agile Scrum Master",
+    slug: "agile-scrum-master",
+    logoUrl: "",
+    description: "",
+    industry: "Software",
+    size: "1-10",
+    ownerId: "user-1",
+    preferences: {
+      defaultSprintLengthDays: 14,
+      workingDays: ["monday", "tuesday", "wednesday", "thursday", "friday"],
+      timezone: "UTC",
+      notificationSettings: {},
+      dbStatus: {
+        provider: "postgres",
+        connectionMode: "manual",
+        status: "not_provisioned",
+        provisioned: false,
+        connected: false,
+        projectId: null,
+        connectionStringMasked: null,
+      },
+    },
+    plan: {
+      slug: "free",
+      name: "Free",
+    },
+    subscription: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function readOrgSettings() {
+  try {
+    const filePath = orgSettingsDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = defaultOrgSettings();
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const defaults = defaultOrgSettings();
+    const preferences = parsed?.preferences && typeof parsed.preferences === "object" ? parsed.preferences : {};
+
+    return {
+      ...defaults,
+      ...parsed,
+      preferences: {
+        ...defaults.preferences,
+        ...preferences,
+      },
+    };
+  } catch {
+    return defaultOrgSettings();
+  }
+}
+
+function writeOrgSettings(settings) {
+  fs.writeFileSync(orgSettingsDbPath(), JSON.stringify(settings, null, 2), "utf8");
+}
+
+function registerOrgHandlers() {
+  ipcMain.handle(CHANNELS.ORG.GET_SETTINGS, async () => {
+    try {
+      const payload = await desktopGatewayRequest("GET", "/api/v1/org");
+      const org = payload?.org && typeof payload.org === "object" ? payload.org : payload;
+      return IPCResponse.success({
+        id: String(org?.id || "org-default"),
+        name: String(org?.name || ""),
+        slug: String(org?.slug || ""),
+        logoUrl: String(org?.logoUrl || ""),
+        description: String(org?.description || ""),
+        industry: String(org?.industry || ""),
+        size: String(org?.size || ""),
+        ownerId: String(org?.ownerId || ""),
+        preferences: org?.preferences && typeof org.preferences === "object" ? org.preferences : {},
+      });
+    } catch (error) {
+      try {
+        const settings = readOrgSettings();
+        return IPCResponse.success(settings);
+      } catch {
+        return IPCResponse.internalError("Failed to load org settings", String(error));
+      }
+    }
+  });
+
+  ipcMain.handle(CHANNELS.ORG.UPDATE, async (_event, payload = {}) => {
+    try {
+      const current = readOrgSettings();
+      const nextName = payload.name == null ? current.name : String(payload.name || "").trim();
+
+      if (!nextName) {
+        return IPCResponse.validation("name", "name cannot be empty");
+      }
+
+      const incomingPreferences = payload.preferences && typeof payload.preferences === "object" ? payload.preferences : {};
+      try {
+        const updated = await desktopGatewayRequest("PATCH", "/api/v1/org/settings", {
+          name: nextName,
+          description:
+            payload.description == null ? current.description : String(payload.description || "").trim(),
+          industry: payload.industry == null ? current.industry : String(payload.industry || "").trim(),
+          size: payload.size == null ? current.size : String(payload.size || "").trim(),
+          preferences: {
+            ...current.preferences,
+            ...incomingPreferences,
+          },
+        });
+        return IPCResponse.success(updated?.org || updated?.settings || updated);
+      } catch {
+        const next = {
+          ...current,
+          name: nextName,
+          logoUrl: payload.logoUrl == null ? current.logoUrl : String(payload.logoUrl || "").trim(),
+          description:
+            payload.description == null ? current.description : String(payload.description || "").trim(),
+          industry: payload.industry == null ? current.industry : String(payload.industry || "").trim(),
+          size: payload.size == null ? current.size : String(payload.size || "").trim(),
+          preferences: {
+            ...current.preferences,
+            ...incomingPreferences,
+          },
+          updatedAt: new Date().toISOString(),
+        };
+
+        writeOrgSettings(next);
+        return IPCResponse.success(next);
+      }
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update org settings", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.ORG.UPLOAD_LOGO, async (_event, payload = {}) => {
+    try {
+      const base64Image = String(payload.base64Image || "").trim();
+      if (!base64Image) {
+        return IPCResponse.validation("base64Image", "base64Image is required");
+      }
+
+      const logoUrl = base64Image.startsWith("data:image/")
+        ? base64Image
+        : `data:image/png;base64,${base64Image}`;
+
+      const current = readOrgSettings();
+      const next = {
+        ...current,
+        logoUrl,
+        updatedAt: new Date().toISOString(),
+      };
+      writeOrgSettings(next);
+
+      return IPCResponse.success({ logoUrl });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to upload org logo", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.ORG.TRANSFER_OWNERSHIP, async (_event, payload = {}) => {
+    try {
+      const newOwnerId = String(payload.newOwnerId || "").trim();
+      if (!newOwnerId) {
+        return IPCResponse.validation("newOwnerId", "newOwnerId is required");
+      }
+
+      const developers = readDevelopersData();
+      const exists = developers.members.some((member) => String(member.id || "") === newOwnerId);
+      if (!exists) {
+        return IPCResponse.notFound("New owner");
+      }
+
+      const current = readOrgSettings();
+      const next = {
+        ...current,
+        ownerId: newOwnerId,
+        updatedAt: new Date().toISOString(),
+      };
+      writeOrgSettings(next);
+
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to transfer ownership", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.ORG.DELETE, async (_event, payload = {}) => {
+    try {
+      const confirmName = String(payload.confirmName || "").trim();
+      const current = readOrgSettings();
+
+      if (!confirmName) {
+        return IPCResponse.validation("confirmName", "confirmName is required");
+      }
+      if (confirmName !== String(current.name || "")) {
+        return IPCResponse.validation("confirmName", "confirmName does not match organization name");
+      }
+
+      try {
+        await desktopGatewayRequest("DELETE", "/api/v1/org");
+      } catch {
+        const filePath = orgSettingsDbPath();
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      }
+
+      return IPCResponse.success({ success: true });
+    } catch (error) {
+      return IPCResponse.internalError("Failed to delete organization", String(error));
+    }
+  });
+}
+
+function preferencesDbPath() {
+  return path.join(app.getPath("userData"), "preferences.db.json");
+}
+
+function defaultUserPreferences() {
+  return {
+    theme: "system",
+    language: "en",
+    notifications: {
+      email: {
+        sprintAlerts: true,
+        digestEmail: true,
+        assignmentAlerts: true,
+      },
+      inApp: {
+        sprintAlerts: true,
+        digestEmail: true,
+        assignmentAlerts: true,
+      },
+    },
+  };
+}
+
+function defaultAutoTaskRules() {
+  return [
+    { id: "createFromIssues", category: "toggle", enabled: true },
+    { id: "createFromUnlinkedPrs", category: "toggle", enabled: true },
+    { id: "sprintReadyLabel", category: "setting", value: "sprint-ready" },
+    { id: "label:bug", category: "labelMapping", label: "bug", taskType: "bug" },
+    { id: "label:enhancement", category: "labelMapping", label: "enhancement", taskType: "story" },
+    { id: "label:task", category: "labelMapping", label: "task", taskType: "task" },
+  ];
+}
+
+function normalizePreferences(input) {
+  const defaults = defaultUserPreferences();
+  const source = input && typeof input === "object" ? input : {};
+  const notifications = source.notifications && typeof source.notifications === "object" ? source.notifications : {};
+  const email = notifications.email && typeof notifications.email === "object" ? notifications.email : {};
+  const inApp = notifications.inApp && typeof notifications.inApp === "object" ? notifications.inApp : {};
+  const theme = String(source.theme || defaults.theme).toLowerCase();
+
+  return {
+    theme: theme === "dark" || theme === "light" || theme === "system" ? theme : defaults.theme,
+    language: String(source.language || defaults.language || "en"),
+    notifications: {
+      email: {
+        sprintAlerts: Boolean(email.sprintAlerts ?? defaults.notifications.email.sprintAlerts),
+        digestEmail: Boolean(email.digestEmail ?? defaults.notifications.email.digestEmail),
+        assignmentAlerts: Boolean(email.assignmentAlerts ?? defaults.notifications.email.assignmentAlerts),
+      },
+      inApp: {
+        sprintAlerts: Boolean(inApp.sprintAlerts ?? defaults.notifications.inApp.sprintAlerts),
+        digestEmail: Boolean(inApp.digestEmail ?? defaults.notifications.inApp.digestEmail),
+        assignmentAlerts: Boolean(inApp.assignmentAlerts ?? defaults.notifications.inApp.assignmentAlerts),
+      },
+    },
+  };
+}
+
+function normalizeAutoTaskRules(rulesInput) {
+  const allowedTypes = new Set(["task", "story", "bug"]);
+  const fallback = defaultAutoTaskRules();
+  if (!Array.isArray(rulesInput) || !rulesInput.length) {
+    return fallback;
+  }
+
+  return rulesInput
+    .map((rule) => {
+      if (!rule || typeof rule !== "object") {
+        return null;
+      }
+
+      const category = String(rule.category || "").trim();
+      const id = String(rule.id || "").trim();
+      if (!category || !id) {
+        return null;
+      }
+
+      if (category === "toggle") {
+        return { id, category, enabled: Boolean(rule.enabled) };
+      }
+
+      if (category === "setting") {
+        return { id, category, value: String(rule.value || "").trim() };
+      }
+
+      if (category === "labelMapping") {
+        const label = String(rule.label || "").trim().toLowerCase();
+        const taskType = String(rule.taskType || "task").trim().toLowerCase();
+        if (!label || !allowedTypes.has(taskType)) {
+          return null;
+        }
+        return { id, category, label, taskType };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+}
+
+function readPreferencesData() {
+  try {
+    const filePath = preferencesDbPath();
+    if (!fs.existsSync(filePath)) {
+      const seed = {
+        userPreferences: defaultUserPreferences(),
+        autoTaskRules: defaultAutoTaskRules(),
+      };
+      fs.writeFileSync(filePath, JSON.stringify(seed, null, 2), "utf8");
+      return seed;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return {
+      userPreferences: normalizePreferences(parsed?.userPreferences),
+      autoTaskRules: normalizeAutoTaskRules(parsed?.autoTaskRules),
+    };
+  } catch {
+    return {
+      userPreferences: defaultUserPreferences(),
+      autoTaskRules: defaultAutoTaskRules(),
+    };
+  }
+}
+
+function writePreferencesData(data) {
+  fs.writeFileSync(preferencesDbPath(), JSON.stringify(data, null, 2), "utf8");
+}
+
+function registerPreferencesHandlers() {
+  ipcMain.handle(CHANNELS.PREFERENCES.GET, async () => {
+    try {
+      const data = readPreferencesData();
+      return IPCResponse.success(data.userPreferences);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load user preferences", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PREFERENCES.UPDATE, async (_event, payload = {}) => {
+    try {
+      const current = readPreferencesData();
+      const incoming = {
+        ...current.userPreferences,
+        theme: payload.theme ?? current.userPreferences.theme,
+        language: payload.language ?? current.userPreferences.language,
+        notifications:
+          payload.notifications && typeof payload.notifications === "object"
+            ? {
+                ...current.userPreferences.notifications,
+                ...payload.notifications,
+              }
+            : current.userPreferences.notifications,
+      };
+      const normalized = normalizePreferences(incoming);
+
+      writePreferencesData({
+        ...current,
+        userPreferences: normalized,
+      });
+
+      return IPCResponse.success(normalized);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to update user preferences", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PREFERENCES.GET_AUTO_TASK_RULES, async () => {
+    try {
+      const data = readPreferencesData();
+      return IPCResponse.success(data.autoTaskRules);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to load auto-task rules", String(error));
+    }
+  });
+
+  ipcMain.handle(CHANNELS.PREFERENCES.SAVE_AUTO_TASK_RULES, async (_event, payload = {}) => {
+    try {
+      const current = readPreferencesData();
+      if (!Array.isArray(payload.rules)) {
+        return IPCResponse.validation("rules", "rules must be an array");
+      }
+
+      const nextRules = normalizeAutoTaskRules(payload.rules);
+      writePreferencesData({
+        ...current,
+        autoTaskRules: nextRules,
+      });
+
+      return IPCResponse.success(nextRules);
+    } catch (error) {
+      return IPCResponse.internalError("Failed to save auto-task rules", String(error));
     }
   });
 }
@@ -3046,9 +7003,41 @@ function registerSystemHandlers() {
       return IPCResponse.internalError("Failed to open external URL", String(error));
     }
   });
+
+  ipcMain.handle(CHANNELS.SYSTEM.GATEWAY_REQUEST, async (_event, payload = {}) => {
+    try {
+      const method = String(payload.method || "GET").trim().toUpperCase();
+      const path = String(payload.path || payload.pathname || "").trim();
+      const supportedMethods = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+
+      console.log("[IPC] system:gatewayRequest:", { method, path });
+
+      if (!supportedMethods.has(method)) {
+        console.log("[IPC] Invalid method:", method);
+        return IPCResponse.validation("method", "method must be GET|POST|PUT|PATCH|DELETE");
+      }
+
+      if (!path || !path.startsWith("/api/")) {
+        console.log("[IPC] Invalid path:", path, "Must start with /api/");
+        return IPCResponse.validation("path", "path must start with /api/");
+      }
+
+      const requestBody = method === "GET" || method === "DELETE"
+        ? undefined
+        : payload.body;
+
+      const data = await desktopGatewayRequest(method, path, requestBody);
+      console.log("[IPC] Success");
+      return IPCResponse.success(data);
+    } catch (error) {
+      console.log("[IPC] Error:", String(error));
+      return IPCResponse.internalError("Failed to execute gateway request", String(error));
+    }
+  });
 }
 
 function createWindow() {
+  const windowIconPath = path.join(__dirname, "assets", "sprint.ico");
   const win = new BrowserWindow({
     title: "Agile Scrum Master Desktop",
     width: 1400,
@@ -3056,6 +7045,7 @@ function createWindow() {
     minWidth: 1000,
     minHeight: 700,
     autoHideMenuBar: true,
+    icon: windowIconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -3095,21 +7085,40 @@ app.whenReady().then(() => {
     app.setAsDefaultProtocolClient(AUTH_PROTOCOL);
   }
 
-  registerAuthIpcHandlers(ipcMain);
+  registerAuthIpcHandlers(ipcMain, { onSessionChanged: notifySessionUpdated });
   registerSystemHandlers();
+  registerAdminIpcHandlers(ipcMain);
+  registerAssignIpcHandlers(ipcMain);
+  registerBacklogIpcHandlers(ipcMain);
+  registerBoardIpcHandlers(ipcMain);
+  registerDashboardIpcHandlers(ipcMain);
+  registerDirectoryDevelopersIpcHandlers(ipcMain);
+  registerFormsIpcHandlers(ipcMain);
+  registerNavbarDataIpcHandlers(ipcMain);
   registerGoalHandlers();
   registerIntegrationHandlers();
   registerGithubRepoHandlers();
   registerMonitoringHandlers();
+  registerWebhookHandlers();
   registerOnboardingHandlers();
   registerProfileHandlers();
+  registerStandupHandlers();
+  registerSprintHandlers();
+  registerSprintsHandlers();
+  registerSprintPlanHandlers();
   registerProjectHandlers();
   registerReportsHandlers();
   registerScrumMasterHandlers();
   registerTaskHandlers();
   registerAgentHandlers();
   registerBillingHandlers();
+  registerPagesIpcHandlers(ipcMain);
+  registerTeamsHandlers();
+  registerTimelineIpcHandlers(ipcMain);
+  registerSkillGapHandlers();
   registerDevelopersHandlers();
+  registerOrgHandlers();
+  registerPreferencesHandlers();
   createWindow();
 
   for (const deepLink of initialDeepLinks) {

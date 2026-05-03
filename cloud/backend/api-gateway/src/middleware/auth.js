@@ -2,6 +2,16 @@ const jwt = require('jsonwebtoken');
 const { env } = require('../config/env');
 
 function authMiddleware(req, res, next) {
+  // Allow unauthenticated requests in development mode for testing
+  if (process.env.NODE_ENV === 'development' && !req.headers.authorization) {
+    req.user = {
+      userId: 'dev-test-user-id',
+      sessionId: 'dev-test-session-id',
+      email: 'dev@localhost.local',
+    };
+    return next();
+  }
+
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Unauthorized' });

@@ -3,12 +3,16 @@ import { getAuthTokenFromCookies, proxyToApiGateway } from "@/lib/api-gateway";
 
 export async function GET() {
   const token = await getAuthTokenFromCookies();
-  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  
+  // Allow unauthenticated requests in development mode
+  if (!token && process.env.NODE_ENV !== "development") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const gatewayResp = await proxyToApiGateway({
     upstreamPath: "/api/v1/auth/me",
     method: "GET",
-    token,
+    token: token || undefined,
   });
 
   const data = await gatewayResp.json().catch(() => null);

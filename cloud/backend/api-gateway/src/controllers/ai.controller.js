@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { randomUUID } = require('node:crypto');
+const { URLSearchParams } = require('url');
 const { buildContext } = require('../../server/lib/ragContext');
 const {
   getToolDefinitions,
@@ -43,29 +44,64 @@ function setSseHeaders(res) {
 }
 
 function extractText(contentBlocks) {
-  return (Array.isArray(contentBlocks) ? contentBlocks : [])
-    .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text)
-    .join('');
+  if (typeof contentBlocks === 'string') return contentBlocks;
+  if (Array.isArray(contentBlocks)) {
+    return contentBlocks
+      .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text)
+      .join('');
+  }
+  return '';
 }
 
-function toToolResultBlock(toolUseId, result) {
-  return {
-    type: 'tool_result',
-    tool_use_id: String(toolUseId),
-    content: JSON.stringify(result || {}),
-  };
+function normalizeGroqTools(rawTools) {
+  return (Array.isArray(rawTools) ? rawTools : [])
+    .map((tool) => {
+      if (!tool || typeof tool !== 'object') return null;
+      const fn = tool.function && typeof tool.function === 'object' ? tool.function : null;
+      const name = safe(fn?.name);
+      if (!name) return null;
+      return {
+        type: 'function',
+        function: {
+          name,
+          description: safe(fn?.description),
+          parameters: fn?.parameters && typeof fn.parameters === 'object' ? fn.parameters : { type: 'object', properties: {} },
+        },
+      };
+    })
+    .filter(Boolean);
 }
 
-async function callAnthropicMessages(apiKey, payload) {
+async function callGroqWithOptionalTools(apiKey, payload, tools) {
+  const basePayload = { ...payload };
+  if (Array.isArray(tools) && tools.length > 0) {
+    basePayload.tools = tools;
+  }
+
+  try {
+    return await callGroqMessages(apiKey, basePayload);
+  } catch (err) {
+    const detail = safe(err?.message || '');
+    const shouldRetryWithoutTools =
+      Array.isArray(tools) &&
+      tools.length > 0 &&
+      (detail.toLowerCase().includes('tools.0.type') || detail.toLowerCase().includes('tool schema'));
+
+    if (!shouldRetryWithoutTools) throw err;
+
+    return callGroqMessages(apiKey, payload);
+  }
+}
+
+async function callGroqMessages(apiKey, payload) {
   const resp = await axios({
     method: 'POST',
-    url: 'https://api.anthropic.com/v1/messages',
+    url: 'https://api.groq.com/openai/v1/chat/completions',
     timeout: 120_000,
     headers: {
       'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
+      'Authorization': `Bearer ${apiKey}`,
     },
     data: payload,
     validateStatus: () => true,
@@ -73,7 +109,7 @@ async function callAnthropicMessages(apiKey, payload) {
 
   if (resp.status >= 400) {
     const detail = safe(resp.data?.error?.message || resp.data?.message || JSON.stringify(resp.data));
-    throw Object.assign(new Error(detail || 'Anthropic request failed'), { statusCode: resp.status || 502 });
+    throw Object.assign(new Error(detail || 'Groq request failed'), { statusCode: resp.status || 502 });
   }
 
   return resp.data || {};
@@ -81,6 +117,46 @@ async function callAnthropicMessages(apiKey, payload) {
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function resolveGroqModel() {
+  const configured = safe(process.env.GROQ_MODEL);
+  const normalized = configured.toLowerCase();
+  if (!configured || normalized === 'llama3-8b-8192' || normalized === 'llama-3.1-8b-instant') {
+    return 'llama-3.3-70b-versatile';
+  }
+  return configured;
+}
+
+const MAX_USER_MESSAGE_CHARS = 1800;
+const MAX_HISTORY_ITEMS = 6;
+const MAX_HISTORY_ITEM_CHARS = 900;
+const MAX_RAG_CHARS = 7000;
+const MAX_LIVE_CHARS = 5000;
+const MAX_GRAPH_CHARS = 9000;
+
+function truncateText(value, maxChars) {
+  const text = safe(value);
+  if (!text) return '';
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n...[truncated]`;
+}
+
+function isGroqPayloadTooLargeError(detail) {
+  const value = safe(detail).toLowerCase();
+  return value.includes('request too large') || value.includes('tokens per minute') || value.includes('requested ');
+}
+
+function buildSystemPrompt(mode, ragText, liveText, graphContext, compact = false) {
+  const basePrompt = systemPromptByMode(mode);
+  if (compact) return `${basePrompt}\n\nUse only the minimal context needed for a concise answer.`;
+
+  const rag = truncateText(ragText, MAX_RAG_CHARS) || '(no vector context)';
+  const live = truncateText(liveText, MAX_LIVE_CHARS);
+  const graph = truncateText(graphContext, MAX_GRAPH_CHARS);
+  const graphPrompt = graph ? `\n\nGRAPH JSON:\n${graph}` : '';
+
+  return `${basePrompt}\n\nCONTEXT:\n${rag}\n\nLIVE DATA:\n${live}${graphPrompt}`;
 }
 
 function systemPromptByMode(mode) {
@@ -103,6 +179,10 @@ function systemPromptByMode(mode) {
       'Show reasoning for each recommendation.',
     brief:
       'You are in briefing mode. Summarize sprint state clearly and answer follow-up questions in concise executive language.',
+    graph:
+      'You are in graph analysis mode. Treat attached graph JSON as the source of truth for folder/file topology only. Explain folder clusters, file groupings, and containment relationships without inventing symbols or tasks.',
+    groq:
+      'You are in Groq reasoning mode. If graph JSON is attached, use it as the source of truth for folder/file structure and keep the answer concise, grounded, and concrete.',
     chat: '',
   };
 
@@ -169,81 +249,103 @@ async function history(req, res, next) {
 async function chat(req, res, next) {
   try {
     const body = req.body || {};
-    const message = safe(body.message);
+    const message = truncateText(body.message, MAX_USER_MESSAGE_CHARS);
     const projectId = safe(body.projectId);
     const modeInput = safe(body.mode || 'chat').toLowerCase();
     const mode = modeInput === 'auto' ? 'chat' : modeInput;
     const executionMode = safe(body.executionMode || body.actionMode || modeInput || 'confirm').toLowerCase();
     const agentId = safe(body.agentId || body.agentType);
     const historyList = Array.isArray(body.history) ? body.history : [];
+    const graphContext = safe(body.graphContext || body.graph_context || body.graphJson || '');
 
     if (!message) return jsonError(res, 400, 'Bad request', 'message is required.');
     if (!projectId) return jsonError(res, 400, 'Bad request', 'projectId is required.');
     if (!req.orgDb) return jsonError(res, 500, 'Server error', 'Org database is not available.');
 
-    const allowedModes = new Set(['chat', 'plan', 'standup', 'report', 'assign', 'brief']);
-    if (!allowedModes.has(mode)) return jsonError(res, 400, 'Bad request', 'mode must be one of chat|plan|standup|report|assign|brief.');
+    const allowedModes = new Set(['chat', 'plan', 'standup', 'report', 'assign', 'brief', 'graph', 'groq']);
+    if (!allowedModes.has(mode)) return jsonError(res, 400, 'Bad request', 'mode must be one of chat|plan|standup|report|assign|brief|graph|groq.');
 
     const access = await ensureProjectAccess(req.orgDb, projectId, req.actorMemberId, req.user?.role);
     if (!access.ok) return jsonError(res, 403, 'Forbidden', access.reason);
 
     const { ragText, liveText, totalChunks } = await buildContext(message, projectId, req.orgDb);
-    const systemPrompt = `${systemPromptByMode(mode)}\n\nCONTEXT:\n${ragText || '(no vector context)'}\n\nLIVE DATA:\n${liveText}`;
+    const systemPrompt = buildSystemPrompt(mode, ragText, liveText, graphContext, false);
 
     const trimmedHistory = historyList
-      .slice(-10)
+      .slice(-MAX_HISTORY_ITEMS)
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && safe(m.content))
-      .map((m) => ({ role: m.role, content: safe(m.content) }));
+      .map((m) => ({ role: m.role, content: truncateText(m.content, MAX_HISTORY_ITEM_CHARS) }));
 
-    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-    if (!safe(anthropicApiKey)) return jsonError(res, 500, 'Server error', 'ANTHROPIC_API_KEY is not configured.');
+    const groqApiKey = process.env.GROQ_API_KEY;
+    if (!safe(groqApiKey)) return jsonError(res, 500, 'Server error', 'GROQ_API_KEY is not configured.');
 
-    const messages = [...trimmedHistory, { role: 'user', content: message }];
-    const tools = getToolDefinitions();
-    const firstResponse = await callAnthropicMessages(anthropicApiKey, {
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
-      stream: false,
-      system: systemPrompt,
-      messages,
-      tools,
-    });
+    let outboundMessages = [{ role: 'system', content: systemPrompt }, ...trimmedHistory, { role: 'user', content: message }];
+    const tools = normalizeGroqTools(getToolDefinitions());
+    let useTools = mode !== 'groq' && mode !== 'graph';
+    const groqModel = resolveGroqModel();
+    let firstResponse;
+    try {
+      firstResponse = await callGroqWithOptionalTools(groqApiKey, {
+        model: groqModel,
+        max_tokens: 900,
+        temperature: 0.4,
+        messages: outboundMessages,
+      }, useTools ? tools : []);
+    } catch (caught) {
+      const detail = safe(caught?.message || '');
+      if (!isGroqPayloadTooLargeError(detail)) throw caught;
 
-    let finalText = extractText(firstResponse.content);
-    if (firstResponse.stop_reason === 'tool_use') {
-      const toolUses = (Array.isArray(firstResponse.content) ? firstResponse.content : []).filter((b) => b?.type === 'tool_use');
+      useTools = false;
+      outboundMessages = [
+        { role: 'system', content: buildSystemPrompt(mode, ragText, liveText, graphContext, true) },
+        { role: 'user', content: truncateText(message, 900) },
+      ];
+
+      firstResponse = await callGroqWithOptionalTools(groqApiKey, {
+        model: groqModel,
+        max_tokens: 600,
+        temperature: 0.3,
+        messages: outboundMessages,
+      }, []);
+    }
+
+    let finalText = extractText(firstResponse.choices?.[0]?.message?.content || firstResponse.content);
+    if (useTools && firstResponse.choices?.[0]?.message?.tool_calls?.length) {
+      const toolCalls = firstResponse.choices[0].message.tool_calls;
       const toolResults = [];
 
-      for (const block of toolUses) {
+      for (const toolCall of toolCalls) {
         const result = await executeActionWithPolicy(req.orgDb, {
           projectId,
           userId: String(req.user?.userId || ''),
           executionMode,
           agentId,
-        }, String(block.name), block.input || {});
+        }, String(toolCall.function.name), JSON.parse(toolCall.function.arguments || '{}'));
 
         if (result?.type === 'confirmation_required') {
           return res.status(200).json(result);
         }
 
-        toolResults.push(toToolResultBlock(block.id, result));
+        toolResults.push({
+          tool_call_id: toolCall.id,
+          role: 'tool',
+          content: JSON.stringify(result || {}),
+        });
       }
 
       const secondMessages = [
-        ...messages,
-        { role: 'assistant', content: firstResponse.content },
-        { role: 'user', content: toolResults },
+        ...outboundMessages,
+        firstResponse.choices[0].message,
+        ...toolResults,
       ];
 
-      const secondResponse = await callAnthropicMessages(anthropicApiKey, {
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        stream: false,
-        system: systemPrompt,
+      const secondResponse = await callGroqWithOptionalTools(groqApiKey, {
+        model: groqModel,
+        max_tokens: 900,
+        temperature: 0.4,
         messages: secondMessages,
-        tools,
-      });
-      finalText = extractText(secondResponse.content);
+      }, useTools ? tools : []);
+      finalText = extractText(secondResponse.choices?.[0]?.message?.content || secondResponse.content);
     }
 
     setSseHeaders(res);
@@ -540,6 +642,14 @@ async function briefing(req, res, next) {
 async function proxyJson(req, res, next, upstreamPath) {
   try {
     const url = buildAiServiceUrl(upstreamPath);
+    const normalizedPath = String(upstreamPath || '').toLowerCase();
+    const timeout =
+      normalizedPath.includes('/agentic/sprint-build') ||
+      normalizedPath.includes('/sprint-planning/plan') ||
+      normalizedPath.includes('/sprint-planning/scope')
+        ? 180_000
+        : 30_000;
+
     const resp = await axios({
       method: req.method,
       url,
@@ -547,7 +657,7 @@ async function proxyJson(req, res, next, upstreamPath) {
         'Content-Type': 'application/json',
       },
       data: req.body,
-      timeout: 30_000,
+      timeout,
       validateStatus: () => true,
     });
 
@@ -587,6 +697,33 @@ async function proxySse(req, res, next, upstreamPath) {
         // ignore
       }
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function proxyQuery(req, res, next, upstreamPath) {
+  try {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(req.query || {})) {
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item !== undefined && item !== null) query.append(key, String(item));
+        }
+      } else if (value !== undefined && value !== null) {
+        query.append(key, String(value));
+      }
+    }
+
+    const url = buildAiServiceUrl(query.toString() ? `${upstreamPath}?${query.toString()}` : upstreamPath);
+    const resp = await axios({
+      method: req.method,
+      url,
+      timeout: 30_000,
+      validateStatus: () => true,
+    });
+
+    res.status(resp.status).json(resp.data);
   } catch (err) {
     next(err);
   }
@@ -638,6 +775,22 @@ module.exports = {
 
   riskNarratorStream(req, res, next) {
     return proxySse(req, res, next, '/groq/risk-narrator/stream');
+  },
+
+  gitNexusAnalyze(req, res, next) {
+    return proxySse(req, res, next, '/api/v1/git-nexus/analyze');
+  },
+
+  gitNexusStatus(req, res, next) {
+    return proxyJson(req, res, next, '/api/v1/git-nexus/status');
+  },
+
+  gitNexusTasks(req, res, next) {
+    return proxyQuery(req, res, next, '/api/v1/git-nexus/tasks');
+  },
+
+  gitNexusImportTasks(req, res, next) {
+    return proxyJson(req, res, next, '/api/v1/git-nexus/import-tasks');
   },
 
   // ML (internal)

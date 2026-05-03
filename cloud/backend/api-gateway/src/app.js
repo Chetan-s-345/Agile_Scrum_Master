@@ -3,6 +3,8 @@ const http = require('node:http');
 
 // Always load backend/api-gateway/.env regardless of launch cwd.
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+// Fall back to the workspace root .env so shared keys like INNGEST_EVENT_KEY are visible here too.
+require('dotenv').config({ path: path.resolve(__dirname, '../../../.env') });
 // Keep cwd .env as a secondary source (without overriding existing keys).
 require('dotenv').config();
 
@@ -11,6 +13,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const { Server } = require('socket.io');
+const { v4: uuidv4 } = require('uuid');
+const { createAdapter } = require('@socket.io/redis-adapter');
 
 const { env } = require('./config/env');
 const { logger, morganStream } = require('./middleware/logger');
@@ -20,7 +24,9 @@ const { startSprintMonitoringWorker } = require('./workers/sprintMonitoring.work
 const { startJiraSyncWorker } = require('./workers/jiraSync.worker');
 const { startWebhookProcessingWorker } = require('./workers/webhookProcessing.worker');
 const { startPrMetricsWorker } = require('./workers/prMetrics.worker');
+const { startPostMeetingWorker } = require('./workers/post-meeting.worker');
 const { startWebhookRetryWorker } = require('./jobs/webhookRetryWorker');
+const { startSprintSchedulerJob } = require('./jobs/sprint-scheduler.job');
 const { pingRedis } = require('./services/queue.service');
 
 const authRoutes = require('./routes/auth.routes');
@@ -36,6 +42,7 @@ const monitoringRoutes = require('./routes/monitoring.routes');
 const integrationRoutes = require('./routes/integration.routes');
 const aiRoutes = require('./routes/ai.routes');
 const standupRoutes = require('./routes/standup.routes');
+const meetingsRoutes = require('./routes/meetings.routes');
 const goalRoutes = require('./routes/goal.routes');
 const developerToolsRoutes = require('./routes/developerTools.routes');
 const spaceRoutes = require('./routes/space.routes');
@@ -47,7 +54,7 @@ const agentRoutes = require('./routes/agents.routes');
 const agentCommandRoutes = require('./routes/agent.routes');
 const sprintAutopilotRoutes = require('./routes/sprintAutopilot.routes');
 const { startAllAgents } = require('../server/agents');
-const { setIo, projectRoom } = require('./realtime/io');
+const { setIo, projectRoom, orgRoom } = require('./realtime/io');
 
 const app = express();
 const server = http.createServer(app);
@@ -58,9 +65,36 @@ const io = new Server(server, {
   },
 });
 
+// Configure Socket.IO Redis adapter for cross-instance communication
+(async () => {
+  const { getRedis } = require('./services/queue.service');
+  try {
+    const pubClient = getRedis();
+    const subClient = pubClient.duplicate();
+    io.adapter(createAdapter(pubClient, subClient));
+    logger.info('Socket.IO Redis adapter configured');
+  } catch (err) {
+    logger.error({ err }, 'Failed to configure Socket.IO Redis adapter');
+  }
+})();
+
 setIo(io);
 
 io.on('connection', (socket) => {
+  socket.on('org:join', (orgPayload) => {
+    const raw = typeof orgPayload === 'object' && orgPayload !== null ? orgPayload.orgId : orgPayload;
+    const id = String(raw || '').trim();
+    if (!id) return;
+    socket.join(orgRoom(id));
+  });
+
+  socket.on('org:leave', (orgPayload) => {
+    const raw = typeof orgPayload === 'object' && orgPayload !== null ? orgPayload.orgId : orgPayload;
+    const id = String(raw || '').trim();
+    if (!id) return;
+    socket.leave(orgRoom(id));
+  });
+
   socket.on('project:join', (projectPayload) => {
     const raw = typeof projectPayload === 'object' && projectPayload !== null ? projectPayload.projectId : projectPayload;
     const id = String(raw || '').trim();
@@ -85,6 +119,14 @@ app.use(
   })
 );
 
+// Add request ID tracing middleware
+app.use((req, res, next) => {
+  req.requestId = req.headers['x-request-id'] || uuidv4();
+  res.setHeader('x-request-id', req.requestId);
+  res.setHeader('x-served-by', process.env.RENDER_INSTANCE_NAME || 'unknown');
+  next();
+});
+
 // Important: webhook signature verification requires access to the raw request body.
 // So we skip global JSON parsing for /api/v1/webhooks and parse bodies per webhook route.
 const jsonParser = express.json({ limit: '1mb' });
@@ -94,8 +136,17 @@ app.use((req, res, next) => {
 });
 app.use(morgan('combined', { stream: morganStream }));
 
+// Health check endpoint - must respond fast and not require authentication
 app.get('/health', (req, res) => {
-  res.status(200).json({ ok: true, service: 'api-gateway' });
+  const { getRedis } = require('./services/queue.service');
+  const redisClient = getRedis();
+  res.json({
+    status: 'ok',
+    instance: process.env.RENDER_INSTANCE_NAME || 'unknown',
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    redis: redisClient.status === 'ready' ? 'connected' : 'disconnected',
+  });
 });
 
 app.use('/api/v1/auth', authRoutes);
@@ -111,6 +162,7 @@ app.use('/api/v1/monitoring', monitoringRoutes);
 app.use('/api/v1/integrations', integrationRoutes);
 app.use('/api/v1/ai', aiRoutes);
 app.use('/api/v1/standup', standupRoutes);
+app.use('/api/v1/meetings', meetingsRoutes);
 app.use('/api/v1/goals', goalRoutes);
 app.use('/api/v1/developer-tools', developerToolsRoutes);
 app.use('/api/v1/spaces', spaceRoutes);
@@ -159,6 +211,12 @@ server.listen(env.PORT, () => {
     ensureRepeatableJobs().catch((err) => {
       logger.error({ err }, 'Failed to ensure repeatable jobs');
     });
+
+    try {
+      startSprintSchedulerJob();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start sprint scheduler cron job');
+    }
   }
 
   if (env.ENABLE_WORKERS) {
@@ -190,6 +248,12 @@ server.listen(env.PORT, () => {
       startWebhookRetryWorker();
     } catch (err) {
       logger.error({ err }, 'Failed to start webhook retry worker');
+    }
+
+    try {
+      startPostMeetingWorker();
+    } catch (err) {
+      logger.error({ err }, 'Failed to start post-meeting worker');
     }
 
     try {

@@ -59,7 +59,7 @@ async function handleIssueUpdated(orgPool, payload) {
 
       if (field === 'status') {
         const newStatusName = safeString(item?.toString) || safeString(item?.to) || null;
-        const r = await taskService.updateStatus(issueKey, newStatusName, orgPool);
+        const r = await taskService.updateJiraStatus(issueKey, newStatusName, orgPool);
         results.push({ field: 'status', ok: true, result: r });
         continue;
       }

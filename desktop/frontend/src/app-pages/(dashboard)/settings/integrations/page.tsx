@@ -1150,4 +1150,3 @@ export default function IntegrationsSettingsPage() {
     </Suspense>
   );
 }
-

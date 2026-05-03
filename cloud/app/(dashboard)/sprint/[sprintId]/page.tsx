@@ -85,6 +85,8 @@ export default function SprintDetailPage() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<"start" | "complete" | null>(null);
 
   const [sprint, setSprint] = useState<Sprint | null>(null);
   const [velocity, setVelocity] = useState<Velocity | null>(null);
@@ -97,7 +99,10 @@ export default function SprintDetailPage() {
   async function load() {
     if (!hasId) return;
     setLoading(true);
-    setError(null);
+    if (!actionLoading) {
+      setError(null);
+      setNotice(null);
+    }
 
     const [sResp, vResp, aResp, rResp, bResp] = await Promise.all([
       fetchJson<SprintGetResp>(`/api/sprints/${encodeURIComponent(sprintId)}`),
@@ -131,14 +136,38 @@ export default function SprintDetailPage() {
 
   async function startSprint() {
     if (!hasId) return;
-    await fetch(`/api/sprints/${encodeURIComponent(sprintId)}/start`, { method: "PATCH" });
-    await load();
+    setActionLoading("start");
+    setError(null);
+    setNotice(null);
+    try {
+      const resp = await fetch(`/api/sprints/${encodeURIComponent(sprintId)}/start`, { method: "PATCH" });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || `Failed to start sprint (${resp.status})`));
+      setNotice("Sprint started successfully.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start sprint");
+    } finally {
+      setActionLoading(null);
+    }
   }
 
   async function completeSprint() {
     if (!hasId) return;
-    await fetch(`/api/sprints/${encodeURIComponent(sprintId)}/complete`, { method: "PATCH" });
-    await load();
+    setActionLoading("complete");
+    setError(null);
+    setNotice(null);
+    try {
+      const resp = await fetch(`/api/sprints/${encodeURIComponent(sprintId)}/complete`, { method: "PATCH" });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(String(data?.error || `Failed to complete sprint (${resp.status})`));
+      setNotice("Sprint completed successfully.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to complete sprint");
+    } finally {
+      setActionLoading(null);
+    }
   }
 
   if (!hasId) {
@@ -156,22 +185,24 @@ export default function SprintDetailPage() {
           <div className="flex flex-wrap gap-2">
             <button
               onClick={load}
-              disabled={loading}
+              disabled={loading || Boolean(actionLoading)}
               className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm font-semibold text-slate-900 dark:text-white disabled:opacity-60"
             >
               <RefreshCw className="w-4 h-4" /> Refresh
             </button>
             <button
               onClick={startSprint}
-              className="rounded-lg bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 text-sm font-semibold"
+              disabled={loading || Boolean(actionLoading) || String(sprint?.status || "").toLowerCase() === "active" || String(sprint?.status || "").toLowerCase() === "completed"}
+              className="rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950/60"
             >
-              Start
+              {actionLoading === "start" ? "Starting..." : "Start"}
             </button>
             <button
               onClick={completeSprint}
-              className="rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 text-sm font-semibold"
+              disabled={loading || Boolean(actionLoading) || String(sprint?.status || "").toLowerCase() === "completed"}
+              className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60 dark:bg-white dark:text-black dark:hover:bg-slate-200"
             >
-              Complete
+              {actionLoading === "complete" ? "Completing..." : "Complete"}
             </button>
           </div>
         </div>
@@ -179,6 +210,12 @@ export default function SprintDetailPage() {
         {error ? (
           <div className="mb-6 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950 px-4 py-3 text-sm text-red-800 dark:text-red-200">
             {error}
+          </div>
+        ) : null}
+
+        {notice ? (
+          <div className="mb-6 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950 px-4 py-3 text-sm text-emerald-800 dark:text-emerald-200">
+            {notice}
           </div>
         ) : null}
 

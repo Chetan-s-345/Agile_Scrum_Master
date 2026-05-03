@@ -25,5 +25,6 @@ export async function POST(
     method: "POST",
     token,
     body,
+    timeoutMs: 120000,
   });
 }

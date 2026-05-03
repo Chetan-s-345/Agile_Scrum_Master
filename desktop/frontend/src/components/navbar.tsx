@@ -4,6 +4,7 @@ import Link from "@/next-shims/link";
 import { useRouter } from "@/next-shims/navigation";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useUIStore } from "@/lib/ui-store";
+import { desktopGatewayRequest } from "@/lib/desktop-gateway";
 import {
   ChevronDown,
   Bell,
@@ -35,8 +36,49 @@ type NotificationsItem = {
 
 type ChangelogItem = { id: string; title: string; date: string; detail: string };
 
+type AuthSessionPayload = {
+  authenticated?: boolean;
+  session?: {
+    user?: {
+      id?: string;
+      email?: string;
+      fullName?: string;
+    };
+  };
+};
+
+type IPCWrapped<T> = {
+  ok?: boolean;
+  data?: T;
+  error?: { message?: string; detail?: string };
+};
+
+type DesktopProfilePayload = {
+  name?: string;
+  email?: string;
+};
+
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function asErrorText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
+  if (!window.desktopApi?.invoke) {
+    throw new Error("Desktop IPC bridge unavailable");
+  }
+  const response = await window.desktopApi.invoke(channel, payload);
+  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
+    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
+    if (!wrapped.ok) {
+      throw new Error(asErrorText(wrapped.error?.message || wrapped.error?.detail) || "IPC request failed");
+    }
+    return (wrapped.data as T) ?? (null as T);
+  }
+  return response as T;
 }
 
 function relTime(value: string): string {
@@ -120,7 +162,7 @@ export function Navbar() {
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [switchProjectOpen, setSwitchProjectOpen] = useState(false);
   const [userName, setUserName] = useState("Developer");
-  const [userEmail, setUserEmail] = useState("unknown@local");
+  const [userEmail, setUserEmail] = useState("");
 
   const [toast, setToast] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
@@ -137,16 +179,34 @@ export function Navbar() {
   useEffect(() => {
     let ignore = false;
     async function loadBootData() {
-      const [projectsResp, sprintsResp, devResp, meResp] = await Promise.all([
-        fetch("/api/projects", { cache: "no-store" }),
-        fetch("/api/sprints", { cache: "no-store" }),
-        fetch("/api/developers", { cache: "no-store" }),
-        fetch("/api/auth/me", { cache: "no-store" }),
+      const [projectsData, sprintsData, devData] = await Promise.all([
+        desktopGatewayRequest<{ items?: Project[] }>("GET", "/api/v1/projects").catch(() => null),
+        desktopGatewayRequest<{ items?: Sprint[] }>("GET", "/api/v1/sprints").catch(() => null),
+        desktopGatewayRequest<{ items?: Developer[] }>("GET", "/api/v1/developers").catch(() => null),
       ]);
-      const projectsData = await projectsResp.json().catch(() => null) as { items?: Project[] } | null;
-      const sprintsData = await sprintsResp.json().catch(() => null) as { items?: Sprint[] } | null;
-      const devData = await devResp.json().catch(() => null) as { items?: Developer[] } | null;
-      const meData = await meResp.json().catch(() => null) as Record<string, unknown> | null;
+
+      let nextName = "Developer";
+      let nextEmail = "";
+
+      if (window.desktopApi?.invoke) {
+        const [authState, profileState] = await Promise.all([
+          window.desktopApi.invoke<AuthSessionPayload>("auth:getSession").catch(() => null),
+          window.desktopApi.invoke<IPCWrapped<DesktopProfilePayload>>("profile:getCurrent").catch(() => null),
+        ]);
+        const desktopUser = authState?.session?.user;
+        const desktopProfile = profileState?.ok ? profileState?.data : null;
+
+        if (desktopProfile) {
+          nextName = asString(desktopProfile.name) || nextName;
+          nextEmail = asString(desktopProfile.email) || nextEmail;
+        }
+
+        if (authState?.authenticated && desktopUser) {
+          nextName = asString(desktopUser.fullName) || asString(desktopUser.email) || nextName;
+          nextEmail = asString(desktopUser.email) || nextEmail;
+        }
+      }
+
       if (ignore) return;
 
       const projectItems = Array.isArray(projectsData?.items) ? projectsData!.items : [];
@@ -154,10 +214,6 @@ export function Navbar() {
       setCurrentProjectId((prev) => (prev || String(projectItems[0]?.id || "")));
       setSprints(Array.isArray(sprintsData?.items) ? sprintsData!.items : []);
       setDevelopers(Array.isArray(devData?.items) ? devData!.items : []);
-
-      const user = (meData?.user || meData?.member || meData || {}) as Record<string, unknown>;
-      const nextName = asString(user.name) || asString(user.fullName) || asString(user.email) || "Developer";
-      const nextEmail = asString(user.email) || "unknown@local";
       setUserName(nextName);
       setUserEmail(nextEmail);
     }
@@ -182,15 +238,15 @@ export function Navbar() {
     }
     const timeoutId = window.setTimeout(async () => {
       setSearchLoading(true);
-      const searchParams = new URLSearchParams({ q: query });
-      if (currentProjectId) searchParams.set("projectId", currentProjectId);
-      const resp = await fetch(`/api/search?${searchParams.toString()}`, { cache: "no-store" });
-      const data = await resp.json().catch(() => null) as {
+      const data = await invokeDesktop<{
         tasks?: SearchItem[];
         sprints?: SearchItem[];
         developers?: SearchItem[];
         pages?: SearchItem[];
-      } | null;
+      }>("search:query", {
+        q: query,
+        projectId: currentProjectId || undefined,
+      }).catch(() => null);
       setSearchResults({
         tasks: Array.isArray(data?.tasks) ? data!.tasks : [],
         sprints: Array.isArray(data?.sprints) ? data!.sprints : [],
@@ -208,13 +264,14 @@ export function Navbar() {
   useEffect(() => {
     async function loadNotifications() {
       setNotificationsLoading(true);
-      const [listResp, unreadResp] = await Promise.all([
-        fetch("/api/notifications", { cache: "no-store" }),
-        fetch("/api/notifications?unread=true", { cache: "no-store" }),
+      const [listData, unreadData] = await Promise.all([
+        invokeDesktop<{ items?: NotificationsItem[]; unreadCount?: number }>("inAppNotifications:getList", {
+          unread: false,
+        }).catch(() => null),
+        invokeDesktop<{ items?: NotificationsItem[]; unreadCount?: number }>("inAppNotifications:getList", {
+          unread: true,
+        }).catch(() => null),
       ]);
-
-      const listData = await listResp.json().catch(() => null) as { items?: NotificationsItem[] } | null;
-      const unreadData = await unreadResp.json().catch(() => null) as { unreadCount?: number; items?: NotificationsItem[] } | null;
 
       setNotifications(Array.isArray(listData?.items) ? listData!.items : []);
       const unreadFallback = Array.isArray(unreadData?.items) ? unreadData!.items.length : 0;
@@ -227,35 +284,22 @@ export function Navbar() {
       void loadNotifications();
     }, 25000);
 
-    let socketCleanup: (() => void) | null = null;
-    void import("socket.io-client")
-      .then(({ io }) => {
-        const socket = io(import.meta.env.VITE_API_URL || "", { autoConnect: true, transports: ["websocket", "polling"] });
-        socket.on("notifications", () => {
-          void loadNotifications();
-        });
-        socketCleanup = () => socket.disconnect();
-      })
-      .catch(() => {
-        socketCleanup = null;
-      });
-
     return () => {
       window.clearInterval(pollId);
-      if (socketCleanup) socketCleanup();
     };
   }, []);
 
   async function markAllRead() {
-    await fetch("/api/notifications/read-all", { method: "PATCH" });
-    const resp = await fetch("/api/notifications", { cache: "no-store" });
-    const data = await resp.json().catch(() => null) as { items?: NotificationsItem[] } | null;
+    await invokeDesktop("inAppNotifications:markAllRead").catch(() => undefined);
+    const data = await invokeDesktop<{ items?: NotificationsItem[] }>("inAppNotifications:getList", {
+      unread: false,
+    }).catch(() => null);
     setNotifications(Array.isArray(data?.items) ? data!.items : []);
     setUnreadCount(0);
   }
 
   async function openNotification(item: NotificationsItem) {
-    await fetch(`/api/notifications/${encodeURIComponent(item.id)}/read`, { method: "PATCH" });
+    await invokeDesktop("inAppNotifications:markRead", { id: item.id }).catch(() => undefined);
     setNotifications((prev) => prev.map((n) => (n.id === item.id ? { ...n, read: true } : n)));
     setUnreadCount((prev) => Math.max(0, prev - 1));
     setNotificationsOpen(false);
@@ -268,65 +312,48 @@ export function Navbar() {
       if (createTab === "task") {
         const selectedSprint = sprints.find((s) => String(s.id) === String(taskSprintId));
         const projectId = selectedSprint?.projectId || currentProjectId;
-        const resp = await fetch("/api/tasks", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        const payload = await desktopGatewayRequest<{ task?: { id?: string }; item?: { id?: string }; id?: string }>(
+          "POST",
+          "/api/v1/tasks",
+          {
             title: taskTitle,
             description: taskDescription || undefined,
             projectId,
             sprintId: taskSprintId,
             priority: taskPriority,
             storyPoints: taskPoints === "" ? 0 : Number(taskPoints),
-          }),
-        });
-        const payload = await resp.json().catch(() => null) as { task?: { id?: string } } | null;
-        if (!resp.ok) throw new Error("Failed to create task");
+          }
+        );
 
-        const createdTaskId = asString(payload?.task?.id);
+        const createdTaskId = asString(payload?.task?.id || payload?.item?.id || payload?.id);
         if (createdTaskId && taskAssigneeId) {
-          await fetch("/api/assignment/assign-explicit", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ taskId: createdTaskId, sprintId: taskSprintId, developerId: taskAssigneeId }),
+          await desktopGatewayRequest("POST", "/api/v1/assignment/assign-explicit", {
+            taskId: createdTaskId,
+            sprintId: taskSprintId,
+            developerId: taskAssigneeId,
           });
         }
         setToast({ text: "Task created", type: "success" });
       }
 
       if (createTab === "sprint") {
-        const resp = await fetch("/api/sprints", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: sprintName,
-            goal: sprintGoal,
-            startDate: sprintStartDate,
-            endDate: sprintEndDate,
-            projectId: currentProjectId,
-          }),
+        await invokeDesktop("sprints:create", {
+          name: sprintName,
+          goal: sprintGoal,
+          startDate: sprintStartDate,
+          endDate: sprintEndDate,
+          projectId: currentProjectId,
         });
-        if (!resp.ok) throw new Error("Failed to create sprint");
         setToast({ text: "Sprint created", type: "success" });
       }
 
       if (createTab === "page") {
-        const resp = await fetch("/api/pages", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: pageTitle, content: pageContent }),
-        });
-        if (!resp.ok) throw new Error("Failed to create page");
+        await invokeDesktop("pages:createPage", { title: pageTitle, content: pageContent });
         setToast({ text: "Page created", type: "success" });
       }
 
       if (createTab === "form") {
-        const resp = await fetch("/api/forms", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: formName, description: formDescription }),
-        });
-        if (!resp.ok) throw new Error("Failed to create form");
+        await invokeDesktop("forms:createForm", { name: formName, description: formDescription });
         setToast({ text: "Form created", type: "success" });
       }
 
@@ -339,8 +366,7 @@ export function Navbar() {
   }
 
   async function loadChangelog() {
-    const resp = await fetch("/api/changelog", { cache: "no-store" });
-    const data = await resp.json().catch(() => null) as { items?: ChangelogItem[] } | null;
+    const data = await invokeDesktop<{ items?: ChangelogItem[] }>("changelog:getItems").catch(() => null);
     setChangelog(Array.isArray(data?.items) ? data!.items : []);
     setWhatsNewOpen(true);
   }
@@ -375,8 +401,13 @@ export function Navbar() {
   }
 
   async function logout() {
-    await fetch("/api/auth/sign-out", { method: "POST" });
-    router.push("/login");
+    if (window.desktopApi?.invoke) {
+      await window.desktopApi.invoke("auth:clearSession").catch(() => undefined);
+    } else {
+      await fetch("/api/auth/sign-out", { method: "POST" });
+    }
+    setAvatarOpen(false);
+    router.push("/");
   }
 
   return (

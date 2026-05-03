@@ -75,6 +75,11 @@ const EnvSchema = z
     z.string().url()
   ),
 
+  LIVEKIT_API_KEY: optionalNonEmptyString,
+  LIVEKIT_API_SECRET: optionalNonEmptyString,
+  LIVEKIT_URL: optionalNonEmptyString,
+  DEEPGRAM_API_KEY: optionalNonEmptyString,
+
   // Public URL of the API gateway (used for registering inbound webhooks).
   // Example: https://your-gateway.example.com
   PUBLIC_API_GATEWAY_URL: optionalNonEmptyString,

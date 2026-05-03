@@ -5,21 +5,24 @@ type DesktopLoginGateProps = {
   onRefreshSession?: () => Promise<void>;
 };
 
-const CONFIGURED_AUTH_BASE_URL = String(import.meta.env.VITE_DESKTOP_AUTH_BASE_URL || "").trim();
-const DEPLOYED_WEB_URL = (CONFIGURED_AUTH_BASE_URL || "https://agile-scrum-master.vercel.app").replace(/\/+$/, "");
+const CONFIGURED_AUTH_BASE_URL =
+  String(import.meta.env.VITE_DESKTOP_AUTH_BASE_URL || "").trim() ||
+  String(import.meta.env.VITE_CLOUD_APP_URL || "").trim() ||
+  String(import.meta.env.VITE_WEB_APP_URL || "").trim();
+const FALLBACK_DEPLOYED_WEB_URL = "https://agile-scrum-master.vercel.app";
+const DEPLOYED_WEB_URL = (CONFIGURED_AUTH_BASE_URL || FALLBACK_DEPLOYED_WEB_URL).replace(/\/+$/, "");
 const LOCAL_WEB_URL = "http://localhost:3000";
 const DESKTOP_CALLBACK_URI = "asmdesktop://auth-callback";
 
-function buildDesktopBridgeUrl(baseUrl: string, entryPath: "/desktop-auth/sign-in" | "/desktop-auth/sign-up") {
+function buildDesktopAuthUrl(baseUrl: string, entryPath: "/desktop-auth/sign-in" | "/desktop-auth/sign-up") {
   const redirect = encodeURIComponent(DESKTOP_CALLBACK_URI);
-  const entry = encodeURIComponent(entryPath);
-  return `${baseUrl}/desktop-auth/bridge?desktop_redirect_uri=${redirect}&desktop_entry=${entry}`;
+  return `${baseUrl}${entryPath}?desktop_redirect_uri=${redirect}`;
 }
 
 async function isLocalWebReachable() {
   if (typeof window === "undefined" || typeof window.fetch !== "function") return false;
   try {
-    await fetch(`${LOCAL_WEB_URL}/auth/sign-in`, {
+    await fetch(`${LOCAL_WEB_URL}/desktop-auth/sign-in`, {
       method: "GET",
       mode: "no-cors",
       cache: "no-store",
@@ -34,8 +37,8 @@ export function DesktopLoginGate({ onRefreshSession }: DesktopLoginGateProps) {
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const signInUrl = useMemo(() => buildDesktopBridgeUrl(DEPLOYED_WEB_URL, "/desktop-auth/sign-in"), []);
-  const signUpUrl = useMemo(() => buildDesktopBridgeUrl(DEPLOYED_WEB_URL, "/desktop-auth/sign-up"), []);
+  const signInUrl = useMemo(() => buildDesktopAuthUrl(DEPLOYED_WEB_URL, "/desktop-auth/sign-in"), []);
+  const signUpUrl = useMemo(() => buildDesktopAuthUrl(DEPLOYED_WEB_URL, "/desktop-auth/sign-up"), []);
 
   async function openExternal(url: string) {
     if (typeof window !== "undefined" && window.desktopApi?.invoke) {
@@ -51,11 +54,17 @@ export function DesktopLoginGate({ onRefreshSession }: DesktopLoginGateProps) {
     try {
       const localReachable = await isLocalWebReachable();
       const target = localReachable
-        ? buildDesktopBridgeUrl(LOCAL_WEB_URL, "/desktop-auth/sign-in")
+        ? buildDesktopAuthUrl(LOCAL_WEB_URL, "/desktop-auth/sign-in")
         : signInUrl;
 
       await openExternal(target);
-      setMessage("Browser opened. After sign in, desktop will continue automatically.");
+      if (!localReachable && !CONFIGURED_AUTH_BASE_URL) {
+        setMessage(
+          `Browser opened via fallback URL (${FALLBACK_DEPLOYED_WEB_URL}). Set VITE_DESKTOP_AUTH_BASE_URL to your deployed cloud app URL.`
+        );
+      } else {
+        setMessage("Browser opened. After sign in, desktop will continue automatically.");
+      }
       if (typeof onRefreshSession === "function") {
         void onRefreshSession();
       }
@@ -72,11 +81,17 @@ export function DesktopLoginGate({ onRefreshSession }: DesktopLoginGateProps) {
     try {
       const localReachable = await isLocalWebReachable();
       const target = localReachable
-        ? buildDesktopBridgeUrl(LOCAL_WEB_URL, "/desktop-auth/sign-up")
+        ? buildDesktopAuthUrl(LOCAL_WEB_URL, "/desktop-auth/sign-up")
         : signUpUrl;
 
       await openExternal(target);
-      setMessage("Browser opened for registration. Finish signup, then sign in to continue in desktop.");
+      if (!localReachable && !CONFIGURED_AUTH_BASE_URL) {
+        setMessage(
+          `Browser opened via fallback URL (${FALLBACK_DEPLOYED_WEB_URL}). Set VITE_DESKTOP_AUTH_BASE_URL to your deployed cloud app URL.`
+        );
+      } else {
+        setMessage("Browser opened for registration. Finish signup, then sign in to continue in desktop.");
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Failed to open browser sign up");
     } finally {

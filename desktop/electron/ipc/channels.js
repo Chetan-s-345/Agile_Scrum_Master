@@ -50,11 +50,17 @@ const CHANNELS = {
 
   // Board channels
   BOARD: {
+    GET_ACTIVE_SPRINT: "board:getActiveSprint",
+    GET_TASKS: "board:getTasks",
+    MOVE_TASK: "board:moveTask",
+    CREATE_TASK: "board:createTask",
+    GET_SPRINTS: "board:getSprints",
     GET_SPRINT_BACKLOG: "board:getSprintBacklog",
     MOVE_TO_BOARD: "board:moveToBoard",
     GET_TASKS_WITH_PRS: "board:getTasksWithPRs",
     LINK_PR: "board:linkPR",
-    UNLINK_PR: "board:unlinkPR"
+    UNLINK_PR: "board:unlinkPR",
+    TASK_UPDATED: "board:taskUpdated"
   },
 
   // Forms channels
@@ -62,7 +68,25 @@ const CHANNELS = {
     GET_TEMPLATES: "forms:getTemplates",
     GET_TASK_FORMS: "forms:getTaskForms",
     SUBMIT_FORM: "forms:submitForm",
-    ATTACH_TEMPLATE: "forms:attachTemplate"
+    ATTACH_TEMPLATE: "forms:attachTemplate",
+    CREATE_FORM: "forms:createForm"
+  },
+
+  // Global search channel
+  SEARCH: {
+    QUERY: "search:query"
+  },
+
+  // In-app notification inbox channels
+  IN_APP_NOTIFICATIONS: {
+    GET_LIST: "inAppNotifications:getList",
+    MARK_READ: "inAppNotifications:markRead",
+    MARK_ALL_READ: "inAppNotifications:markAllRead"
+  },
+
+  // Changelog feed channels
+  CHANGELOG: {
+    GET_ITEMS: "changelog:getItems"
   },
 
   // Pages channels
@@ -79,7 +103,34 @@ const CHANNELS = {
     GET_SUMMARY: "sprint:getSummary",
     GET_BURNDOWN: "sprint:getBurndown",
     GET_VELOCITY_HISTORY: "sprint:getVelocityHistory",
-    GET_CONTRIBUTORS: "sprint:getContributors"
+    GET_CONTRIBUTORS: "sprint:getContributors",
+    GET_BY_ID: "sprint:getById",
+    GET_CURRENT: "sprint:getCurrent",
+    GET_TASKS: "sprint:getTasks",
+    UPDATE: "sprint:update",
+    UPDATE_STATUS: "sprint:updateStatus",
+    DELETE: "sprint:delete",
+    GET_EVENTS: "sprint:getEvents"
+  },
+
+  // Sprint listing and creation for /sprints route
+  SPRINTS: {
+    GET_ALL: "sprints:getAll",
+    CREATE: "sprints:create",
+    GET_BY_ID: "sprints:getById",
+    GET_TASKS: "sprints:getTasks",
+    UPDATE: "sprints:update",
+    DELETE: "sprints:delete",
+    GET_SUMMARY: "sprints:getSummary",
+    GET_CONTRIBUTIONS: "sprints:getContributions"
+  },
+
+  // Daily standup workflow
+  STANDUP: {
+    GET_TODAY: "standup:getToday",
+    SUBMIT: "standup:submit",
+    GET_HISTORY: "standup:getHistory",
+    GENERATE_SUMMARY: "standup:generateSummary"
   },
 
   // Timeline channels
@@ -97,15 +148,25 @@ const CHANNELS = {
     GET_STATS: "developers:getStats",
     GET_CURRENT_TASKS: "developers:getCurrentTasks",
     GET_SPRINT_HISTORY: "developers:getSprintHistory",
-    UPDATE_PROFILE: "developers:updateProfile"
+    UPDATE_PROFILE: "developers:updateProfile",
+    GET_ORG_MEMBERS: "developers:getOrgMembers",
+    UPDATE_ROLE: "developers:updateRole",
+    REMOVE_FROM_ORG: "developers:removeFromOrg",
+    INVITE_TO_ORG: "developers:inviteToOrg",
+    GET_PENDING_INVITATIONS: "developers:getPendingInvitations",
+    REVOKE_INVITATION: "developers:revokeInvitation"
   },
 
   // GitHub integration channels
   GITHUB: {
     GET_CONNECTION_STATUS: "github:getConnectionStatus",
+    GET_AVAILABLE_REPOS: "github:getAvailableRepos",
     GET_LINKED_REPOS: "github:getLinkedRepos",
     GET_RECENT_PRS: "github:getRecentPRs",
-    SYNC_NOW: "github:syncNow"
+    SYNC_NOW: "github:syncNow",
+    TOGGLE_REPO_SYNC: "github:toggleRepoSync",
+    LINK_REPO_TO_PROJECT: "github:linkRepoToProject",
+    BULK_TOGGLE: "github:bulkToggle"
   },
 
   // App metadata and health
@@ -145,6 +206,7 @@ const CHANNELS = {
   // System level capabilities
   SYSTEM: {
     OPEN_EXTERNAL: "system:openExternal",
+    GATEWAY_REQUEST: "system:gatewayRequest",
     OPEN_PATH: "system:openPath",
     GET_PATH: "system:getPath",
     CLIPBOARD_READ: "system:clipboardRead",
@@ -184,16 +246,12 @@ const CHANNELS = {
     GET_ALL: "integrations:getAll",
     CONNECT: "integrations:connect",
     DISCONNECT: "integrations:disconnect",
-    SYNC_NOW: "integrations:syncNow"
-  },
-
-  // GitHub repository management
-  GITHUB: {
-    GET_AVAILABLE_REPOS: "github:getAvailableRepos",
-    GET_LINKED_REPOS: "github:getLinkedRepos",
-    TOGGLE_REPO_SYNC: "github:toggleRepoSync",
-    LINK_REPO_TO_PROJECT: "github:linkRepoToProject",
-    BULK_TOGGLE: "github:bulkToggle"
+    SYNC_NOW: "integrations:syncNow",
+    GET_CONFIG: "integrations:getConfig",
+    UPDATE_CONFIG: "integrations:updateConfig",
+    REGENERATE_WEBHOOK_SECRET: "integrations:regenerateWebhookSecret",
+    GET_JIRA_PROJECT_MAPPINGS: "integrations:getJiraProjectMappings",
+    SAVE_JIRA_MAPPING: "integrations:saveJiraMapping"
   },
 
   // Monitoring and operational diagnostics
@@ -203,6 +261,17 @@ const CHANNELS = {
     GET_WEBHOOK_DLQ: "monitoring:getWebhookDLQ",
     RETRY_WEBHOOK: "monitoring:retryWebhook",
     GET_JIRA_SYNC_LOGS: "monitoring:getJiraSyncLogs"
+  },
+
+  // Webhook management and delivery diagnostics
+  WEBHOOKS: {
+    GET_ALL: "webhooks:getAll",
+    CREATE: "webhooks:create",
+    UPDATE: "webhooks:update",
+    DELETE: "webhooks:delete",
+    TEST: "webhooks:test",
+    GET_DELIVERY_LOG: "webhooks:getDeliveryLog",
+    RETRY_DELIVERY: "webhooks:retryDelivery"
   },
 
   // Onboarding workflow
@@ -215,15 +284,57 @@ const CHANNELS = {
 
   // User profile management
   PROFILE: {
+    GET: "profile:get",
     GET_CURRENT: "profile:getCurrent",
     UPDATE: "profile:update",
     CHANGE_PASSWORD: "profile:changePassword",
+    CHANGE_EMAIL: "profile:changeEmail",
     UPLOAD_AVATAR: "profile:uploadAvatar",
-    GET_ACTIVITY_STATS: "profile:getActivityStats"
+    GET_ACTIVITY_STATS: "profile:getActivityStats",
+    GET_SESSIONS: "profile:getSessions",
+    REVOKE_SESSION: "profile:revokeSession",
+    TOGGLE_2FA: "profile:toggle2FA"
+  },
+
+  // User preferences and personal defaults
+  PREFERENCES: {
+    GET: "preferences:get",
+    UPDATE: "preferences:update",
+    GET_AUTO_TASK_RULES: "preferences:getAutoTaskRules",
+    SAVE_AUTO_TASK_RULES: "preferences:saveAutoTaskRules"
+  },
+
+  // Team management settings
+  TEAMS: {
+    GET_ALL: "teams:getAll",
+    GET_DETAIL: "teams:getDetail",
+    CREATE: "teams:create",
+    UPDATE: "teams:update",
+    DELETE: "teams:delete",
+    ADD_MEMBER: "teams:addMember",
+    REMOVE_MEMBER: "teams:removeMember"
+  },
+
+  // Skill gap analysis and training assignment
+  SKILL_GAP: {
+    GET_MATRIX: "skillGap:getMatrix",
+    UPDATE_SKILL_LEVEL: "skillGap:updateSkillLevel",
+    GET_REQUIRED_SKILLS: "skillGap:getRequiredSkills",
+    ASSIGN_TRAINING: "skillGap:assignTraining"
+  },
+
+  // Sprint planning workflow (kebab-case route)
+  SPRINT_PLAN: {
+    GET_BACKLOG: "sprintPlan:getBacklog",
+    GET_TEAM_CAPACITY: "sprintPlan:getTeamCapacity",
+    SAVE_PLAN: "sprintPlan:savePlan",
+    AI_SUGGEST: "sprintPlan:aiSuggest"
   },
 
   // Project detail and management
   PROJECTS: {
+    GET_ALL: "projects:getAll",
+    CREATE: "projects:create",
     GET_BY_ID: "projects:getById",
     GET_SPRINTS: "projects:getSprints",
     GET_MEMBERS: "projects:getMembers",
@@ -254,11 +365,20 @@ const CHANNELS = {
 
   // Task detail and task-level collaboration
   TASKS: {
+    GET_ALL: "tasks:getAll",
+    CREATE: "tasks:create",
+    BULK_UPDATE: "tasks:bulkUpdate",
+    BULK_DELETE: "tasks:bulkDelete",
     GET_BY_ID: "tasks:getById",
+    UPDATE: "tasks:update",
     GET_ACTIVITY_LOG: "tasks:getActivityLog",
     ADD_BLOCKER: "tasks:addBlocker",
     REMOVE_BLOCKER: "tasks:removeBlocker",
-    ADD_COMMENT: "tasks:addComment"
+    ADD_COMMENT: "tasks:addComment",
+    DELETE_COMMENT: "tasks:deleteComment",
+    ADD_ATTACHMENT: "tasks:addAttachment",
+    LINK_TASK: "tasks:linkTask",
+    DELETE: "tasks:delete"
   },
 
   // Agent detail, chat, and runtime controls
@@ -281,14 +401,13 @@ const CHANNELS = {
     GET_BILLING_PORTAL_URL: "billing:getBillingPortalUrl"
   },
 
-  // Organization developer/seat management
-  DEVELOPERS: {
-    GET_ORG_MEMBERS: "developers:getOrgMembers",
-    UPDATE_ROLE: "developers:updateRole",
-    REMOVE_FROM_ORG: "developers:removeFromOrg",
-    INVITE_TO_ORG: "developers:inviteToOrg",
-    GET_PENDING_INVITATIONS: "developers:getPendingInvitations",
-    REVOKE_INVITATION: "developers:revokeInvitation"
+  // Organization settings and ownership controls
+  ORG: {
+    GET_SETTINGS: "org:getSettings",
+    UPDATE: "org:update",
+    UPLOAD_LOGO: "org:uploadLogo",
+    TRANSFER_OWNERSHIP: "org:transferOwnership",
+    DELETE: "org:delete"
   },
 
   // Events (one-way from main to renderer)

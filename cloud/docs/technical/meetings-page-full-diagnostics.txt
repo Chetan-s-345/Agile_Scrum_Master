@@ -1,0 +1,50 @@
+Meetings Page Diagnostics (Daily-Only)
+
+Purpose
+- This document tracks the current Daily-only meetings workflow and common checks.
+
+Expected Behavior
+- Meeting creation auto-generates a Daily room URL when createJoinUrl is true.
+- Starting a meeting ensures a valid Daily join URL exists and marks status as in_progress.
+- Completing a meeting enqueues post-meeting AI task assignment.
+- Sprint auto-schedule creates planning, daily, review, and retro meetings.
+
+Provider Rules
+- Supported meeting providers: daily, zoom, teams.
+- Default provider: daily.
+- Daily join URL must match an https://*.daily.co/... URL.
+
+Required Environment Variables
+- DAILY_API_KEY
+- DAILY_DOMAIN
+- DAILY_WEBHOOK_HMAC_SECRET
+- RESEND_API_KEY
+- RESEND_FROM_EMAIL
+- ANTHROPIC_API_KEY
+
+Webhook Flow
+- Next route verifies Daily HMAC signature.
+- meeting-ended events are forwarded to API gateway.
+- API gateway enqueues a post-meeting assignment job.
+
+Queue and Worker Flow
+- Queue: post-meeting
+- Worker: post-meeting worker
+- Job output: task creation, meeting action items, assignee notifications.
+
+Quick Troubleshooting
+1. Meeting has no join link:
+- Verify DAILY_API_KEY and provider=Daily payload path.
+- Check API gateway logs for DAILY_ROOM_CREATE_FAILED.
+
+2. No invites delivered:
+- Verify RESEND_API_KEY and RESEND_FROM_EMAIL.
+- Confirm attendee emails exist on related team members.
+
+3. AI assignment not created:
+- Verify ANTHROPIC_API_KEY and worker process is running.
+- Check post-meeting queue and worker logs for failures.
+
+4. Auto-schedule creates no meetings:
+- Confirm sprint has start_date and valid duration/end_date.
+- Check for existing meetings on same day/type that prevent duplicates.

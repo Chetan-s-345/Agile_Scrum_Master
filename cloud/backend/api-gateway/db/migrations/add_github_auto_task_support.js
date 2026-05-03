@@ -52,6 +52,7 @@ async function migrateTenant(orgId, connectionString) {
     await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS github_issue_url TEXT`);
     await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS github_pr_number INT`);
     await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS github_pr_url TEXT`);
+    await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_fingerprint TEXT`);
 
     await pool.query(
       `CREATE TABLE IF NOT EXISTS github_auto_task_rules (
@@ -81,6 +82,12 @@ async function migrateTenant(orgId, connectionString) {
       `CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_project_pr
        ON tasks(project_id, github_pr_number)
        WHERE github_pr_number IS NOT NULL`
+    );
+
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_project_source_fingerprint
+       ON tasks(project_id, source_fingerprint)
+       WHERE source_fingerprint IS NOT NULL`
     );
 
     await pool.query('COMMIT');

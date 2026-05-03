@@ -189,6 +189,7 @@ class GithubService {
       githubOrg: integ.github_org,
       repoName: integ.repo_name,
       lastEventAt: integ.last_event_at,
+      accessTokenConfigured: Boolean(integ.access_token_enc),
       webhookConfigured: Boolean(env.GITHUB_WEBHOOK_SECRET),
       publicGatewayUrlConfigured: Boolean(env.PUBLIC_API_GATEWAY_URL),
     };

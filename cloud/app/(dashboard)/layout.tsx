@@ -1,10 +1,15 @@
 "use client";
 
 import { Navbar } from "@/components/navbar";
-import { Sidebar } from "@/components/sidebar";
 import { useUIStore } from "@/lib/ui-store";
 import AgentBubble from "@/src/components/AgentBubble";
 import { useState } from "react";
+import dynamic from "next/dynamic";
+
+const SidebarNoSSR = dynamic(
+  () => import("@/components/sidebar").then((module) => module.Sidebar),
+  { ssr: false },
+);
 
 export default function DashboardLayout({
   children,
@@ -26,7 +31,7 @@ export default function DashboardLayout({
         />
       ) : null}
 
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((prev) => !prev)} />
+      <SidebarNoSSR collapsed={collapsed} onToggle={() => setCollapsed((prev) => !prev)} />
       <div className={`min-h-screen transition-[margin] duration-200 ${collapsed ? "md:ml-[82px]" : "md:ml-[260px]"}`}>
         <Navbar />
         <div className="jira-page-content min-h-[calc(100vh-7rem)] w-full bg-[var(--bg-primary)]">

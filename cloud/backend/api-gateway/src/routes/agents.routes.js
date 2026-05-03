@@ -1,5 +1,5 @@
 const express = require('express');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const axios = require('axios');
 
 const { authMiddleware } = require('../middleware/auth');
@@ -89,6 +89,20 @@ function parseJsonish(value) {
 function firstAgentHint(agentId) {
   const catalog = AGENT_CATALOG.find((item) => item.id === normalizeAgentId(agentId));
   return catalog?.runtimeHints?.[0] || '';
+}
+
+async function probeHttpHealth(url) {
+  const endpoint = safe(url);
+  if (!endpoint) return false;
+  try {
+    const resp = await axios.get(endpoint, {
+      timeout: 1200,
+      validateStatus: () => true,
+    });
+    return resp.status >= 200 && resp.status < 500;
+  } catch {
+    return false;
+  }
 }
 
 async function ensureAgentRunsStatusTable(orgPool) {
@@ -261,6 +275,146 @@ async function ensureCustomAgentsTables(orgPool) {
       PRIMARY KEY (agent_id, project_id)
     )`
   );
+
+  await orgPool.query(
+    `CREATE TABLE IF NOT EXISTS custom_agent_commit_memory (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      source_sha TEXT,
+      source_title TEXT,
+      source_details TEXT,
+      source_at TIMESTAMPTZ,
+      fingerprint TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`
+  );
+
+  await orgPool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_agent_commit_memory_unique
+     ON custom_agent_commit_memory (project_id, agent_id, fingerprint)`
+  );
+
+  await orgPool.query(
+    `CREATE INDEX IF NOT EXISTS idx_custom_agent_commit_memory_recent
+     ON custom_agent_commit_memory (project_id, agent_id, created_at DESC)`
+  );
+}
+
+function normalizeSignalText(value) {
+  return safe(value).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function buildCommitFingerprint(signal) {
+  const sha = normalizeSignalText(signal?.sha);
+  const title = normalizeSignalText(signal?.title);
+  const details = normalizeSignalText(signal?.details).slice(0, 600);
+  const payload = sha ? `sha:${sha}` : `title:${title}|details:${details}`;
+  return createHash('sha256').update(payload).digest('hex');
+}
+
+function buildAgentTaskFingerprint(projectId, agentId, signal, draftIndex) {
+  const signalFingerprint = buildCommitFingerprint(signal || {});
+  const payload = [
+    'custom-agent-task',
+    safe(projectId),
+    safe(agentId),
+    signalFingerprint,
+    String(Number.isFinite(Number(draftIndex)) ? Number(draftIndex) : 0),
+  ].join('|');
+  return createHash('sha256').update(payload).digest('hex');
+}
+
+function extractCommitSignalsForMemory(signals) {
+  const rows = Array.isArray(signals) ? signals : [];
+  const unique = [];
+  const seen = new Set();
+
+  for (const signal of rows) {
+    const eventType = normalizeSignalText(signal?.eventType);
+    if (eventType === 'manual-intent') continue;
+
+    const hasCommitContext = Boolean(safe(signal?.sha) || safe(signal?.title) || safe(signal?.details));
+    if (!hasCommitContext) continue;
+
+    const fingerprint = buildCommitFingerprint(signal);
+    if (!fingerprint || seen.has(fingerprint)) continue;
+
+    seen.add(fingerprint);
+    unique.push({
+      fingerprint,
+      sha: safe(signal?.sha) || null,
+      title: safe(signal?.title) || null,
+      details: safe(signal?.details) || null,
+      at: signal?.at ? new Date(signal.at).toISOString() : null,
+    });
+
+    if (unique.length >= 10) break;
+  }
+
+  return unique;
+}
+
+async function listKnownCommitFingerprints(orgPool, projectId, agentId, fingerprints) {
+  const keys = (Array.isArray(fingerprints) ? fingerprints : []).map((item) => String(item || '')).filter(Boolean);
+  if (!keys.length) return new Set();
+
+  const resp = await orgPool.query(
+    `SELECT fingerprint
+     FROM custom_agent_commit_memory
+     WHERE project_id = $1
+       AND agent_id = $2
+       AND fingerprint = ANY($3::text[])`,
+    [String(projectId), String(agentId), keys]
+  );
+
+  return new Set((resp.rows || []).map((row) => String(row.fingerprint || '')));
+}
+
+async function upsertCommitMemory(orgPool, projectId, agentId, entries) {
+  const rows = Array.isArray(entries) ? entries : [];
+  let saved = 0;
+
+  for (const entry of rows) {
+    if (!safe(entry?.fingerprint)) continue;
+    await orgPool.query(
+      `INSERT INTO custom_agent_commit_memory (
+         id, project_id, agent_id, source_sha, source_title, source_details, source_at, fingerprint, created_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+       ON CONFLICT (project_id, agent_id, fingerprint) DO UPDATE
+       SET source_sha = EXCLUDED.source_sha,
+           source_title = EXCLUDED.source_title,
+           source_details = EXCLUDED.source_details,
+           source_at = COALESCE(EXCLUDED.source_at, custom_agent_commit_memory.source_at),
+           created_at = NOW()`,
+      [
+        randomUUID(),
+        String(projectId),
+        String(agentId),
+        entry.sha ? String(entry.sha) : null,
+        entry.title ? String(entry.title) : null,
+        entry.details ? String(entry.details) : null,
+        entry.at ? String(entry.at) : null,
+        String(entry.fingerprint),
+      ]
+    );
+    saved += 1;
+  }
+
+  await orgPool.query(
+    `DELETE FROM custom_agent_commit_memory
+     WHERE id IN (
+       SELECT id
+       FROM custom_agent_commit_memory
+       WHERE project_id = $1
+         AND agent_id = $2
+       ORDER BY created_at DESC
+       OFFSET 10
+     )`,
+    [String(projectId), String(agentId)]
+  );
+
+  return saved;
 }
 
 async function listCustomAgentsForProject(orgPool, projectId) {
@@ -386,24 +540,17 @@ function parseGithubToken(rawToken) {
   }
 }
 
-function fallbackDraftFromSignal(signal, prompt, agentName) {
-  const titleBase = normalizeCommitTitle(signal?.title) || 'Repository follow-up task';
-  const descriptionLines = [
-    `Generated from repository activity by ${agentName}.`,
-    `Source event: ${safe(signal?.eventType) || 'github_event'}`,
-    `Task intent: ${safe(prompt) || 'Review and implement changes suggested by repository activity.'}`,
-  ];
-  if (safe(signal?.branch)) descriptionLines.push(`Branch: ${safe(signal.branch)}`);
-  if (safe(signal?.sha)) descriptionLines.push(`Commit: ${safe(signal.sha).slice(0, 12)}`);
-  if (safe(signal?.author)) descriptionLines.push(`Author: ${safe(signal.author)}`);
-  if (safe(signal?.details)) descriptionLines.push(`Context: ${safe(signal.details).slice(0, 280)}`);
-  if (safe(signal?.url)) descriptionLines.push(`Reference: ${safe(signal.url)}`);
-  return {
-    title: titleBase,
-    description: descriptionLines.join('\n'),
-    priority: 'medium',
-    storyPoints: 3,
-  };
+function isNoisySignalTitle(value) {
+  const title = safe(value).toLowerCase();
+  if (!title) return true;
+  return (
+    title.startsWith('merge pull request') ||
+    title.startsWith('merge branch') ||
+    title.startsWith('chore(release)') ||
+    title.startsWith('release:') ||
+    title === 'update' ||
+    title === 'wip'
+  );
 }
 
 function inferLabelsFromDraft(draft, signal) {
@@ -433,15 +580,16 @@ function inferLabelsFromDraft(draft, signal) {
   return labels.slice(0, 8);
 }
 
-function ensureMeaningfulDraft(draft, signal, prompt, agentName) {
-  const fallback = fallbackDraftFromSignal(signal, prompt, agentName);
+function ensureMeaningfulDraft(draft) {
   const title = safe(draft?.title);
   const description = safe(draft?.description);
+  if (!title || !description) return null;
+  if (isGenericTaskTitle(title) || isNoisySignalTitle(title)) return null;
   return {
-    title: !title || isGenericTaskTitle(title) ? fallback.title : title,
-    description: description || fallback.description,
-    priority: safe(draft?.priority || fallback.priority || 'medium').toLowerCase(),
-    storyPoints: Number(draft?.storyPoints || fallback.storyPoints || 3),
+    title,
+    description,
+    priority: safe(draft?.priority || 'medium').toLowerCase(),
+    storyPoints: Number(draft?.storyPoints || 3),
   };
 }
 
@@ -538,6 +686,40 @@ async function fetchSignalsFromGithubApi(orgPool, githubRepo, limit) {
     url: safe(commit?.html_url),
     at: commit?.commit?.author?.date || null,
   })).filter((item) => item.title);
+}
+
+async function resolveProjectGithubRepo(orgPool, projectId) {
+  const projectResp = await orgPool.query(
+    `SELECT TRIM(github_repo) AS github_repo
+     FROM projects
+     WHERE id = $1
+     LIMIT 1`,
+    [String(projectId)]
+  );
+  const configured = safe(projectResp.rows[0]?.github_repo || '');
+  if (configured && configured.includes('/')) return configured;
+
+  const repoResp = await orgPool.query(
+    `SELECT TRIM(gr.full_name) AS full_name
+     FROM github_repos gr
+     LEFT JOIN github_integration gi ON gi.id = gr.owner_connection_id
+     WHERE (gi.is_active = TRUE OR gi.id IS NULL)
+       AND COALESCE(gr.full_name, '') <> ''
+     ORDER BY gr.updated_at DESC NULLS LAST, gr.created_at DESC
+     LIMIT 1`
+  );
+  const fallback = safe(repoResp.rows[0]?.full_name || '');
+  if (!fallback || !fallback.includes('/')) return '';
+
+  await orgPool.query(
+    `UPDATE projects
+     SET github_repo = $2, updated_at = NOW()
+     WHERE id = $1
+       AND (github_repo IS NULL OR TRIM(github_repo) = '')`,
+    [String(projectId), fallback]
+  );
+
+  return fallback;
 }
 
 function parseLlmDrafts(rawText) {
@@ -687,6 +869,11 @@ router.post('/', async (req, res, next) => {
       const lower = safe(source).toLowerCase();
       return lower.includes('rag') || lower.includes('documentation') || lower.includes('docs');
     });
+    const graphEnabled = dataSources.some((source) => {
+      const lower = safe(source).toLowerCase();
+      return lower.includes('graph') || lower.includes('nexus') || lower.includes('network');
+    });
+    const hybridMode = ragEnabled && graphEnabled ? 'graph+rag' : ragEnabled ? 'rag' : graphEnabled ? 'graph' : 'normal';
 
     if (!name) return jsonError(res, 400, 'Bad request', 'name is required.');
     if (!projectIds.length) return jsonError(res, 400, 'Bad request', 'projectIds is required.');
@@ -700,6 +887,30 @@ router.post('/', async (req, res, next) => {
     await ensureAgentConfigsTable(req.orgDb);
 
     const id = `${normalizeAgentId(name)}-${randomUUID().slice(0, 8)}`;
+
+    // Fetch RAG context if hybrid mode or RAG-only mode is enabled (fallback gracefully if unavailable)
+    let ragContext = '';
+    if ((hybridMode === 'graph+rag' || hybridMode === 'rag') && projectIds.length > 0) {
+      try {
+        const projectId = projectIds[0];
+        const aiServiceUrl = safe(process.env.AI_SERVICE_URL || 'http://localhost:8000');
+        const ragPayload = {
+          project_id: projectId,
+          message: `Generate context for creating a new ${role} agent named "${name}". Initial prompt: ${promptTemplate || 'standard task creation'}`,
+        };
+        const ragResp = await axios.post(
+          `${aiServiceUrl}/rag/chat`,
+          ragPayload,
+          { timeout: 10_000, validateStatus: () => true }
+        );
+        if (ragResp.status === 200 && ragResp.data?.response) {
+          ragContext = String(ragResp.data.response).slice(0, 800);
+        }
+      } catch (ragErr) {
+        console.warn(`[agents.routes] RAG context fetch failed for agent "${name}" (will continue without context):`, ragErr.message);
+        // Graceful fallback: agent creation continues without RAG context
+      }
+    }
 
     await req.orgDb.query(
       `INSERT INTO custom_agents (
@@ -741,8 +952,16 @@ router.post('/', async (req, res, next) => {
           projectId,
           JSON.stringify({ events: triggerEvents, conditions: triggerConditions }),
           autonomyLevel,
-          JSON.stringify({ actions, dataSources, ragEnabled, promptTemplate }),
-          promptTemplate || null,
+          JSON.stringify({ 
+            actions, 
+            dataSources, 
+            ragEnabled, 
+            graphEnabled,
+            hybridMode,
+            promptTemplate,
+            ragContext: ragContext || null,
+          }),
+          promptTemplate || ragContext || null,
         ]
       );
     }
@@ -939,7 +1158,7 @@ router.get('/:agentId/stats', async (req, res, next) => {
         [projectId, agentId]
       ),
       req.orgDb.query(
-        `SELECT constraints
+        `SELECT constraints, context_memo
          FROM agent_configs
          WHERE project_id = $1 AND agent_type = $2
          LIMIT 1`,
@@ -990,6 +1209,7 @@ router.get('/:agentId/stats', async (req, res, next) => {
     const actionAgg = actionAggResp.rows[0] || {};
     const decisionAgg = decisionAggResp.rows[0] || {};
     const constraints = cfgResp.rows[0]?.constraints || {};
+    const contextMemo = safe(cfgResp.rows[0]?.context_memo || '');
     const createdTasksByAgent = (createdTasksResp.rows || []).map((row) => ({
       id: String(row.id || ''),
       title: String(row.title || ''),
@@ -1134,7 +1354,13 @@ router.get('/:agentId/stats', async (req, res, next) => {
     const assignments = [...assignmentDedup.values()].slice(0, 30);
     const inngestEndpoint = getInngestEventEndpoint();
     const isProduction = safe(process.env.NODE_ENV).toLowerCase() === 'production';
-    const aiServiceEndpoint = safe(process.env.AI_SERVICE_URL) || (isProduction ? '' : 'http://127.0.0.1:8000');
+    const aiServiceBaseUrl = safe(process.env.AI_SERVICE_URL) || (isProduction ? '' : 'http://127.0.0.1:8000');
+    const aiServiceHealthUrl = aiServiceBaseUrl ? `${aiServiceBaseUrl.replace(/\/+$/, '')}/health` : '';
+
+    const [aiServiceConfigured, inngestConfigured] = await Promise.all([
+      probeHttpHealth(aiServiceHealthUrl),
+      probeHttpHealth(inngestEndpoint),
+    ]);
 
     let ragMigrationReady = false;
     let ragMigrationDetail = 'not-checked';
@@ -1169,10 +1395,10 @@ router.get('/:agentId/stats', async (req, res, next) => {
         executedDecisions: Number(decisionAgg.executed_decisions || 0),
         failedDecisions: Number(decisionAgg.failed_decisions || 0),
         ragEnabled: Boolean(constraints?.ragEnabled),
-        promptTemplateDefined: Boolean(safe(constraints?.promptTemplate)),
-        aiServiceConfigured: Boolean(aiServiceEndpoint),
-        aiServiceEndpoint: aiServiceEndpoint || 'missing',
-        inngestConfigured: Boolean(inngestEndpoint),
+        promptTemplateDefined: Boolean(safe(constraints?.promptTemplate) || contextMemo),
+        aiServiceConfigured,
+        aiServiceEndpoint: aiServiceHealthUrl || 'missing',
+        inngestConfigured,
         inngestEndpoint: inngestEndpoint ? 'configured' : 'missing',
         ragMigrationReady,
         ragMigrationDetail,
@@ -1209,12 +1435,16 @@ router.post('/:agentId/run', async (req, res, next) => {
       [projectId, agentId]
     );
     const cfgConstraints = parseJsonish(cfgResp.rows[0]?.constraints);
-    const prompt = safe(cfgResp.rows[0]?.context_memo || req.body?.promptTemplate || customAgent.name);
+    const operatorPrompt = safe(req.body?.description || req.body?.promptTemplate || req.body?.prompt);
+    const prompt = safe(operatorPrompt || cfgResp.rows[0]?.context_memo || customAgent.name);
     const role = safe(customAgent.role || 'custom');
+    const quickMode = Boolean(req.body?.quickMode);
+    const allowRepeatedSignals = Boolean(req.body?.allowRepeatedSignals);
+    const forceTaskGeneration = Boolean(req.body?.forceTaskGeneration || req.body?.forceGenerateWithoutSignals);
     const requestedTaskCountRaw = Number(req.body?.taskCount);
     const requestedTaskCount = Number.isFinite(requestedTaskCountRaw)
-      ? Math.max(2, Math.min(8, Math.floor(requestedTaskCountRaw)))
-      : 3;
+      ? Math.max(1, Math.min(quickMode ? 3 : 8, Math.floor(requestedTaskCountRaw)))
+      : (quickMode ? 1 : 3);
 
     const sprintResp = await req.orgDb.query(
       `SELECT id
@@ -1234,7 +1464,6 @@ router.post('/:agentId/run', async (req, res, next) => {
       agentId,
     };
 
-    const selectedDataSources = toTextArray(customAgent.data_sources).map((item) => item.toLowerCase());
     const selectedActions = toTextArray(customAgent.actions).map((item) => item.toLowerCase());
     const notificationTargets = [
       ...toTextArray(cfgConstraints?.notificationTargets),
@@ -1243,40 +1472,24 @@ router.post('/:agentId/run', async (req, res, next) => {
       .map((value) => safe(value).toLowerCase())
       .filter((value) => value.includes('@'));
 
-    const projectGithubResp = await req.orgDb.query(
-      `SELECT TRIM(github_repo) AS github_repo
-       FROM projects
-       WHERE id = $1
-       LIMIT 1`,
-      [projectId]
-    );
-    const githubRepo = safe(projectGithubResp.rows[0]?.github_repo || '');
-    const shouldMirrorToGithub =
-      Boolean(githubRepo) &&
-      ((role === 'task-generator' || role === 'custom') ||
-        selectedDataSources.some((item) => item.includes('github')) ||
-        selectedActions.some((item) => item.includes('github')));
+    const githubRepo = await resolveProjectGithubRepo(req.orgDb, projectId);
+    const shouldMirrorToGithub = Boolean(githubRepo);
 
     const createdTasks = [];
     const assignedTasks = [];
     const assignmentFailures = [];
     const githubIssues = [];
     const githubIssueErrors = [];
+    const commitMemory = {
+      checked: false,
+      totalSignals: 0,
+      newSignals: 0,
+      saved: 0,
+      skippedAsRepeated: false,
+    };
     let monitoringEmail = null;
 
-    if ((role === 'task-generator' || role === 'custom') && !sprintId) {
-      const start = new Date();
-      const end = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-      const createdSprint = await executeActionWithPolicy(req.orgDb, context, 'create_sprint', {
-        name: `Auto Sprint ${start.toISOString().slice(0, 10)}`,
-        startDate: start.toISOString().slice(0, 10),
-        endDate: end.toISOString().slice(0, 10),
-        goal: `Auto sprint generated for ${customAgent.name}`,
-      });
-      sprintId = safe(createdSprint?.sprintId || createdSprint?.id);
-    }
-
-    if ((role === 'task-generator' || role === 'custom') && sprintId) {
+    if (role === 'task-generator' || role === 'custom') {
       const dbSignals = await getRepoSignals(req.orgDb, projectId, githubRepo, 24);
       let repoSignals = dbSignals;
       if (!repoSignals.length && githubRepo) {
@@ -1287,7 +1500,45 @@ router.post('/:agentId/run', async (req, res, next) => {
         }
       }
 
-      if (!repoSignals.length) {
+      await ensureCustomAgentsTables(req.orgDb);
+      const commitSignals = extractCommitSignalsForMemory(repoSignals);
+      commitMemory.checked = true;
+      commitMemory.totalSignals = commitSignals.length;
+
+      if (commitSignals.length) {
+        const fingerprints = commitSignals.map((item) => item.fingerprint);
+        const known = await listKnownCommitFingerprints(req.orgDb, projectId, agentId, fingerprints);
+        const unseen = commitSignals.filter((item) => !known.has(item.fingerprint));
+        commitMemory.newSignals = unseen.length;
+
+        try {
+          commitMemory.saved = await upsertCommitMemory(req.orgDb, projectId, agentId, unseen);
+        } catch {
+          // Commit memory persistence is best-effort and must not disrupt successful runs.
+          commitMemory.saved = 0;
+        }
+
+        if (!unseen.length) {
+          commitMemory.skippedAsRepeated = true;
+          if (!allowRepeatedSignals) {
+            repoSignals = [];
+          }
+        }
+      }
+
+      if (!sprintId) {
+        const start = new Date();
+        const end = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+        const createdSprint = await executeActionWithPolicy(req.orgDb, context, 'create_sprint', {
+          name: `Auto Sprint ${start.toISOString().slice(0, 10)}`,
+          startDate: start.toISOString().slice(0, 10),
+          endDate: end.toISOString().slice(0, 10),
+          goal: `Auto sprint generated for ${customAgent.name}`,
+        });
+        sprintId = safe(createdSprint?.sprintId || createdSprint?.id);
+      }
+
+      if (!repoSignals.length && forceTaskGeneration) {
         repoSignals = [
           {
             eventType: 'manual-intent',
@@ -1301,6 +1552,8 @@ router.post('/:agentId/run', async (req, res, next) => {
           },
         ];
       }
+
+      repoSignals = repoSignals.filter((signal) => !isNoisySignalTitle(signal?.title));
 
       let drafts = [];
       try {
@@ -1316,22 +1569,46 @@ router.post('/:agentId/run', async (req, res, next) => {
       }
 
       if (!drafts.length) {
-        drafts = repoSignals.slice(0, requestedTaskCount).map((signal) => fallbackDraftFromSignal(signal, prompt, customAgent.name));
-      }
+        await insertAgentDecision(req.orgDb, {
+          agentType: agentId,
+          projectId,
+          actionDescription: 'Custom agent run skipped task creation due to missing AI/RAG drafts',
+          reasoning: { source: 'manual-run', actor: String(req.user?.userId || ''), prompt },
+          dataUsed: {
+            role,
+            quickMode,
+            prompt,
+            githubRepo,
+            repoSignalCount: repoSignals.length,
+            commitMemory,
+          },
+          status: 'skipped',
+          resolvedBy: String(req.user?.userId || ''),
+          resolutionType: 'ai-drafts-required',
+        });
 
-      if (drafts.length && drafts.length < requestedTaskCount) {
-        let idx = 0;
-        while (drafts.length < requestedTaskCount) {
-          const signal = repoSignals[idx % repoSignals.length];
-          drafts.push(fallbackDraftFromSignal(signal, prompt, customAgent.name));
-          idx += 1;
-        }
+        return res.status(200).json({
+          success: true,
+          createdTasks: [],
+          assignedTasks: [],
+          assignmentFailures: [],
+          monitoringEmail: null,
+          githubIssues: [],
+          githubIssueErrors: [],
+          githubRepo: githubRepo || null,
+          commitMemory,
+          detail: 'Run skipped: no valid AI/RAG task drafts were generated. No fallback task titles were created from raw issue/commit text.',
+        });
       }
 
       let draftIdx = 0;
       for (const draft of drafts.slice(0, requestedTaskCount)) {
         const signal = repoSignals[draftIdx % repoSignals.length];
-        const cleanDraft = ensureMeaningfulDraft(draft, signal, prompt, customAgent.name);
+        const cleanDraft = ensureMeaningfulDraft(draft);
+        if (!cleanDraft) {
+          draftIdx += 1;
+          continue;
+        }
         const title = safe(cleanDraft.title);
         const description = safe(cleanDraft.description);
         const priority = safe(cleanDraft.priority || 'medium').toLowerCase();
@@ -1344,6 +1621,7 @@ router.post('/:agentId/run', async (req, res, next) => {
           priority: ['low', 'medium', 'high', 'critical'].includes(priority) ? priority : 'medium',
           storyPoints: Number.isFinite(storyPoints) ? Math.max(1, Math.min(13, Math.round(storyPoints))) : 3,
           labels,
+          sourceFingerprint: buildAgentTaskFingerprint(projectId, agentId, signal, draftIdx),
         });
 
         let githubIssue = null;
@@ -1367,6 +1645,27 @@ router.post('/:agentId/run', async (req, res, next) => {
         createdTasks.push({ ...createdTask, githubIssue });
         draftIdx += 1;
       }
+
+      if (shouldMirrorToGithub && githubIssues.length === 0) {
+        try {
+          const summaryIssue = await executeActionWithPolicy(req.orgDb, context, 'create_github_issue', {
+            title: `Demo agent run: ${safe(customAgent.name) || 'Custom Agent'} (${new Date().toISOString().slice(0, 10)})`,
+            body: [
+              `Project: ${projectId}`,
+              `Agent: ${safe(customAgent.name) || agentId}`,
+              `Prompt: ${safe(prompt).slice(0, 500) || 'none'}`,
+              `Created tasks: ${createdTasks.length}`,
+            ].join('\n'),
+            labels: ['ai-agent', 'task', 'demo'],
+          });
+          if (summaryIssue?.url) githubIssues.push(summaryIssue);
+        } catch (err) {
+          githubIssueErrors.push({
+            title: 'Demo run summary issue',
+            detail: safe(err?.message) || 'Failed to create fallback GitHub issue.',
+          });
+        }
+      }
     }
 
     if (role === 'assignment' || role === 'custom') {
@@ -1374,6 +1673,7 @@ router.post('/:agentId/run', async (req, res, next) => {
         .map((row) => safe(row?.taskId || row?.id))
         .filter(Boolean);
 
+      const assignmentBatchSize = quickMode ? 3 : 8;
       const unassignedResp = await req.orgDb.query(
         `SELECT id, sprint_id, story_points, tech_tags, priority
          FROM tasks
@@ -1381,8 +1681,8 @@ router.post('/:agentId/run', async (req, res, next) => {
            AND COALESCE(status, 'todo') IN ('todo','in_progress')
            AND assignee_id IS NULL
          ORDER BY created_at ASC
-         LIMIT 8`,
-        [projectId]
+         LIMIT $2`,
+        [projectId, assignmentBatchSize]
       );
 
       const queueById = new Map();
@@ -1406,7 +1706,7 @@ router.post('/:agentId/run', async (req, res, next) => {
         }
       }
 
-      const queue = [...queueById.values()].slice(0, 8);
+      const queue = [...queueById.values()].slice(0, assignmentBatchSize);
       let lastDeveloperId = '';
 
       for (const row of queue) {
@@ -1461,7 +1761,7 @@ router.post('/:agentId/run', async (req, res, next) => {
       }
     }
 
-    if (role === 'monitoring' || selectedActions.some((item) => item.includes('alert') || item.includes('email'))) {
+    if (!quickMode && (role === 'monitoring' || selectedActions.some((item) => item.includes('alert') || item.includes('email')))) {
       const monitoringAggResp = await req.orgDb.query(
         `SELECT
            COUNT(*)::int FILTER (WHERE status = 'blocked') AS blocked_count,
@@ -1547,15 +1847,26 @@ router.post('/:agentId/run', async (req, res, next) => {
     }
 
     try {
-      await sendInngestEvent('agent/custom.run', {
-        orgId: String(req.user?.orgId || ''),
-        projectId,
-        agentId,
-        createdTasks: createdTasks.length,
-        assignedTasks: assignedTasks.length,
-      });
+      if (!quickMode) {
+        await sendInngestEvent('agent/custom.run', {
+          orgId: String(req.user?.orgId || ''),
+          projectId,
+          agentId,
+          createdTasks: createdTasks.length,
+          assignedTasks: assignedTasks.length,
+        });
+      }
     } catch {
       // Do not fail manual runs when event forwarding is unavailable.
+    }
+
+    if (shouldMirrorToGithub && githubIssues.length === 0 && createdTasks.length > 0) {
+      return jsonError(
+        res,
+        502,
+        'GitHub issue creation failed',
+        'Demo mode requires at least one GitHub issue per run. Connect a valid repository and token, then retry.'
+      );
     }
 
     await insertAgentDecision(req.orgDb, {
@@ -1565,7 +1876,9 @@ router.post('/:agentId/run', async (req, res, next) => {
       reasoning: { source: 'manual-run', actor: String(req.user?.userId || ''), prompt },
       dataUsed: {
         role,
+        quickMode,
         prompt,
+        commitMemory,
         createdTasks: createdTasks.length,
         assignedTasks: assignedTasks.length,
         assignmentFailures: assignmentFailures.length,
@@ -1585,7 +1898,8 @@ router.post('/:agentId/run', async (req, res, next) => {
       githubIssues,
       githubIssueErrors,
       githubRepo: githubRepo || null,
-      detail: `Run complete. Created ${createdTasks.length} task(s), assigned ${assignedTasks.length} task(s), assignment failures ${assignmentFailures.length}, mirrored ${githubIssues.length} issue(s) to GitHub${monitoringEmail?.attempted ? ', and processed monitoring email alerts' : ''}.`,
+      commitMemory,
+      detail: `Run complete${quickMode ? ' (quick mode)' : ''}. Created ${createdTasks.length} task(s), assigned ${assignedTasks.length} task(s), assignment failures ${assignmentFailures.length}, mirrored ${githubIssues.length} issue(s) to GitHub${monitoringEmail?.attempted ? ', and processed monitoring email alerts' : ''}.`,
     });
   } catch (err) {
     return next(err);

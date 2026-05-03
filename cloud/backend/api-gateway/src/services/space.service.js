@@ -29,26 +29,31 @@ async function getUniqueSlug(orgPool, baseSlug) {
 }
 
 async function projectChildren(orgPool, projectId) {
-  const [sprints, tasks, goals] = await Promise.all([
-    orgPool.query(
-      `SELECT id, name, status FROM sprints WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5`,
-      [String(projectId)]
-    ),
-    orgPool.query(
-      `SELECT id, title, status FROM tasks WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5`,
-      [String(projectId)]
-    ),
-    orgPool.query(
-      `SELECT id, title, status FROM goals WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5`,
-      [String(projectId)]
-    ),
-  ]);
+  try {
+    const [sprints, tasks, goals] = await Promise.all([
+      orgPool.query(
+        `SELECT id, name, status FROM sprints WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5`,
+        [String(projectId)]
+      ),
+      orgPool.query(
+        `SELECT id, title, status FROM tasks WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5`,
+        [String(projectId)]
+      ),
+      orgPool.query(
+        `SELECT id, title, status FROM goals WHERE project_id = $1 ORDER BY created_at DESC LIMIT 5`,
+        [String(projectId)]
+      ),
+    ]);
 
-  return {
-    sprints: sprints.rows.map((r) => ({ id: r.id, name: r.name, status: r.status })),
-    tasks: tasks.rows.map((r) => ({ id: r.id, name: r.title, status: r.status })),
-    goals: goals.rows.map((r) => ({ id: r.id, name: r.title, status: r.status })),
-  };
+    return {
+      sprints: sprints.rows.map((r) => ({ id: r.id, name: r.name, status: r.status })),
+      tasks: tasks.rows.map((r) => ({ id: r.id, name: r.title, status: r.status })),
+      goals: goals.rows.map((r) => ({ id: r.id, name: r.title, status: r.status })),
+    };
+  } catch (err) {
+    console.warn(`projectChildren failed for project ${projectId}:`, err?.message || err);
+    return { sprints: [], tasks: [], goals: [] };
+  }
 }
 
 class SpaceService {
@@ -142,7 +147,7 @@ class SpaceService {
     if (archived) {
       const current = await orgPool.query('SELECT is_default_space FROM projects WHERE id = $1 LIMIT 1', [String(id)]);
       if (!current.rows[0]) throw Object.assign(new Error('Space not found'), { statusCode: 404 });
-      if (Boolean(current.rows[0].is_default_space)) {
+      if (current.rows[0].is_default_space) {
         throw Object.assign(new Error('Default space cannot be archived'), { statusCode: 400 });
       }
     }
@@ -159,7 +164,7 @@ class SpaceService {
     const orgPool = requireOrgDb(req);
     const current = await orgPool.query('SELECT is_default_space FROM projects WHERE id = $1 LIMIT 1', [String(id)]);
     if (!current.rows[0]) throw Object.assign(new Error('Space not found'), { statusCode: 404 });
-    if (Boolean(current.rows[0].is_default_space)) {
+    if (current.rows[0].is_default_space) {
       throw Object.assign(new Error('Default space cannot be deleted'), { statusCode: 400 });
     }
     try {

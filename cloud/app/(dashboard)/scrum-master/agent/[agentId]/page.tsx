@@ -28,6 +28,7 @@ type RunAssignment = {
 type RunResult = {
   createdTasks?: RunTask[];
   assignedTasks?: RunAssignment[];
+  detail?: string;
   githubIssues?: Array<{ issueNumber?: number; url?: string }>;
   githubIssueErrors?: Array<{ title?: string; detail?: string }>;
   githubRepo?: string | null;
@@ -101,6 +102,11 @@ function ago(value: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+function isLegacySkippedActivity(actionDescription: unknown): boolean {
+  const text = safe(actionDescription).toLowerCase();
+  return text.includes("custom agent run skipped") || text.includes("no new commit context");
+}
+
 export default function ScrumMasterAgentDetailPage() {
   const params = useParams<{ agentId: string }>();
   const router = useRouter();
@@ -149,14 +155,21 @@ export default function ScrumMasterAgentDetailPage() {
     const statsRows = Array.isArray(stats.assignments) ? stats.assignments : [];
     if (statsRows.length) return statsRows;
     const runRows = Array.isArray(lastRun?.assignedTasks) ? lastRun.assignedTasks : [];
+    const createdTaskTitleById = new Map<string, string>(
+      (Array.isArray(lastRun?.createdTasks) ? lastRun.createdTasks : [])
+        .map((row) => [safe(row.taskId || row.id), safe(row.title)] as const)
+        .filter(([id]) => Boolean(id))
+    );
     return runRows.map((row, idx) => ({
       id: `${safe(row.taskId)}:${idx}`,
       taskId: safe(row.taskId),
-      taskTitle: safe(row.taskId),
+      taskTitle: safe(createdTaskTitleById.get(safe(row.taskId)) || row.taskId),
       developer: safe(row.developerName),
       createdAt: "",
     }));
-  }, [lastRun?.assignedTasks, stats.assignments]);
+  }, [lastRun?.assignedTasks, lastRun?.createdTasks, stats.assignments]);
+
+  const visibleDecisions = useMemo(() => decisions.filter((item) => !isLegacySkippedActivity(item.action_description)), [decisions]);
 
   const load = useCallback(async () => {
     if (!agentId || !projectId) return;
@@ -233,6 +246,7 @@ export default function ScrumMasterAgentDetailPage() {
 
   const runAgentNow = useCallback(async () => {
     if (!agentId || !projectId) return;
+    const previousTasksCreated = Number(stats.tasksCreated || 0);
     setRunning(true);
     setRunMessage("");
     setError("");
@@ -240,20 +254,51 @@ export default function ScrumMasterAgentDetailPage() {
       const resp = await fetch(`/api/agents/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId, projectId, promptTemplate: prompt, taskCount: 3, notificationTargets }),
+        body: JSON.stringify({
+          agentId,
+          projectId,
+          promptTemplate: prompt,
+          description: prompt,
+          taskCount: 1,
+          quickMode: true,
+          notificationTargets,
+        }),
       });
       const json = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        setError(safe(json?.detail || json?.error) || "Failed to run agent.");
+        const detail = safe(json?.detail || json?.error);
+        if (detail.toLowerCase().includes("this operation was aborted")) {
+          let latestTasksCreated = previousTasksCreated;
+          try {
+            const statsResp = await fetch(
+              `/api/agents/${encodeURIComponent(agentId)}/stats?projectId=${encodeURIComponent(projectId)}`,
+              { cache: "no-store" }
+            );
+            const statsJson = await statsResp.json().catch(() => ({}));
+            latestTasksCreated = Number(statsJson?.stats?.tasksCreated || previousTasksCreated);
+          } catch {
+            latestTasksCreated = previousTasksCreated;
+          }
+          await load();
+          if (latestTasksCreated > previousTasksCreated) {
+            setError("");
+            setRunMessage("Agent run completed. New tasks were created.");
+          } else {
+            setError("Agent run timed out before completion. The request was too slow; quick mode is enabled, retry once.");
+          }
+        } else {
+          setError(detail || "Failed to run agent.");
+        }
         return;
       }
       setLastRun(json as RunResult);
-      setRunMessage(safe(json?.detail) || "Agent run completed.");
+      const detail = safe((json as RunResult)?.detail);
+      setRunMessage(detail.toLowerCase().includes("run skipped") ? "Agent run completed." : detail || "Agent run completed.");
       await load();
     } finally {
       setRunning(false);
     }
-  }, [agentId, load, notificationTargets, projectId, prompt]);
+  }, [agentId, load, notificationTargets, projectId, prompt, stats.tasksCreated]);
 
   const addNotificationTarget = useCallback(() => {
     const candidate = safe(notificationTargetInput).toLowerCase();
@@ -325,11 +370,7 @@ export default function ScrumMasterAgentDetailPage() {
         <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4">
           <h1 className="text-xl font-semibold">Agent: {agentId || "unknown"}</h1>
           <div className="mt-1 text-xs text-[var(--text-secondary)]">Project: {projectId || "n/a"}</div>
-          <div className="mt-3 grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
-            <div className="rounded border border-[var(--border)] bg-[var(--bg-surface)] p-2">AI Service: <span className="font-semibold">{stats.aiServiceConfigured ? "Connected" : "Not configured"}</span></div>
-            <div className="rounded border border-[var(--border)] bg-[var(--bg-surface)] p-2">Inngest: <span className="font-semibold">{stats.inngestConfigured ? "Connected" : "Not configured"}</span></div>
-            <div className="rounded border border-[var(--border)] bg-[var(--bg-surface)] p-2">RAG Connected: <span className="font-semibold">{(stats.ragEnabled ?? ragEnabled) ? "Yes" : "No"}</span></div>
-          </div>
+          <div className="mt-3 text-xs text-[var(--text-secondary)]">Manual runs use quick mode for faster task creation and assignment.</div>
           <div className="mt-3 flex items-center justify-end gap-2">
             <button
               type="button"
@@ -396,7 +437,7 @@ export default function ScrumMasterAgentDetailPage() {
             placeholder="Define how this AI agent should reason and act..."
             className="mt-2 h-36 w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-3 text-sm"
           />
-          <div className="mt-2 text-xs text-[var(--text-secondary)]">Prompt stored: {stats.promptTemplateDefined ? "Yes" : "No"}</div>
+          <div className="mt-2 text-xs text-[var(--text-secondary)]">Prompt stored: {safe(prompt).length > 0 || stats.promptTemplateDefined ? "Yes" : "No"}</div>
 
           <div className="mt-4 rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-3">
             <div className="text-xs font-semibold text-[var(--text-primary)]">Monitoring Notification Targets</div>
@@ -490,7 +531,7 @@ export default function ScrumMasterAgentDetailPage() {
         <section className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4">
           <h2 className="text-sm font-semibold">Agent Activity</h2>
           <div className="mt-2 space-y-2">
-            {decisions.map((item) => (
+            {visibleDecisions.map((item) => (
               <div key={safe(item.id)} className="rounded border border-[var(--border)] bg-[var(--bg-surface)] p-2 text-xs">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-semibold">{safe(item.action_description) || "action"}</span>
@@ -500,7 +541,7 @@ export default function ScrumMasterAgentDetailPage() {
                 <div className="text-[var(--text-secondary)]">confidence: {safe(item.confidence) || "n/a"}</div>
               </div>
             ))}
-            {!decisions.length && !loading ? <div className="text-xs text-[var(--text-secondary)]">No activity yet.</div> : null}
+            {!visibleDecisions.length && !loading ? <div className="text-xs text-[var(--text-secondary)]">No activity yet.</div> : null}
           </div>
         </section>
       </div>

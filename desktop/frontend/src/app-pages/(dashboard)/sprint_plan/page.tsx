@@ -281,6 +281,18 @@ export default function SprintPlannerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
 
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void loadProjects();
+      if (selectedProjectId) {
+        void loadPlanningSprints(selectedProjectId);
+      }
+    }, 60_000);
+
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId]);
+
   const selectedProject = useMemo(
     () => projects.find((p) => String(p.id) === String(selectedProjectId)) || null,
     [projects, selectedProjectId]
@@ -642,4 +654,3 @@ export default function SprintPlannerPage() {
     </div>
   );
 }
-

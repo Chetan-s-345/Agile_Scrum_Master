@@ -51,8 +51,15 @@ function startWebhookProcessingWorker() {
 
       return { ok: true, result };
     },
-    { connection, concurrency: 2 }
+    { connection, concurrency: 1 }
   );
+
+  _worker.on('active', (job) => {
+    logger.info(
+      { jobId: job.id, jobName: job.name, instance: process.env.RENDER_INSTANCE_NAME },
+      `[${process.env.RENDER_INSTANCE_NAME}] Processing webhook-processing job`
+    );
+  });
 
   _worker.on('completed', (job) => {
     logger.info({ jobId: job.id, jobName: job.name }, 'webhook-processing job completed');

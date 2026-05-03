@@ -13,7 +13,7 @@
     "build": "npm run build:frontend",
     "build:frontend": "npm run build --prefix frontend",
     "start": "electron .",
-    "dist": "npm run build:frontend && electron-builder",
+    "dist": "npm run build:frontend && electron-builder --win nsis",
     "pack": "npm run build:frontend && electron-builder --dir"
   },
   "build": {
@@ -21,11 +21,13 @@
     "directories": {
       "output": "release"
     },
-    "artifactName": "AgileScrumMaster-${version}-${os}-${arch}.${ext}",
+    "afterPack": "scripts/after-pack.js",
+    "artifactName": "AgileScrumMaster-Setup-${version}.${ext}",
     "asar": true,
     "files": [
       "electron/**/*",
       "frontend/dist/**/*",
+      ".env.production",
       "package.json"
     ],
     "win": {
@@ -35,26 +37,31 @@
           "arch": [
             "x64"
           ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
         }
       ],
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "icon": "electron/assets/sprint.ico"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Agile Scrum Master",
+      "installerIcon": "electron/assets/sprint.ico",
+      "uninstallerIcon": "electron/assets/sprint.ico",
+      "installerHeaderIcon": "electron/assets/sprint.ico"
     }
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
     "cross-env": "^7.0.3",
     "electron": "^31.7.7",
     "electron-builder": "^24.13.3",
+    "rcedit": "^5.0.2",
     "wait-on": "^8.0.1"
   }
 }

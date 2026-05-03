@@ -2,6 +2,20 @@ export type MeResponse = {
   user?: { id: string; email: string; fullName?: string; emailVerified?: boolean; createdAt?: string };
   tenantProvisioningMode?: "manual" | "neon";
   activeOrgId?: string | null;
+  developerProfile?: {
+    id: string;
+    memberId?: string;
+    fullName?: string;
+    email?: string;
+    memberRole?: string;
+    techStack?: string[];
+    skillLevels?: Record<string, unknown>;
+    primaryRole?: string | null;
+    currentSprintLoad?: number;
+    maxSprintCapacity?: number;
+    availabilityStatus?: string | null;
+    yearsExperience?: number;
+  } | null;
   memberships?: Array<{
     org: { id: string; name?: string; slug?: string };
     role?: string;

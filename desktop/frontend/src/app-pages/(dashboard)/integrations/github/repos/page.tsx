@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "@/next-shims/link";
+import { useRouter } from "@/next-shims/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { GithubConnectEmptyState } from "@/components/github-connect-empty-state";
 
@@ -19,12 +20,6 @@ type GithubStatus = {
   connected?: boolean;
   githubOrg?: string;
   repoName?: string;
-};
-
-type LinkedRepo = {
-  repoId: string;
-  enabled: boolean;
-  projectId?: string | null;
 };
 
 type ConnectState = "idle" | "connecting" | "success" | "error";
@@ -77,18 +72,15 @@ function extractError(data: unknown): string {
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit) {
-  if (!window.desktopApi?.invoke) {
-    throw new Error("Desktop IPC bridge unavailable");
+  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
+  const text = await resp.text().catch(() => "");
+  let data: T | null = null;
+  try {
+    data = text ? (JSON.parse(text) as T) : null;
+  } catch {
+    data = null;
   }
-  const response = await window.desktopApi.invoke(url, init);
-  if (response && typeof response === "object" && "ok" in (response as Record<string, unknown>)) {
-    const wrapped = response as { ok: boolean; data?: T; error?: { message?: string; detail?: string } };
-    if (!wrapped.ok) {
-      throw new Error(extractError(wrapped.error));
-    }
-    return { ok: true, status: 200, data: (wrapped.data as T) ?? null };
-  }
-  return { ok: true, status: 200, data: (response as T) ?? null };
+  return { ok: resp.ok, status: resp.status, data };
 }
 
 function loadingCards() {
@@ -107,6 +99,7 @@ function loadingCards() {
 }
 
 export default function GithubRepoDiscoveryPage() {
+  const router = useRouter();
   const [repos, setRepos] = useState<GithubRepo[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -117,49 +110,42 @@ export default function GithubRepoDiscoveryPage() {
   const [connectState, setConnectState] = useState<ConnectMap>({});
   const [projectState, setProjectState] = useState<ProjectMap>({});
 
-  const loadRepos = useCallback(async (query = "") => {
+  const loadRepos = useCallback(async () => {
     setError(null);
     setRefreshing(true);
 
-    try {
-      const [availableResp, linkedResp] = await Promise.all([
-        fetchJson<GithubRepo[]>("github:getAvailableRepos", { query }),
-        fetchJson<LinkedRepo[]>("github:getLinkedRepos"),
-      ]);
+    const [statusResp, reposResp] = await Promise.all([
+      fetchJson<GithubStatus>("/api/integrations/github/status"),
+      fetchJson<GithubRepo[]>("/api/integrations/github/repos?all=1"),
+    ]);
 
-      const linkedByRepo = new Map(
-        (Array.isArray(linkedResp.data) ? linkedResp.data : []).map((entry) => [String(entry.repoId || ""), entry])
-      );
+    if (!reposResp.ok) {
+      const msg = extractError(reposResp.data);
+      const noToken =
+        msg.toLowerCase().includes("not connected") ||
+        msg.toLowerCase().includes("token") ||
+        statusResp.data?.connected === false;
 
-      const mergedRepos = (Array.isArray(availableResp.data) ? availableResp.data : []).map((repo) => {
-        const key = String(repo.fullName || repo.id || "");
-        const linked = linkedByRepo.get(key);
-        return {
-          ...repo,
-          hasWebhook: linked ? Boolean(linked.enabled) : Boolean(repo.hasWebhook),
-        };
-      });
-
-      setNoTokenConfigured(false);
-      setRepos(mergedRepos);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
-      const noToken = msg.toLowerCase().includes("not connected") || msg.toLowerCase().includes("token");
       setNoTokenConfigured(noToken);
       setRepos([]);
       setError(noToken ? null : msg);
-    } finally {
       setRefreshing(false);
       setLoading(false);
+      return;
     }
+
+    setNoTokenConfigured(false);
+    setRepos(Array.isArray(reposResp.data) ? reposResp.data : []);
+    setRefreshing(false);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
-      void loadRepos(search);
+      void loadRepos();
     }, 0);
     return () => window.clearTimeout(id);
-  }, [loadRepos, search]);
+  }, [loadRepos]);
 
   const webhookUrl = useMemo(() => {
     if (typeof window === "undefined") return "";
@@ -184,21 +170,27 @@ export default function GithubRepoDiscoveryPage() {
 
   async function onConnectRepo(fullName: string | null) {
     const repoId = String(fullName || "");
-    if (!repoId) return;
+    if (!repoId || !repoId.includes("/")) return;
 
+    const [owner, repo] = repoId.split("/");
     setConnectState((prev) => ({ ...prev, [repoId]: { state: "connecting" } }));
 
-    try {
-      await fetchJson<LinkedRepo>("github:toggleRepoSync", { repoId, enabled: true });
-      setConnectState((prev) => ({ ...prev, [repoId]: { state: "success" } }));
-      window.setTimeout(() => {
-        setConnectState((prev) => ({ ...prev, [repoId]: { state: "idle" } }));
-      }, 1600);
-      await loadRepos(search);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Connect failed";
-      setConnectState((prev) => ({ ...prev, [repoId]: { state: "error", message } }));
+    const resp = await fetchJson<unknown>(
+      `/api/integrations/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/connect`,
+      { method: "POST", headers: { "Content-Type": "application/json" } }
+    );
+
+    if (!resp.ok) {
+      setConnectState((prev) => ({ ...prev, [repoId]: { state: "error", message: extractError(resp.data) } }));
+      return;
     }
+
+    setConnectState((prev) => ({ ...prev, [repoId]: { state: "success" } }));
+    window.setTimeout(() => {
+      setConnectState((prev) => ({ ...prev, [repoId]: { state: "idle" } }));
+    }, 1600);
+
+    await loadRepos();
   }
 
   function projectNameFromRepo(repo: GithubRepo): string {
@@ -216,19 +208,33 @@ export default function GithubRepoDiscoveryPage() {
     if (!fullName) return;
 
     setProjectState((prev) => ({ ...prev, [fullName]: { state: "creating" } }));
-    try {
-      await fetchJson<{ success: boolean }>("github:linkRepoToProject", {
-        repoId: fullName,
-        projectId: projectNameFromRepo(repo).toLowerCase().replace(/\s+/g, "-"),
-      });
-      setProjectState((prev) => ({ ...prev, [fullName]: { state: "success" } }));
-      window.setTimeout(() => {
-        setProjectState((prev) => ({ ...prev, [fullName]: { state: "idle" } }));
-      }, 1800);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Link project failed";
-      setProjectState((prev) => ({ ...prev, [fullName]: { state: "error", message } }));
+    const payload = {
+      name: projectNameFromRepo(repo),
+      description: `Linked to GitHub repository ${fullName}`,
+      githubRepo: fullName,
+      techStack: repo.language ? [String(repo.language)] : [],
+    };
+
+    const resp = await fetchJson<Record<string, unknown>>("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!resp.ok) {
+      setProjectState((prev) => ({ ...prev, [fullName]: { state: "error", message: extractError(resp.data) } }));
+      return;
     }
+
+    const projectId = typeof resp.data?.id === "string" ? resp.data.id : "";
+    setProjectState((prev) => ({ ...prev, [fullName]: { state: "success" } }));
+    if (projectId) {
+      router.push(`/projects/${encodeURIComponent(projectId)}`);
+      return;
+    }
+    window.setTimeout(() => {
+      setProjectState((prev) => ({ ...prev, [fullName]: { state: "idle" } }));
+    }, 1800);
   }
 
   return (
@@ -243,7 +249,7 @@ export default function GithubRepoDiscoveryPage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void loadRepos(search)}
+              onClick={() => void loadRepos()}
               className="rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-semibold hover:bg-zinc-800 disabled:opacity-60"
               disabled={refreshing || loading}
             >
@@ -478,4 +484,3 @@ export default function GithubRepoDiscoveryPage() {
     </div>
   );
 }
-

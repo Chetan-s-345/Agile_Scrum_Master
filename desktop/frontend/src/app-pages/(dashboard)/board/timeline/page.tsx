@@ -27,33 +27,8 @@ type DragState =
   | { taskId: string; mode: "resize"; startX: number; origEnd: Date }
   | null;
 
-type TimelineRow = {
-  task: {
-    id: string;
-    title: string;
-    status?: string;
-    priority?: string;
-    storyPoints?: number;
-    assignee?: { id: string; name?: string } | null;
-    sprintId?: string;
-    sprintName?: string;
-    sprintStartDate?: string;
-    sprintEndDate?: string;
-    epicTitle?: string;
-  };
-  startDate: string;
-  dueDate: string;
-};
-
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<T> {
-  if (typeof window === "undefined" || !window.desktopApi?.invoke) {
-    throw new Error("Desktop IPC bridge is unavailable");
-  }
-  return window.desktopApi.invoke<T>(channel, payload);
 }
 
 function toDate(value?: string): Date | null {
@@ -125,43 +100,39 @@ function TimelineTabPageContent() {
     let ignore = false;
     async function load() {
       try {
-        const rows = await invokeDesktop<TimelineRow[]>("timeline:getTasks", requestedSprintId ? { sprintId: requestedSprintId } : undefined);
-        const timelineRows = Array.isArray(rows) ? rows : [];
+        const sprintsResp = await fetch("/api/sprints", { cache: "no-store" });
+        const sprintsData = await sprintsResp.json().catch(() => null) as { items?: Sprint[] } | null;
+        if (!sprintsResp.ok) throw new Error("Failed to load sprints");
 
-        const nextTasks: Task[] = timelineRows.map((row) => {
-          const task = row.task || { id: "", title: "" };
-          const dueDate = asString(row.dueDate) || toIso(addDays(new Date(), 5));
-          const startDate = asString(row.startDate) || toIso(addDays(new Date(dueDate), -3));
-          return {
-            id: asString(task.id),
-            title: asString(task.title),
-            status: asString(task.status) || "todo",
-            priority: asString(task.priority) || "medium",
-            storyPoints: Number(task.storyPoints || 0),
-            assignee: task.assignee || null,
-            dueDate,
-            startDate,
-            sprintId: asString(task.sprintId) || "unknown",
-            epic: asString(task.epicTitle) || "none",
-          };
-        });
-
-        const sprintMap = new Map<string, Sprint>();
-        timelineRows.forEach((row) => {
-          const task = row.task || {};
-          const sprintId = asString(task.sprintId);
-          if (!sprintId || sprintMap.has(sprintId)) return;
-          sprintMap.set(sprintId, {
-            id: sprintId,
-            name: asString(task.sprintName) || `Sprint ${sprintId}`,
-            startDate: asString(task.sprintStartDate),
-            endDate: asString(task.sprintEndDate),
-          });
-        });
+        const sprintItems = Array.isArray(sprintsData?.items) ? sprintsData!.items : [];
+        const taskLists = await Promise.all(
+          sprintItems.map(async (sprint) => {
+            const resp = await fetch(`/api/tasks?sprintId=${encodeURIComponent(sprint.id)}`, { cache: "no-store" });
+            const data = await resp.json().catch(() => null) as { items?: unknown[] } | null;
+            if (!resp.ok) return [] as Task[];
+            const items = Array.isArray(data?.items) ? data!.items : [];
+            return items.map((item) => {
+              const rec = (item || {}) as Record<string, unknown>;
+              const dueDate = asString(rec.dueDate) || toIso(addDays(new Date(), 5));
+              return {
+                id: asString(rec.id),
+                title: asString(rec.title),
+                status: asString(rec.status) || "todo",
+                priority: asString(rec.priority) || "medium",
+                storyPoints: Number(rec.storyPoints || 0),
+                assignee: (rec.assignee as { id?: string; name?: string } | null) || null,
+                dueDate,
+                startDate: toIso(addDays(new Date(dueDate), -3)),
+                sprintId: sprint.id,
+                epic: asString(rec.epicTitle) || "none",
+              } as Task;
+            });
+          })
+        );
 
         if (ignore) return;
-        setSprints(Array.from(sprintMap.values()));
-        setTasks(nextTasks);
+        setSprints(sprintItems);
+        setTasks(taskLists.flat());
       } catch (e) {
         if (!ignore) setError(e instanceof Error ? e.message : "Failed to load timeline");
       }
@@ -170,7 +141,7 @@ function TimelineTabPageContent() {
     return () => {
       ignore = true;
     };
-  }, [requestedSprintId]);
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -260,6 +231,18 @@ function TimelineTabPageContent() {
       return;
     }
 
+    const resp = await fetch("/api/task-dependencies", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fromId: linkingFromTaskId, toId }),
+    });
+
+    if (!resp.ok) {
+      setToast("Dependency save failed");
+      setLinkingFromTaskId(null);
+      return;
+    }
+
     setDependencies(draft);
     setLinkingFromTaskId(null);
     setToast("Dependency added");
@@ -306,14 +289,18 @@ function TimelineTabPageContent() {
         return;
       }
 
-      try {
-        await invokeDesktop("timeline:updateTaskDates", {
-          taskId: task.id,
-          startDate: task.startDate,
-          dueDate: task.dueDate,
+      if (dragState.mode === "move") {
+        await fetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dueDate: task.dueDate }),
         });
-      } catch (e) {
-        setToast(e instanceof Error ? e.message : "Failed to save timeline dates");
+      } else {
+        await fetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dueDate: task.dueDate }),
+        });
       }
 
       setDrag(null);
@@ -333,15 +320,21 @@ function TimelineTabPageContent() {
     const nextStart = toIso(addDays(start, dayDelta));
     const nextEnd = toIso(addDays(end, dayDelta));
 
+    await fetch(`/api/sprints/${encodeURIComponent(sprint.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startDate: nextStart, endDate: nextEnd }),
+    });
+
     const sprintTasks = tasks.filter((task) => task.sprintId === sprint.id);
     await Promise.all(
       sprintTasks.map((task) => {
         const taskStart = toDate(task.startDate) || new Date();
         const taskEnd = toDate(task.dueDate) || addDays(taskStart, 3);
-        return invokeDesktop("timeline:updateTaskDates", {
-          taskId: task.id,
-          startDate: toIso(addDays(taskStart, dayDelta)),
-          dueDate: toIso(addDays(taskEnd, dayDelta)),
+        return fetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dueDate: toIso(addDays(taskEnd, dayDelta)) }),
         });
       })
     );
@@ -571,4 +564,3 @@ function SprintBar({
     </div>
   );
 }
-

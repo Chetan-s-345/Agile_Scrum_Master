@@ -21,6 +21,7 @@ function stat(label: string, value: number) {
 function SummaryTabPageContent() {
   const searchParams = useSearchParams();
   const requestedSprintId = String(searchParams?.get("sprintId") || "").trim();
+  const requestedProjectId = String(searchParams?.get("projectId") || "").trim();
   const [activeSprint, setActiveSprint] = useState<Sprint | null>(null);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [selectedSprintId, setSelectedSprintId] = useState("");
@@ -34,10 +35,19 @@ function SummaryTabPageContent() {
     async function load() {
       setError(null);
       try {
+        const activeParams = new URLSearchParams({ status: "active" });
+        const planningParams = new URLSearchParams({ status: "planning" });
+        const allParams = new URLSearchParams();
+        if (requestedProjectId) {
+          activeParams.set("projectId", requestedProjectId);
+          planningParams.set("projectId", requestedProjectId);
+          allParams.set("projectId", requestedProjectId);
+        }
+
         const [activeResp, planningResp, allResp] = await Promise.all([
-          fetch("/api/sprints?status=active", { cache: "no-store" }),
-          fetch("/api/sprints?status=planning", { cache: "no-store" }),
-          fetch("/api/sprints", { cache: "no-store" }),
+          fetch(`/api/sprints?${activeParams.toString()}`, { cache: "no-store" }),
+          fetch(`/api/sprints?${planningParams.toString()}`, { cache: "no-store" }),
+          fetch(`/api/sprints${allParams.toString() ? `?${allParams.toString()}` : ""}`, { cache: "no-store" }),
         ]);
         const activeData = await activeResp.json().catch(() => null);
         const planningData = await planningResp.json().catch(() => null);
@@ -54,6 +64,16 @@ function SummaryTabPageContent() {
           if (!id || dedup.has(id)) continue;
           dedup.set(id, sprint);
         }
+        if (requestedSprintId && !dedup.has(requestedSprintId)) {
+          const requestedResp = await fetch(`/api/sprints/${encodeURIComponent(requestedSprintId)}`, { cache: "no-store" });
+          const requestedData = await requestedResp.json().catch(() => null) as { sprint?: Sprint & { projectId?: string; project_id?: string } } | null;
+          const requested = requestedData?.sprint;
+          const requestedId = String(requested?.id || "").trim();
+          const requestedSprintProjectId = String(requested?.projectId || requested?.project_id || "").trim();
+          const sameProject = !requestedProjectId || requestedProjectId === requestedSprintProjectId;
+          if (requestedResp.ok && requestedId && sameProject) dedup.set(requestedId, requested as Sprint);
+        }
+
         const sprintRows = [...dedup.values()];
         const sprint = requestedSprintId
           ? sprintRows.find((item) => String(item.id) === requestedSprintId) || sprintRows[0]
@@ -93,7 +113,7 @@ function SummaryTabPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [requestedSprintId]);
+  }, [requestedProjectId, requestedSprintId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -136,6 +156,11 @@ function SummaryTabPageContent() {
     return { total, completed: board.done.length, inProgress: board.in_progress.length, blocked: board.blocked.length };
   }, [board]);
 
+  const sprintOptions = useMemo(() => {
+    if (!selectedSprintId || sprints.some((item) => String(item.id) === String(selectedSprintId))) return sprints;
+    return [{ id: selectedSprintId, name: "Selected Sprint" }, ...sprints];
+  }, [selectedSprintId, sprints]);
+
   return (
     <div className="space-y-4">
       {error ? <div className="rounded-md border border-[#5a1f1f] bg-[#2a1616] px-3 py-2 text-sm text-[#f3b6b6]">{error}</div> : null}
@@ -155,7 +180,7 @@ function SummaryTabPageContent() {
             onChange={(e) => setSelectedSprintId(e.target.value)}
             className="h-8 min-w-[220px] rounded border border-[var(--border)] bg-[var(--bg-surface)] px-2 text-xs"
           >
-            {sprints.map((sprint) => (
+            {sprintOptions.map((sprint) => (
               <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
             ))}
           </select>

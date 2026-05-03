@@ -134,7 +134,6 @@ router.patch('/alerts/:alertId/acknowledge', async (req, res, next) => {
 
     const bodySchema = z.object({
       actionTaken: z.string().min(1).optional(),
-      confirmMove: z.boolean().optional(),
     });
     const parsedBody = bodySchema.safeParse(req.body || {});
     if (!parsedBody.success) {
@@ -142,7 +141,7 @@ router.patch('/alerts/:alertId/acknowledge', async (req, res, next) => {
     }
 
     const { alertId } = parsedParams.data;
-    const { actionTaken, confirmMove } = parsedBody.data;
+    const { actionTaken } = parsedBody.data;
 
     const orgPool = req.orgDb;
     const actorMemberId = await getActorMemberId(orgPool, req.user?.userId);
@@ -154,58 +153,17 @@ router.patch('/alerts/:alertId/acknowledge', async (req, res, next) => {
     const alert = alertResp.rows[0];
     if (!alert) return res.status(404).json({ error: 'Alert not found' });
 
-    let moved = false;
-    let movedToSprintId = null;
+    await orgPool.query(
+      `UPDATE delay_alerts
+       SET acknowledged = TRUE,
+           acknowledged_by = $2,
+           acknowledged_at = NOW(),
+           action_taken = COALESCE($3, action_taken)
+       WHERE id = $1`,
+      [String(alertId), actorMemberId, actionTaken || null]
+    );
 
-    await orgPool.query('BEGIN');
-    try {
-      if (confirmMove && String(alert.suggestion_action) === 'move_to_next_sprint' && alert.target_task_id) {
-        const sprintResp = await orgPool.query('SELECT id, project_id, end_date FROM sprints WHERE id = $1', [String(alert.sprint_id)]);
-        const sprint = sprintResp.rows[0];
-        if (sprint) {
-          const nextResp = await orgPool.query(
-            `SELECT id
-             FROM sprints
-             WHERE project_id = $1
-               AND status = 'planning'
-               AND start_date > $2::date
-             ORDER BY start_date ASC
-             LIMIT 1`,
-            [String(sprint.project_id), String(sprint.end_date)]
-          );
-          const nextSprint = nextResp.rows[0];
-          if (nextSprint) {
-            await orgPool.query(
-              `UPDATE tasks SET sprint_id = $2, updated_at = NOW() WHERE id = $1`,
-              [String(alert.target_task_id), String(nextSprint.id)]
-            );
-            moved = true;
-            movedToSprintId = String(nextSprint.id);
-          }
-        }
-      }
-
-      await orgPool.query(
-        `UPDATE delay_alerts
-         SET acknowledged = TRUE,
-             acknowledged_by = $2,
-             acknowledged_at = NOW(),
-             action_taken = COALESCE($3, action_taken)
-         WHERE id = $1`,
-        [String(alertId), actorMemberId, actionTaken || null]
-      );
-
-      await orgPool.query('COMMIT');
-    } catch (err) {
-      try {
-        await orgPool.query('ROLLBACK');
-      } catch {
-        // ignore
-      }
-      throw err;
-    }
-
-    return res.status(200).json({ ok: true, moved, movedToSprintId });
+    return res.status(200).json({ ok: true, moved: false, movedToSprintId: null });
   } catch (err) {
     return next(err);
   }
@@ -256,13 +214,26 @@ router.get('/capacity', async (req, res, next) => {
     const orgPool = req.orgDb;
 
     const resp = await orgPool.query(
-      `SELECT full_name, primary_role, max_sprint_capacity, current_sprint_load, remaining_capacity, utilization_pct, merit_score, burnout_risk_flag
-       FROM v_team_capacity
-       ORDER BY remaining_capacity DESC`,
+      `SELECT
+         dp.id AS developer_id,
+         tm.full_name,
+         dp.primary_role,
+         dp.max_sprint_capacity,
+         dp.current_sprint_load,
+         (dp.max_sprint_capacity - dp.current_sprint_load) AS remaining_capacity,
+         ROUND((dp.current_sprint_load::DECIMAL / NULLIF(dp.max_sprint_capacity, 0)) * 100, 2) AS utilization_pct,
+         dp.merit_score,
+         dp.burnout_risk_flag,
+         dp.availability_status
+       FROM developer_profiles dp
+       JOIN team_members tm ON tm.id = dp.member_id
+       WHERE tm.is_active = TRUE
+       ORDER BY (dp.max_sprint_capacity - dp.current_sprint_load) DESC, tm.full_name ASC`,
       []
     );
 
     const items = (resp.rows || []).map((r) => ({
+      developerId: r.developer_id,
       name: r.full_name,
       role: r.primary_role,
       maxSprintCapacity: Number(r.max_sprint_capacity || 0),
@@ -271,6 +242,7 @@ router.get('/capacity', async (req, res, next) => {
       utilizationPct: Number(r.utilization_pct || 0),
       meritScore: Number(r.merit_score || 0),
       burnoutRiskFlag: Boolean(r.burnout_risk_flag),
+      availabilityStatus: String(r.availability_status || 'available'),
     }));
 
     const totals = items.reduce(
@@ -285,6 +257,164 @@ router.get('/capacity', async (req, res, next) => {
     const overallUtilizationPct = totals.maxSprintCapacity > 0 ? Math.round((totals.currentSprintLoad / totals.maxSprintCapacity) * 10000) / 100 : 0;
 
     return res.status(200).json({ items, totals: { ...totals, overallUtilizationPct } });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.get('/developer-activity', async (req, res, next) => {
+  try {
+    const orgPool = req.orgDb;
+    const sprintId = String(req.query.sprintId || '').trim();
+    const developerId = String(req.query.developerId || '').trim();
+    const limit = Math.min(200, Math.max(10, Number(req.query.limit || 50)));
+
+    const hasGithubEventsResp = await orgPool.query(`SELECT to_regclass('github_events') AS name`);
+    const hasGithubEvents = Boolean(hasGithubEventsResp.rows[0]?.name);
+    if (!hasGithubEvents) {
+      return res.status(200).json({
+        summary: {
+          totalEvents: 0,
+          commitCount: 0,
+          pullRequestCount: 0,
+          reviewCount: 0,
+          issueCount: 0,
+          pushCount: 0,
+          additions: 0,
+          deletions: 0,
+          activeDays: 0,
+          lastEventAt: null,
+        },
+        events: [],
+        byDeveloper: [],
+      });
+    }
+
+    const where = [];
+    const params = [];
+    const addFilter = (expr, value) => {
+      params.push(value);
+      where.push(expr.replace('?', `$${params.length}`));
+    };
+
+    if (sprintId) addFilter('t.sprint_id = ?', sprintId);
+    if (developerId) addFilter('ge.developer_id = ?', developerId);
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const summaryResp = await orgPool.query(
+      `SELECT
+         COUNT(*)::int AS total_events,
+         COUNT(*) FILTER (WHERE ge.github_commit_sha IS NOT NULL OR ge.event_type IN ('commit'))::int AS commit_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('pull_request', 'pull_request_opened', 'pull_request_closed', 'pr_opened', 'pr_merged'))::int AS pull_request_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('review', 'pull_request_review'))::int AS review_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('issue', 'issues'))::int AS issue_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('push'))::int AS push_count,
+         COALESCE(SUM(ge.additions), 0)::int AS additions,
+         COALESCE(SUM(ge.deletions), 0)::int AS deletions,
+         COUNT(DISTINCT ge.event_at::date)::int AS active_days,
+         MAX(ge.event_at) AS last_event_at
+       FROM github_events ge
+       LEFT JOIN tasks t ON t.id = ge.task_id
+       ${whereSql}`,
+      params
+    );
+
+    params.push(limit);
+    const eventsResp = await orgPool.query(
+      `SELECT
+         ge.id,
+         ge.event_type,
+         ge.repo_name,
+         ge.github_commit_sha,
+         ge.github_pr_number,
+         ge.branch_name,
+         ge.additions,
+         ge.deletions,
+         ge.event_at,
+         t.id AS task_id,
+         t.title AS task_title,
+         t.sprint_id,
+         tm.full_name AS developer_name,
+         dp.id AS developer_id
+       FROM github_events ge
+       LEFT JOIN tasks t ON t.id = ge.task_id
+       LEFT JOIN developer_profiles dp ON dp.id = ge.developer_id
+       LEFT JOIN team_members tm ON tm.id = dp.member_id
+       ${whereSql}
+       ORDER BY ge.event_at DESC
+       LIMIT $${params.length}`,
+      params
+    );
+
+    const byDevResp = await orgPool.query(
+      `SELECT
+         COALESCE(tm.full_name, 'Unknown') AS developer_name,
+         dp.id AS developer_id,
+         COUNT(*)::int AS total_events,
+         COUNT(*) FILTER (WHERE ge.github_commit_sha IS NOT NULL OR ge.event_type IN ('commit'))::int AS commit_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('pull_request', 'pull_request_opened', 'pull_request_closed', 'pr_opened', 'pr_merged'))::int AS pull_request_count,
+         COUNT(*) FILTER (WHERE ge.event_type IN ('review', 'pull_request_review'))::int AS review_count,
+         COALESCE(SUM(ge.additions), 0)::int AS additions,
+         COALESCE(SUM(ge.deletions), 0)::int AS deletions,
+         MAX(ge.event_at) AS last_event_at
+       FROM github_events ge
+       LEFT JOIN tasks t ON t.id = ge.task_id
+       LEFT JOIN developer_profiles dp ON dp.id = ge.developer_id
+       LEFT JOIN team_members tm ON tm.id = dp.member_id
+       ${whereSql}
+       GROUP BY COALESCE(tm.full_name, 'Unknown'), dp.id
+       ORDER BY total_events DESC, commit_count DESC
+       LIMIT 30`,
+      params.slice(0, where.length)
+    );
+
+    const summary = summaryResp.rows[0] || {};
+    const events = (eventsResp.rows || []).map((r) => ({
+      id: r.id,
+      eventType: r.event_type,
+      repoName: r.repo_name || null,
+      developerId: r.developer_id || null,
+      developerName: r.developer_name || 'Unknown',
+      taskId: r.task_id || null,
+      taskTitle: r.task_title || null,
+      sprintId: r.sprint_id || null,
+      commitSha: r.github_commit_sha || null,
+      pullRequestNumber: r.github_pr_number || null,
+      branchName: r.branch_name || null,
+      additions: Number(r.additions || 0),
+      deletions: Number(r.deletions || 0),
+      eventAt: r.event_at,
+    }));
+
+    const byDeveloper = (byDevResp.rows || []).map((r) => ({
+      developerId: r.developer_id || null,
+      developerName: r.developer_name,
+      totalEvents: Number(r.total_events || 0),
+      commitCount: Number(r.commit_count || 0),
+      pullRequestCount: Number(r.pull_request_count || 0),
+      reviewCount: Number(r.review_count || 0),
+      additions: Number(r.additions || 0),
+      deletions: Number(r.deletions || 0),
+      lastEventAt: r.last_event_at || null,
+    }));
+
+    return res.status(200).json({
+      summary: {
+        totalEvents: Number(summary.total_events || 0),
+        commitCount: Number(summary.commit_count || 0),
+        pullRequestCount: Number(summary.pull_request_count || 0),
+        reviewCount: Number(summary.review_count || 0),
+        issueCount: Number(summary.issue_count || 0),
+        pushCount: Number(summary.push_count || 0),
+        additions: Number(summary.additions || 0),
+        deletions: Number(summary.deletions || 0),
+        activeDays: Number(summary.active_days || 0),
+        lastEventAt: summary.last_event_at || null,
+      },
+      events,
+      byDeveloper,
+    });
   } catch (err) {
     return next(err);
   }
