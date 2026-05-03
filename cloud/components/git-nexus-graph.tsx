@@ -173,10 +173,10 @@ function buildActivityGraph(result: NexusAnalysisResult | null): { nodes: GraphN
     edges.push({ from: "repo", to: id, tone: "#475569" });
   });
 
-  result.suggested_tasks.slice(0, 4).forEach((task, index) => {
-    const id = `task-${index}`;
-    nodes.push({ id, kind: "task", label: task.title, detail: `${task.story_points} pts`, x: 22, y: 32 + index * 14, tone: toneForPriority(task.priority) });
-    edges.push({ from: "repo", to: id, tone: "#334155" });
+    result.suggested_tasks.slice(0, 3).forEach((task, idx) => {
+      const id = `task-${idx}`;
+      nodes.push({ id, kind: "task", label: `${task.title}-${idx}`, detail: `${task.story_points} pts`, x: 22, y: 32 + idx * 14, tone: toneForPriority(task.priority) });
+      edges.push({ from: "repo", to: id, tone: "#334155" });
 
     const assigneeId = devIds.get(task.suggested_assignee_email || "");
     if (assigneeId) edges.push({ from: id, to: assigneeId, tone: "#64748b" });
@@ -623,8 +623,8 @@ export function GitNexusGraph({ result }: { result: NexusAnalysisResult | null }
         <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-3">
           <p className="text-[11px] uppercase tracking-[0.2em] text-[var(--text-secondary)]">Related tasks</p>
           <div className="mt-2 space-y-2">
-            {result.suggested_tasks.slice(0, 3).map((task) => (
-              <div key={task.title} className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2">
+            {result.suggested_tasks.slice(0, 3).map((task, idx) => (
+              <div key={`${task.title}-${idx}`} className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2">
                 <p className="text-sm font-medium text-[var(--text-primary)]">{task.title}</p>
                 <p className="text-xs text-[var(--text-secondary)]">{task.priority} priority · {task.story_points} pts</p>
               </div>

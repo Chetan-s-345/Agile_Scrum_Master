@@ -492,6 +492,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <aside
       className={`fixed left-0 top-0 z-50 h-screen shrink-0 overflow-hidden border-r transition-transform duration-300 ease-in-out md:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} ${sidebarWidth}`}
+      suppressHydrationWarning
       style={{ background: "var(--sidebar-bg)", borderColor: "var(--border)" }}
     >
       <div className="flex h-full flex-col">

@@ -45,6 +45,17 @@ function collectTextCandidates(payload, fallbackText) {
   return parts.join('\n');
 }
 
+function hasCompletionEvidence(textValue) {
+  const value = text(textValue).toLowerCase();
+  if (!value) return false;
+
+  const completionKeyword = /\b(fix(?:es|ed)?|close(?:s|d)?|resolve(?:s|d)?|complete(?:s|d)?|done|finished)\b/i.test(value);
+  const taskReference = /\b([A-Z][A-Z0-9]+-\d+|task-\d+)\b/i.test(value);
+  const mergedKeyword = /\bmerged\b/i.test(value);
+
+  return (completionKeyword && taskReference) || (mergedKeyword && taskReference);
+}
+
 async function queryTaskByJiraKey(orgPool, jiraKeys, repoName) {
   if (!jiraKeys.length) return null;
   const resp = await orgPool.query(
@@ -206,6 +217,47 @@ async function updateProgress(orgPool, taskId, progress, options) {
   return updateResp.rows[0];
 }
 
+async function completeTaskById(orgPool, taskId, payload, eventType) {
+  const currentResp = await orgPool.query(
+    `SELECT id, status, jira_issue_key, sprint_id, project_id, title
+     FROM tasks
+     WHERE id = $1
+     LIMIT 1`,
+    [String(taskId)]
+  );
+  const task = currentResp.rows[0] || null;
+  if (!task) return { ok: false, ignored: true, reason: 'task_not_found' };
+  if (String(task.status) === 'done') return { ok: true, ignored: true, reason: 'already_done', taskId: String(task.id) };
+
+  await orgPool.query(
+    `UPDATE tasks
+     SET status = 'done',
+         progress = GREATEST(COALESCE(progress, 0), 100),
+         completed_at = COALESCE(completed_at, NOW()),
+         updated_at = NOW()
+     WHERE id = $1`,
+    [String(taskId)]
+  );
+
+  await orgPool.query(
+    `INSERT INTO task_comments (task_id, author_id, content, comment_type, metadata)
+     VALUES ($1, NULL, $2, 'status_change', $3::jsonb)`,
+    [
+      String(taskId),
+      `Automatically marked done from GitHub ${eventType || 'evidence'}.`,
+      JSON.stringify({
+        source: 'github',
+        eventType: eventType || null,
+        branch: text(payload?.ref || payload?.pull_request?.head?.ref) || null,
+        prUrl: text(payload?.pull_request?.html_url) || text(payload?.html_url) || null,
+        commitSha: text(payload?.after) || text(payload?.head_commit?.id) || null,
+      }),
+    ]
+  );
+
+  return { ok: true, taskId: String(task.id), completed: true };
+}
+
 async function applyRule(orgPool, payload, rule) {
   const repoName = text(payload?.repository?.full_name) || text(payload?.repository?.name) || null;
   const branch = text(payload?.ref).replace(/^refs\/heads\//, '') || text(payload?.pull_request?.head?.ref) || null;
@@ -282,7 +334,23 @@ class TaskProgressService {
   }
 
   async onPrMerged(orgPool, payload) {
-    return applyRule(orgPool, payload, { progress: 100, setDone: true, eventType: 'pr_merged' });
+    const result = await applyRule(orgPool, payload, { progress: 100, setDone: true, eventType: 'pr_merged' });
+    if (!result?.taskId) return result;
+    return result;
+  }
+
+  async onRelevantCommitPushed(orgPool, payload, details) {
+    const repoName = text(payload?.repository?.full_name) || text(payload?.repository?.name) || null;
+    const linked = await resolveLinkedTask(orgPool, payload, text(details?.commitMessage || ''), repoName);
+    if (!linked.taskId) return { linked: false };
+
+    if (!hasCompletionEvidence(`${details?.commitMessage || ''} ${payload?.head_commit?.message || ''} ${payload?.ref || ''}`)) {
+      return { linked: true, taskId: linked.taskId, completed: false, reason: 'insufficient_completion_evidence' };
+    }
+
+    const completed = await completeTaskById(orgPool, linked.taskId, payload, 'commit_completed');
+    if (!completed.ok) return completed;
+    return { linked: true, taskId: linked.taskId, completed: true };
   }
 
   async getTaskProgress(orgPool, taskId) {

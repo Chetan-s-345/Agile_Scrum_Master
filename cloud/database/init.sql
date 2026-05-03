@@ -212,3 +212,16 @@ CREATE INDEX IF NOT EXISTS idx_developers_merit_score ON app.developers(merit_sc
 CREATE INDEX IF NOT EXISTS idx_performance_history_developer ON app.performance_history(developer_id);
 CREATE INDEX IF NOT EXISTS idx_assignment_log_task ON app.assignment_log(task_id);
 CREATE INDEX IF NOT EXISTS idx_delay_alerts_sprint ON app.delay_alerts(sprint_id);
+
+-- Persisted GitNexus analyses
+CREATE TABLE IF NOT EXISTS app.nexus_analyses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id VARCHAR(255) NOT NULL,
+  repo_url VARCHAR(1024),
+  raw_payload JSONB NOT NULL,
+  mapped_payload JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_nexus_analyses_project ON app.nexus_analyses(project_id, created_at DESC);

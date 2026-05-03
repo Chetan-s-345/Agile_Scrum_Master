@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { AutoTaskRulesPanel } from "@/components/auto-task-rules-panel";
 
 type GithubStatus = {
@@ -10,6 +10,7 @@ type GithubStatus = {
   githubOrg?: string;
   repoName?: string;
   lastEventAt?: string | null;
+  accessTokenConfigured?: boolean;
   webhookConfigured?: boolean;
   publicGatewayUrlConfigured?: boolean;
   error?: string | null;
@@ -115,6 +116,11 @@ function IntegrationsSettingsContent() {
   const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
   const [redeliveringId, setRedeliveringId] = useState<string | null>(null);
   const [githubCopyOk, setGithubCopyOk] = useState(false);
+  const [patOrg, setPatOrg] = useState("");
+  const [patRepo, setPatRepo] = useState("");
+  const [patToken, setPatToken] = useState("");
+  const [patSaving, setPatSaving] = useState(false);
+  const [patStatus, setPatStatus] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -128,6 +134,8 @@ function IntegrationsSettingsContent() {
       ]);
 
       setGithubStatus(ghResp.ok ? ghResp.data : null);
+      setPatOrg(ghResp.ok && ghResp.data?.githubOrg ? ghResp.data.githubOrg : "");
+      setPatRepo(ghResp.ok && ghResp.data?.repoName ? ghResp.data.repoName : "");
 
       if (ghWebhookStatusResp.ok && ghWebhookStatusResp.data) {
         const callback =
@@ -208,6 +216,37 @@ function IntegrationsSettingsContent() {
     await load();
   }
 
+  async function saveGithubPat(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setPatStatus(null);
+
+    const githubOrg = patOrg.trim();
+    const repoName = patRepo.trim();
+    const accessToken = patToken.trim();
+    if (!githubOrg || !repoName || !accessToken) {
+      setError("GitHub org, repo, and PAT token are required.");
+      return;
+    }
+
+    setPatSaving(true);
+    const resp = await fetchJson<unknown>("/api/integrations/github/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ githubOrg, repoName, accessToken }),
+    });
+    setPatSaving(false);
+
+    if (!resp.ok) {
+      setError(extractError(resp.data) || `PAT save failed (${resp.status})`);
+      return;
+    }
+
+    setPatToken("");
+    setPatStatus("Shared PAT saved for this organization.");
+    await load();
+  }
+
   return (
     <div className="min-h-screen bg-white dark:bg-black px-4 py-8">
       <div className="max-w-4xl mx-auto">
@@ -263,6 +302,67 @@ function IntegrationsSettingsContent() {
               </Link>
             </div>
           </div>
+
+          <form onSubmit={(event) => void saveGithubPat(event)} className="mt-5 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950/40 p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-sm font-semibold text-slate-900 dark:text-white">Shared GitHub PAT</div>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                  Store one organization-wide token here so every team member can use the same GitHub connection.
+                </p>
+              </div>
+              <div className="text-xs text-slate-500 dark:text-slate-400 text-right">
+                {githubStatus?.accessTokenConfigured ? "PAT saved" : "No PAT saved"}
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">GitHub Org</span>
+                <input
+                  value={patOrg}
+                  onChange={(e) => setPatOrg(e.target.value)}
+                  placeholder="acme-inc"
+                  className="mt-1 w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-slate-900 dark:text-white"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">Repo Name</span>
+                <input
+                  value={patRepo}
+                  onChange={(e) => setPatRepo(e.target.value)}
+                  placeholder="repository-name"
+                  className="mt-1 w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-slate-900 dark:text-white"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">PAT Token</span>
+                <input
+                  value={patToken}
+                  onChange={(e) => setPatToken(e.target.value)}
+                  type="password"
+                  placeholder="ghp_..."
+                  autoComplete="off"
+                  className="mt-1 w-full rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-slate-900 dark:text-white"
+                />
+              </label>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                type="submit"
+                disabled={patSaving}
+                className="rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-200 text-white dark:text-black px-4 py-2 text-sm font-semibold disabled:opacity-60"
+              >
+                {patSaving ? "Saving..." : "Save shared PAT"}
+              </button>
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                The token is stored once in the org connection record and reused across the workspace.
+              </span>
+            </div>
+
+            {patStatus ? <div className="mt-3 text-sm text-emerald-700 dark:text-emerald-300">{patStatus}</div> : null}
+          </form>
 
           {loading ? (
             <div className="mt-4 text-slate-600 dark:text-slate-300">Loading...</div>

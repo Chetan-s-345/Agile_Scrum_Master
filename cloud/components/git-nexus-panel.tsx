@@ -42,8 +42,11 @@ function extractAnalysis(payload: StreamEnvelope): NexusAnalysisResult | null {
   const direct = payload.data as NexusAnalysisResult | undefined;
   if (direct && typeof direct === "object" && "repo_meta" in direct) return direct;
 
-  const nested = payload.data as { result?: NexusAnalysisResult } | undefined;
+  const nested = payload.data as { result?: NexusAnalysisResult; data?: NexusAnalysisResult } | undefined;
   if (nested?.result && typeof nested.result === "object" && "repo_meta" in nested.result) return nested.result;
+  
+  // Handle double-wrapped SSE events where data contains another event envelope
+  if (nested?.data && typeof nested.data === "object" && "repo_meta" in nested.data) return nested.data as NexusAnalysisResult;
 
   const fromResult = payload.result as { result?: NexusAnalysisResult } | NexusAnalysisResult | undefined;
   if (fromResult && typeof fromResult === "object") {
@@ -107,6 +110,11 @@ export function GitNexusPanel({
   const [error, setError] = useState<string | null>(null);
   const [sandboxTier, setSandboxTier] = useState<string | null>(null);
   const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus | null>(null);
+  const [targetRepo, setTargetRepo] = useState(connectedRepo || "");
+  const [creatingPr, setCreatingPr] = useState(false);
+  const [prUrl, setPrUrl] = useState<string | null>(null);
+  const [prError, setPrError] = useState<string | null>(null);
+  const [loadingPersisted, setLoadingPersisted] = useState(true);
 
   const progressLogRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -132,6 +140,30 @@ export function GitNexusPanel({
       });
   }, []);
 
+  // Load persisted analysis if present so refresh doesn't re-run analysis
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingPersisted(true);
+    (async () => {
+      try {
+        const resp = await fetch(`/api/ai/git-nexus/last?projectId=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+        if (!resp.ok) return;
+        const payload = await resp.json().catch(() => null);
+        if (!cancelled && payload && typeof payload === "object" && "repo_meta" in payload) {
+          const analysis = payload as NexusAnalysisResult;
+          setResult(analysis);
+          onResult?.(analysis);
+        }
+      } catch {}
+      finally {
+        if (!cancelled) setLoadingPersisted(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, onResult]);
+
   function appendProgress(message: string) {
     if (!message) return;
     const line = sanitizeTerminalLine(message);
@@ -151,6 +183,7 @@ export function GitNexusPanel({
     setError(null);
     setProgress([]);
     setResult(null);
+    onResult?.(null as unknown as NexusAnalysisResult);
     setSelectedTasks(new Set());
     setSandboxTier(null);
     setSandboxStatus(null);
@@ -300,6 +333,7 @@ export function GitNexusPanel({
 
   function resetAnalysis() {
     setResult(null);
+    onResult?.(null as unknown as NexusAnalysisResult);
     setProgress([]);
     setSelectedTasks(new Set());
     setError(null);
@@ -409,10 +443,15 @@ export function GitNexusPanel({
             </div>
 
             {error ? <div className="rounded-lg border border-red-500/50 bg-red-950/30 p-3 text-sm text-red-200">{error}</div> : null}
+            {loadingPersisted ? (
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-3 text-sm text-[var(--text-secondary)]">
+                Loading saved analysis from database...
+              </div>
+            ) : null}
 
             <div className="flex gap-3">
               <Button onClick={() => void analyzeRepository()} disabled={analyzing || !repoUrl.trim()} className="flex-1" variant="primary">
-                {analyzing ? "Analyzing..." : connectedRepo ? "Retry analysis" : "Analyze"}
+                {analyzing ? "Analyzing..." : loadingPersisted ? "Loading..." : result ? "Re-run analysis" : "Analyze"}
               </Button>
               {onClose ? (
                 <Button onClick={onClose} variant="default">
@@ -473,12 +512,56 @@ export function GitNexusPanel({
 
             <GitNexusGraph result={result} />
 
+            <div className="mt-4 flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="owner/repo (e.g. org/repo)"
+                value={targetRepo}
+                onChange={(e) => setTargetRepo(e.target.value)}
+                className="rounded-lg border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none"
+              />
+              <button
+                onClick={async () => {
+                  if (!targetRepo.trim()) {
+                    setPrError("Enter target repo owner/repo");
+                    return;
+                  }
+                  setPrError(null);
+                  setCreatingPr(true);
+                  setPrUrl(null);
+                  try {
+                    const resp = await fetch("/api/ai/git-nexus/create-pr", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ repo: targetRepo.trim(), project_id: projectId }),
+                    });
+                    const payload = await resp.json();
+                    if (!resp.ok) {
+                      setPrError(payload?.message || payload?.error || "Failed to create PR");
+                    } else {
+                      setPrUrl(payload?.html_url || payload?.url || null);
+                    }
+                  } catch (e) {
+                    setPrError(String(e));
+                  } finally {
+                    setCreatingPr(false);
+                  }
+                }}
+                className="rounded-lg bg-blue-600 text-white px-3 py-2"
+                disabled={creatingPr}
+              >
+                {creatingPr ? "Creating PR..." : "Create PR"}
+              </button>
+              {prUrl ? <a href={prUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-300">View PR</a> : null}
+              {prError ? <div className="text-sm text-red-400">{prError}</div> : null}
+            </div>
+
             {result.suggested_tasks.length > 0 ? (
               <Card>
                 <h3 className="mb-3 text-lg font-semibold text-[var(--text-primary)]">Suggested Tasks ({result.suggested_tasks.length})</h3>
                 <div className="max-h-64 space-y-2 overflow-y-auto">
-                  {result.suggested_tasks.map((task) => (
-                    <div key={task.title} className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-3">
+                  {result.suggested_tasks.map((task, idx) => (
+                    <div key={`${task.title}-${idx}`} className="rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-3">
                       <div className="flex items-start gap-3">
                         <input type="checkbox" checked={selectedTasks.has(task.title)} onChange={() => toggleTask(task.title)} className="mt-1" />
                         <div className="min-w-0 flex-1">

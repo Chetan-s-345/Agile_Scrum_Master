@@ -38,7 +38,10 @@ class NexusSandboxManager:
         self._refresh_configuration()
 
     def _refresh_configuration(self) -> None:
-        load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+        service_env = Path(__file__).resolve().parents[1] / ".env"
+        root_env = Path(__file__).resolve().parents[3] / ".env"
+        load_dotenv(service_env, override=False)
+        load_dotenv(root_env, override=False)
         self.api_key = os.getenv("E2B_API_KEY", "").strip()
         self.template_name = os.getenv("E2B_TEMPLATE", "agile-gitnexus-runtime").strip() or "agile-gitnexus-runtime"
 

@@ -13,3 +13,6 @@ export {
 	sprintEndCleanupCron,
 	sprintEndCleanupEvent,
 } from "./task-factory";
+
+// ADDED: rag
+export { ingestGitnexusCron } from "./ingestGitnexus";

@@ -89,14 +89,16 @@ export function Modal({ open, onClose, children }: { open: boolean; onClose: () 
 export function PageWrapper({
   title,
   subtitle,
+  className = "",
   children,
 }: {
   title?: string;
   subtitle?: string;
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <div className="min-h-screen p-6" style={{ background: "var(--bg-app)" }}>
+    <div className={`min-h-screen p-6 ${className}`} style={{ background: "var(--bg-app)" }}>
       {title ? (
         <div className="mb-6">
           <h1 className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>

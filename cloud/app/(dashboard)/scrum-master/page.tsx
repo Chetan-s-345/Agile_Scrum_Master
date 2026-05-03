@@ -34,7 +34,7 @@ type CreateAgentForm = {
   projectIds: string[];
 };
 
-const DATA_SOURCE_OPTIONS = ["GitHub", "Database", "Documentation (RAG)"];
+const DATA_SOURCE_OPTIONS = ["GitHub", "Database", "GraphRAG"];
 const TRIGGER_EVENT_OPTIONS = ["github.push", "task.created", "task.updated"];
 const ACTION_OPTIONS = ["create tasks", "assign developers", "send alerts", "reassign tasks"];
 

@@ -783,6 +783,7 @@ CREATE TABLE tasks (
     github_issue_url    TEXT,
     github_pr_number    INT,
     github_pr_url       TEXT,
+    source_fingerprint  TEXT,
     -- AI flags
     ai_delay_risk       BOOLEAN DEFAULT FALSE,
     ai_risk_score       DECIMAL(5,2),
@@ -1654,6 +1655,7 @@ CREATE INDEX idx_tasks_tech_tags            ON tasks USING GIN(tech_tags);
 CREATE INDEX idx_tasks_jira                 ON tasks(jira_issue_id);
 CREATE UNIQUE INDEX uq_tasks_project_issue  ON tasks(project_id, github_issue_number) WHERE github_issue_number IS NOT NULL;
 CREATE UNIQUE INDEX uq_tasks_project_pr     ON tasks(project_id, github_pr_number) WHERE github_pr_number IS NOT NULL;
+CREATE UNIQUE INDEX uq_tasks_project_source_fingerprint ON tasks(project_id, source_fingerprint) WHERE source_fingerprint IS NOT NULL;
 
 -- Sprints
 CREATE INDEX idx_sprints_project            ON sprints(project_id);

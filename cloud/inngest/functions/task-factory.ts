@@ -1,5 +1,5 @@
 import { Pool } from "@neondatabase/serverless";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { inngest } from "../client";
 
 type EventBase = { orgId: string; projectId: string };
@@ -625,38 +625,90 @@ async function createTaskFromSource(
     issueUrl?: string;
     prNumber?: number;
     prUrl?: string;
+    sourceFingerprint?: string;
   }
-): Promise<{ taskId: string; code: string; sprintId: string }> {
+): Promise<{ taskId: string; code: string; sprintId: string; created: boolean }> {
   const sprintId = await resolveSprintId(orgPool, input.projectId);
   if (!sprintId) throw new Error("No active/planning sprint found for project");
+  await orgPool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_fingerprint TEXT`);
+  await orgPool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_project_source_fingerprint
+     ON tasks(project_id, source_fingerprint)
+     WHERE source_fingerprint IS NOT NULL`
+  );
   const code = await nextTaskCode(orgPool);
   const requiredSkills = Array.isArray(input.requiredSkills) ? input.requiredSkills : [];
   const finalDescription = buildRagDescription(String(input.description || ""), input.ragRefs || [], requiredSkills);
+  const sourceFingerprint = String(input.sourceFingerprint || "").trim();
 
-  const resp = await orgPool.query(
-    `INSERT INTO tasks (
+  if (sourceFingerprint) {
+    const existingResp = await orgPool.query(
+      `SELECT id, jira_issue_key, sprint_id
+       FROM tasks
+       WHERE project_id = $1
+         AND source_fingerprint = $2
+       LIMIT 1`,
+      [String(input.projectId), sourceFingerprint]
+    );
+    const existingRow = existingResp.rows[0];
+    if (existingRow) {
+      return {
+        taskId: String(existingRow.id),
+        code: String(existingRow.jira_issue_key || code),
+        sprintId: String(existingRow.sprint_id || sprintId),
+        created: false,
+      };
+    }
+  }
+
+  try {
+    const resp = await orgPool.query(
+      `INSERT INTO tasks (
        sprint_id, project_id, title, description, type, priority, status,
        tech_tags, story_points,
-       jira_issue_key, github_issue_number, github_issue_url, github_pr_number, github_pr_url
-     ) VALUES ($1,$2,$3,$4,$5,$6,'todo',$7,$8,$9,$10,$11,$12,$13)
+       jira_issue_key, github_issue_number, github_issue_url, github_pr_number, github_pr_url, source_fingerprint
+     ) VALUES ($1,$2,$3,$4,$5,$6,'todo',$7,$8,$9,$10,$11,$12,$13,$14)
      RETURNING id`,
-    [
-      sprintId,
-      String(input.projectId),
-      String(input.title),
-      finalDescription || null,
-      String(input.type || "task"),
-      String(input.priority || "medium"),
-      input.techTags || [],
-      Number(input.storyPoints || 0),
-      code,
-      input.issueNumber || null,
-      input.issueUrl || null,
-      input.prNumber || null,
-      input.prUrl || null,
-    ]
-  );
-  return { taskId: String(resp.rows[0].id), code, sprintId };
+      [
+        sprintId,
+        String(input.projectId),
+        String(input.title),
+        finalDescription || null,
+        String(input.type || "task"),
+        String(input.priority || "medium"),
+        input.techTags || [],
+        Number(input.storyPoints || 0),
+        code,
+        input.issueNumber || null,
+        input.issueUrl || null,
+        input.prNumber || null,
+        input.prUrl || null,
+        sourceFingerprint || null,
+      ]
+    );
+    return { taskId: String(resp.rows[0].id), code, sprintId, created: true };
+  } catch (error) {
+    if (String((error as { code?: string })?.code || "") === "23505" && sourceFingerprint) {
+      const existingResp = await orgPool.query(
+        `SELECT id, jira_issue_key, sprint_id
+         FROM tasks
+         WHERE project_id = $1
+           AND source_fingerprint = $2
+         LIMIT 1`,
+        [String(input.projectId), sourceFingerprint]
+      );
+      const existingRow = existingResp.rows[0];
+      if (existingRow) {
+        return {
+          taskId: String(existingRow.id),
+          code: String(existingRow.jira_issue_key || code),
+          sprintId: String(existingRow.sprint_id || sprintId),
+          created: false,
+        };
+      }
+    }
+    throw error;
+  }
 }
 
 type AssignmentCandidate = {
@@ -802,6 +854,15 @@ function extractTaskCode(branchName: string): string | null {
   return match?.[1] ? String(match[1]).toUpperCase() : null;
 }
 
+function normalizeFingerprintPart(value: string): string {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function buildSourceFingerprint(parts: Array<string | number | null | undefined>): string {
+  const payload = parts.map((part) => normalizeFingerprintPart(String(part ?? ""))).join("|");
+  return createHash("sha256").update(payload).digest("hex");
+}
+
 export const githubIssueToTask = inngest.createFunction(
   { id: "github-issue-to-task", name: "GitHub Issue to Task" },
   { event: "github/issue.opened" },
@@ -812,7 +873,8 @@ export const githubIssueToTask = inngest.createFunction(
 
     try {
       const policy = await step.run("read-policy", async () => getProjectPolicy(orgPool, data.projectId));
-      if (!policy.createFromIssue) {
+      const forceFallback = String(process.env.FORCE_CREATE_FALLBACK || "").toLowerCase() === "true";
+      if (!policy.createFromIssue && !forceFallback) {
         await logAction(orgPool, {
           projectId: data.projectId,
           action: "issue_auto_create_disabled",
@@ -822,6 +884,27 @@ export const githubIssueToTask = inngest.createFunction(
         });
         await trackRun(orgPool, "github-issue-to-task", "completed");
         return { skipped: true, reason: "policy_disabled" };
+      }
+
+      // **BUG FIX 1: Check if this issue number was already processed (prevent webhook retry duplicates)**
+      const existingIssue = await step.run("check-issue-number", async () =>
+        orgPool.query(
+          `SELECT id FROM tasks WHERE project_id = $1 AND github_issue_number = $2 LIMIT 1`,
+          [String(data.projectId), Number(data.issueNumber)]
+        )
+      );
+      
+      if (existingIssue.rows.length > 0) {
+        await logAction(orgPool, {
+          projectId: data.projectId,
+          action: "duplicate_issue_skipped",
+          entityType: "task",
+          entityId: String(existingIssue.rows[0].id),
+          payload: { issueNumber: data.issueNumber, title: data.title },
+          result: { reason: "already_processed" },
+        });
+        await trackRun(orgPool, "github-issue-to-task", "completed");
+        return { skipped: true, matchedTaskId: String(existingIssue.rows[0].id) };
       }
 
       const duplicates = await step.run("deduplicate", async () => searchSimilar(orgPool, data.title, data.projectId));
@@ -873,33 +956,36 @@ export const githubIssueToTask = inngest.createFunction(
           ragRefs,
           issueNumber: Number(data.issueNumber),
           issueUrl,
+          sourceFingerprint: buildSourceFingerprint(["issue", data.projectId, data.issueNumber]),
         })
       );
 
-      await step.run("embed-task", async () =>
-        upsertTaskEmbedding(created.taskId, created.code, data.title, data.body || "", data.projectId)
-      );
-      await step.run("fire-assigner", async () => emitTaskCreated(created.taskId, data.projectId, data.orgId));
-      await step.run("notify", async () =>
-        notifyProject(
-          orgPool,
-          data.projectId,
-          "Task created from GitHub issue",
-          `Agent created task ${created.code} from GitHub issue #${Number(data.issueNumber)}`,
-          created.taskId
-        )
-      );
+      if (created.created) {
+        await step.run("embed-task", async () =>
+          upsertTaskEmbedding(created.taskId, created.code, data.title, data.body || "", data.projectId)
+        );
+        await step.run("fire-assigner", async () => emitTaskCreated(created.taskId, data.projectId, data.orgId));
+        await step.run("notify", async () =>
+          notifyProject(
+            orgPool,
+            data.projectId,
+            "Task created from GitHub issue",
+            `Agent created task ${created.code} from GitHub issue #${Number(data.issueNumber)}`,
+            created.taskId
+          )
+        );
+      }
 
       await logAction(orgPool, {
         projectId: data.projectId,
-        action: "task_created",
+        action: created.created ? "task_created" : "task_duplicate_reused",
         entityType: "task",
         entityId: created.taskId,
         payload: { source: "github", issueNumber: data.issueNumber },
-        result: { code: created.code },
+        result: { code: created.code, created: created.created },
       });
       await trackRun(orgPool, "github-issue-to-task", "completed");
-      return { skipped: false, taskId: created.taskId, code: created.code };
+      return { skipped: false, taskId: created.taskId, code: created.code, created: created.created };
     } catch (error) {
       await logAction(orgPool, {
         projectId: data.projectId,
@@ -926,7 +1012,8 @@ export const prToTask = inngest.createFunction(
 
     try {
       const policy = await getProjectPolicy(orgPool, data.projectId);
-      if (!policy.createFromPr) {
+      const forceFallback = String(process.env.FORCE_CREATE_FALLBACK || "").toLowerCase() === "true";
+      if (!policy.createFromPr && !forceFallback) {
         await logAction(orgPool, {
           projectId: data.projectId,
           action: "pr_auto_create_disabled",
@@ -996,7 +1083,7 @@ export const prToTask = inngest.createFunction(
       const techTags = inferTechTags(data.title, data.body || "");
       const storyPoints = inferStoryPoints(priority);
       const ragRefs = await searchSimilar(orgPool, `${data.title}\n${data.body || ""}`, data.projectId);
-      
+
       const enhancedDescription = await generateTaskDescription({
         title: data.title,
         rawBody: data.body,
@@ -1007,7 +1094,7 @@ export const prToTask = inngest.createFunction(
         type,
         similarTasks: ragRefs.filter((r) => r.similarity >= 0.5).slice(0, 3),
       });
-      
+
       const created = await createTaskFromSource(orgPool, {
         projectId: data.projectId,
         title: `Review: ${data.title}`,
@@ -1020,26 +1107,31 @@ export const prToTask = inngest.createFunction(
         ragRefs: ragRefs.filter((r) => r.similarity >= 0.5).slice(0, 3),
         prNumber: Number(data.prNumber),
         prUrl: `https://github.com/${data.repoFullName}/pull/${Number(data.prNumber)}`,
+        sourceFingerprint: buildSourceFingerprint(["pr", data.projectId, data.prNumber]),
       });
-      await upsertTaskEmbedding(created.taskId, created.code, `Review: ${data.title}`, enhancedDescription, data.projectId);
-      await emitTaskCreated(created.taskId, data.projectId, data.orgId);
-      await notifyProject(
-        orgPool,
-        data.projectId,
-        "Task created from PR",
-        `Agent created task ${created.code} from GitHub PR #${Number(data.prNumber)}`,
-        created.taskId
-      );
+
+      if (created.created) {
+        await upsertTaskEmbedding(created.taskId, created.code, `Review: ${data.title}`, enhancedDescription, data.projectId);
+        await emitTaskCreated(created.taskId, data.projectId, data.orgId);
+        await notifyProject(
+          orgPool,
+          data.projectId,
+          "Task created from PR",
+          `Agent created task ${created.code} from GitHub PR #${Number(data.prNumber)}`,
+          created.taskId
+        );
+      }
+
       await logAction(orgPool, {
         projectId: data.projectId,
-        action: "task_created_from_pr",
+        action: created.created ? "task_created_from_pr" : "task_duplicate_reused_from_pr",
         entityType: "task",
         entityId: created.taskId,
         payload: { prNumber: data.prNumber },
-        result: { code: created.code },
+        result: { code: created.code, created: created.created },
       });
       await trackRun(orgPool, "pr-to-task", "completed");
-      return { linked: false, created: true, taskId: created.taskId, code: created.code };
+      return { linked: false, created: created.created, taskId: created.taskId, code: created.code };
     } catch (error) {
       await logAction(orgPool, {
         projectId: data.projectId,
@@ -1056,81 +1148,152 @@ export const prToTask = inngest.createFunction(
   }
 );
 
+
+// Exported handler so tests/harnesses can call it directly.
+export async function handleGithubPush(orgPool: Pool, data: GithubPushData): Promise<{ created: number; skipped?: boolean; reason?: string }> {
+  await trackRun(orgPool, "github-push-to-task", "running");
+
+  try {
+    const policy = await getProjectPolicy(orgPool, data.projectId);
+    const forceFallback = String(process.env.FORCE_CREATE_FALLBACK || "").toLowerCase() === "true";
+    if (!policy.createFromIssue && !policy.createFromPr && !forceFallback) {
+      await trackRun(orgPool, "github-push-to-task", "completed");
+      return { created: 0, skipped: true, reason: "policy_disabled" };
+    }
+
+    const commits = Array.isArray(data.commits) ? data.commits : [];
+    const actionable = commits.filter((c) => {
+      const m = String(c.message || "").toLowerCase();
+      return ["feat", "fix", "refactor", "perf", "security"].some((k) => m.includes(k));
+    }).slice(0, 3);
+
+    let createdCount = 0;
+
+    for (const [draftIndex, commit] of actionable.entries()) {
+      const message = String(commit.message || "").trim();
+      const commitSha = String(commit.id || "").slice(0, 12);
+      if (!message || !commitSha) continue;
+      if (/^merge pull request/i.test(message) || /^merge branch/i.test(message)) continue;
+
+      const existingByCommit = await orgPool.query(
+        `SELECT id FROM tasks WHERE project_id = $1 AND source_fingerprint = $2 LIMIT 1`,
+        [String(data.projectId), buildSourceFingerprint(["push-fallback", data.projectId, commitSha, draftIndex])]
+      );
+      if (existingByCommit.rows.length > 0) continue;
+
+      const duplicates = await searchSimilar(orgPool, message, data.projectId);
+      if (duplicates.find((d) => d.similarity > 0.85)) continue;
+
+      const priority = classifyPriority(message, "", []);
+      const techTags = inferTechTags(message, "");
+      const ragRefs = duplicates.filter((r) => r.similarity >= 0.55).slice(0, 3);
+
+      let taskDrafts: Array<{ title: string; description: string }> = [];
+      try {
+        if (GROQ_API_KEY) {
+          const ragContext = ragRefs.map((r) => `Related: ${String(r.content || "").slice(0, 120)}`).join("; ");
+          const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${GROQ_API_KEY}`,
+            },
+            body: JSON.stringify({
+              model: GROQ_MODEL,
+              temperature: 0.3,
+              max_tokens: 600,
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    "Generate 1-3 concise actionable follow-up tasks from the commit. Return JSON array only with fields title and description.",
+                },
+                {
+                  role: "user",
+                  content: `Commit: ${message}\nAuthor: ${commit.author || "unknown"}\nContext: ${ragContext || "none"}`,
+                },
+              ],
+            }),
+          });
+
+          if (response.ok) {
+            const json = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+            const content = String(json.choices?.[0]?.message?.content || "").trim();
+            const parsed = JSON.parse(content) as unknown;
+            if (Array.isArray(parsed)) {
+              taskDrafts = parsed
+                .map((item): { title: string; description: string } | null => {
+                  if (!item || typeof item !== "object") return null;
+                  const obj = item as Record<string, unknown>;
+                  const title = String(obj.title || "").trim();
+                  const description = String(obj.description || "").trim();
+                  if (!title || !description) return null;
+                  return { title: title.slice(0, 120), description: description.slice(0, 1000) };
+                })
+                .filter((item): item is { title: string; description: string } => item !== null)
+                .slice(0, 3);
+            }
+          }
+        }
+      } catch {
+        taskDrafts = [];
+      }
+
+      if (taskDrafts.length > 0) {
+        for (const [taskIndex, draft] of taskDrafts.entries()) {
+          const created = await createTaskFromSource(orgPool, {
+            projectId: data.projectId,
+            title: draft.title,
+            description: draft.description,
+            priority,
+            type: "task",
+            techTags,
+            requiredSkills: techTags,
+            storyPoints: inferStoryPoints(priority),
+            ragRefs,
+            sourceFingerprint: buildSourceFingerprint(["push", data.projectId, commitSha, draftIndex, taskIndex]),
+          });
+          if (created.created) {
+            await upsertTaskEmbedding(created.taskId, created.code, draft.title, draft.description, data.projectId);
+            await emitTaskCreated(created.taskId, data.projectId, data.orgId);
+            createdCount += 1;
+          }
+        }
+      } else {
+        await logAction(orgPool, {
+          projectId: data.projectId,
+          action: "push_task_skipped_no_ai_drafts",
+          entityType: "project",
+          entityId: data.projectId,
+          payload: { commitSha, message: message.slice(0, 120) },
+          result: { reason: "ai_or_rag_drafts_required" },
+        });
+      }
+    }
+
+    await logAction(orgPool, {
+      projectId: data.projectId,
+      action: "tasks_created_from_push",
+      entityType: "project",
+      entityId: data.projectId,
+      payload: { commitCount: commits.length, actionableCount: actionable.length },
+      result: { createdCount },
+    });
+    await trackRun(orgPool, "github-push-to-task", "completed");
+    return { created: createdCount };
+  } catch (error) {
+    await trackRun(orgPool, "github-push-to-task", "failed");
+    throw error;
+  }
+}
+
 export const githubPushToTask = inngest.createFunction(
   { id: "github-push-to-task", name: "GitHub Push to Task" },
   { event: "github/push" },
   async ({ event }) => {
     const data = event.data as GithubPushData;
     const orgPool = await getTenantPool(data.orgId);
-    await trackRun(orgPool, "github-push-to-task", "running");
-
-    try {
-      const policy = await getProjectPolicy(orgPool, data.projectId);
-      if (!policy.createFromIssue && !policy.createFromPr) {
-        await trackRun(orgPool, "github-push-to-task", "completed");
-        return { created: 0, skipped: true, reason: "policy_disabled" };
-      }
-
-      const commits = Array.isArray(data.commits) ? data.commits : [];
-      const actionable = commits.filter((c) => {
-        const m = String(c.message || "").toLowerCase();
-        return ["feat", "fix", "refactor", "perf", "security"].some((k) => m.includes(k));
-      }).slice(0, 3);
-
-      let createdCount = 0;
-      for (const commit of actionable) {
-        const message = String(commit.message || "").trim();
-        if (!message) continue;
-        const duplicates = await searchSimilar(orgPool, message, data.projectId);
-        // Commit messages are short/noisy, so use a slightly higher duplicate cutoff.
-        if (duplicates.some((d) => d.similarity > 0.86)) {
-          continue;
-        }
-
-        const priority = classifyPriority(message, "", []);
-        const techTags = inferTechTags(message, "");
-        
-        const enhancedDescription = await generateTaskDescription({
-          title: message.slice(0, 120),
-          commitMessage: message,
-          commitAuthor: commit.author,
-          commitUrl: commit.url,
-          techTags,
-          priority,
-          type: "task",
-          similarTasks: duplicates.filter((r) => r.similarity >= 0.5).slice(0, 3),
-        });
-        
-        const created = await createTaskFromSource(orgPool, {
-          projectId: data.projectId,
-          title: `Follow-up: ${message.slice(0, 120)}`,
-          description: enhancedDescription,
-          priority,
-          type: "task",
-          techTags,
-          requiredSkills: techTags,
-          storyPoints: inferStoryPoints(priority),
-          ragRefs: duplicates.filter((r) => r.similarity >= 0.5).slice(0, 3),
-        });
-        await upsertTaskEmbedding(created.taskId, created.code, `Follow-up: ${message}`, enhancedDescription, data.projectId);
-        await emitTaskCreated(created.taskId, data.projectId, data.orgId);
-        createdCount += 1;
-      }
-
-      await logAction(orgPool, {
-        projectId: data.projectId,
-        action: "tasks_created_from_push",
-        entityType: "project",
-        entityId: data.projectId,
-        payload: { commitCount: commits.length, actionableCount: actionable.length },
-        result: { createdCount },
-      });
-      await trackRun(orgPool, "github-push-to-task", "completed");
-      return { created: createdCount };
-    } catch (error) {
-      await trackRun(orgPool, "github-push-to-task", "failed");
-      throw error;
-    }
+    return await handleGithubPush(orgPool, data);
   }
 );
 
@@ -1159,7 +1322,6 @@ export const taskCreatedAutoAssign = inngest.createFunction(
         await trackRun(orgPool, "task-created-auto-assign", "completed");
         return { assigned: false };
       }
-
       const result = await autoAssignTask(orgPool, taskId, projectId);
       await logAction(orgPool, {
         projectId,

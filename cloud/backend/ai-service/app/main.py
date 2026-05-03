@@ -9,7 +9,11 @@ from app.routes import autonomous_router, agentic_sprint_router, groq_features_r
 from app.services.db import close_pool, ensure_ml_schema
 from git_nexus.routes import router as git_nexus_router
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+_service_env = Path(__file__).resolve().parents[1] / ".env"
+_root_env = Path(__file__).resolve().parents[3] / ".env"
+
+load_dotenv(_service_env)
+load_dotenv(_root_env, override=False)
 
 app = FastAPI(title="AI Sprint Manager - AI Service")
 logger = logging.getLogger("ai-service")
@@ -27,6 +31,10 @@ app.include_router(autonomous_router)
 app.include_router(groq_features_router)
 app.include_router(ml_router)
 app.include_router(git_nexus_router, prefix="/api/v1", tags=["gitnexus"])
+
+# ADDED: rag
+from app.routes import rag_router
+app.include_router(rag_router)
 
 
 @app.on_event("startup")

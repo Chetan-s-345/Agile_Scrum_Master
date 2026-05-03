@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Card, PageWrapper } from "@/components/ui/themed";
-import { GitNexusChatBox } from "@/components/git-nexus-chatbox";
+import { GitNexusRagChatBox } from "@/components/git-nexus-rag-chatbox";
 import { GitNexusPanel } from "@/components/git-nexus-panel";
 import type { NexusAnalysisResult } from "@/types/git-nexus";
 
@@ -23,7 +23,7 @@ export default function GitNexusPage() {
     }
   };
   const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState(getQueryProjectId() ?? "");
+  const [projectId, setProjectId] = useState("");
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectsError, setProjectsError] = useState("");
   const [analysisResult, setAnalysisResult] = useState<NexusAnalysisResult | null>(null);
@@ -39,9 +39,6 @@ export default function GitNexusPage() {
   }, [analysisResult]);
   const structureFieldNames = useMemo(() => {
     return structurePayload ? Object.keys(structurePayload).sort() : [];
-  }, [structurePayload]);
-  const structureJson = useMemo(() => {
-    return structurePayload ? JSON.stringify(structurePayload, null, 2) : "{}";
   }, [structurePayload]);
   const [chatOpen, setChatOpen] = useState(true);
   const [chatWidth, setChatWidth] = useState(420);
@@ -86,6 +83,42 @@ export default function GitNexusPage() {
       },
     ];
   }, []);
+
+  useEffect(() => {
+    // Read window-dependent query params only after mount to avoid hydration mismatch.
+    const fromQuery = safeText(getQueryProjectId());
+    if (fromQuery) {
+      setProjectId((current) => safeText(current) || fromQuery);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPersistedAnalysis() {
+      if (!projectId.trim()) {
+        setAnalysisResult(null);
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/ai/git-nexus/last?projectId=${encodeURIComponent(projectId.trim())}`, { cache: "no-store" });
+        if (!response.ok) return;
+
+        const payload = (await response.json().catch(() => null)) as NexusAnalysisResult | null;
+        if (!cancelled && payload && typeof payload === "object" && "repo_meta" in payload) {
+          setAnalysisResult(payload);
+        }
+      } catch {
+        // Keep existing state if DB lookup is temporarily unavailable.
+      }
+    }
+
+    void loadPersistedAnalysis();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   const loadProjects = useCallback(async () => {
     setProjectLoading(true);
@@ -139,10 +172,8 @@ export default function GitNexusPage() {
   }, [loadProjects]);
 
   return (
-    <PageWrapper title="GitNexus Analysis" subtitle="">
-      <div className="relative overflow-hidden rounded-[32px] border border-[var(--border)] bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.16),_transparent_35%),linear-gradient(180deg,_rgba(11,14,20,0.96),_rgba(8,10,14,1))] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
-        <div className="pointer-events-none absolute -right-14 top-4 h-40 w-40 rounded-full bg-sky-500/10 blur-3xl" />
-        <div className="pointer-events-none absolute left-0 bottom-0 h-56 w-56 rounded-full bg-violet-500/10 blur-3xl" />
+    <PageWrapper title="GitNexus Analysis" subtitle="" className="!bg-black">
+      <div className="relative min-h-[calc(100vh-120px)] overflow-hidden rounded-[32px] border border-white/10 bg-black p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
 
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -415,7 +446,7 @@ export default function GitNexusPage() {
             </div>
             <div className="flex h-full min-h-0 flex-1 overflow-hidden">
               <div className="relative flex-1 overflow-auto p-3">
-                <GitNexusChatBox projectId={projectId.trim()} analysisResult={analysisResult} />
+                <GitNexusRagChatBox projectId={projectId.trim()} />
               </div>
               <div
                 role="separator"

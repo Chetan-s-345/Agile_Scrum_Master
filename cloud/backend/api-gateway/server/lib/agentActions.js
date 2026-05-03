@@ -1,18 +1,8 @@
 const axios = require('axios');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const { emitToProject } = require('../../src/realtime/io');
 const { queueEmbedTask } = require('./githubIngestion');
 const { sendInngestEvent } = require('../../src/services/inngestEvent.service');
-
-const STATUS_MAP = {
-  TODO: 'todo',
-  IN_PROGRESS: 'in_progress',
-  IN_REVIEW: 'in_review',
-  DONE: 'done',
-  BLOCKED: 'blocked',
-};
-
-const DESTRUCTIVE_ACTIONS = new Set(['create_task', 'create_sprint', 'assign_task']);
 
 function safe(value) {
   return String(value || '').trim();
@@ -22,8 +12,22 @@ function toArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function isAutoMode(mode) {
-  return safe(mode).toLowerCase() === 'auto';
+function buildSourceFingerprint(parts) {
+  const payload = toArray(parts)
+    .map((value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' '))
+    .join('|');
+  return createHash('sha256').update(payload).digest('hex');
+}
+
+const DESTRUCTIVE_ACTIONS = new Set([
+  'move_tasks_to_sprint',
+  'update_task_status',
+  'assign_task',
+]);
+
+function isAutoMode(executionMode) {
+  const mode = safe(executionMode).toLowerCase();
+  return mode === 'auto' || mode === 'autonomous' || mode === 'automatic';
 }
 
 function jsonSchema(type, props, required = []) {
@@ -36,133 +40,36 @@ function jsonSchema(type, props, required = []) {
 }
 
 function getToolDefinitions() {
-  const tools = [
+  return [
     {
       name: 'create_task',
-      description: 'Create a new task in the current project.',
+      description: 'Create a task in the current project',
       input_schema: jsonSchema(
         'object',
         {
           title: { type: 'string' },
           description: { type: 'string' },
-          assigneeId: { type: 'string' },
-          priority: { type: 'string' },
           sprintId: { type: 'string' },
-          storyPoints: { type: 'integer', minimum: 0 },
-          labels: { type: 'array', items: { type: 'string' } },
         },
         ['title', 'sprintId']
       ),
     },
     {
       name: 'update_task_status',
-      description: 'Update the status of an existing task.',
+      description: 'Update status of an existing task',
       input_schema: jsonSchema(
         'object',
         {
           taskId: { type: 'string' },
-          status: { type: 'string', enum: ['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'DONE', 'BLOCKED'] },
+          status: { type: 'string' },
         },
         ['taskId', 'status']
       ),
     },
-    {
-      name: 'assign_task',
-      description: 'Assign a task to a specific developer.',
-      input_schema: jsonSchema(
-        'object',
-        {
-          taskId: { type: 'string' },
-          developerId: { type: 'string' },
-          reason: { type: 'string' },
-        },
-        ['taskId', 'developerId']
-      ),
-    },
-    {
-      name: 'create_sprint',
-      description: 'Create a new sprint in the current project.',
-      input_schema: jsonSchema(
-        'object',
-        {
-          name: { type: 'string' },
-          goal: { type: 'string' },
-          startDate: { type: 'string' },
-          endDate: { type: 'string' },
-        },
-        ['name', 'startDate', 'endDate']
-      ),
-    },
-    {
-      name: 'move_tasks_to_sprint',
-      description: 'Move multiple tasks to a sprint.',
-      input_schema: jsonSchema(
-        'object',
-        {
-          taskIds: { type: 'array', items: { type: 'string' }, minItems: 1 },
-          sprintId: { type: 'string' },
-        },
-        ['taskIds', 'sprintId']
-      ),
-    },
-    {
-      name: 'get_team_workload',
-      description: 'Get each developer open task count, points, and skills for a project.',
-      input_schema: jsonSchema('object', { projectId: { type: 'string' } }, ['projectId']),
-    },
-    {
-      name: 'get_sprint_health',
-      description: 'Compute sprint completion, at-risk tasks, days remaining, and velocity.',
-      input_schema: jsonSchema('object', { sprintId: { type: 'string' } }, ['sprintId']),
-    },
-    {
-      name: 'create_github_issue',
-      description: 'Create a GitHub issue for the current project repository.',
-      input_schema: jsonSchema(
-        'object',
-        {
-          title: { type: 'string' },
-          body: { type: 'string' },
-          labels: { type: 'array', items: { type: 'string' } },
-          assigneeGithubLogin: { type: 'string' },
-        },
-        ['title']
-      ),
-    },
-    {
-      name: 'flag_blocker',
-      description: 'Mark a task as blocked, add blocker comment, and notify assignee plus scrum leadership.',
-      input_schema: jsonSchema(
-        'object',
-        {
-          taskId: { type: 'string' },
-          reason: { type: 'string' },
-        },
-        ['taskId', 'reason']
-      ),
-    },
-    {
-      name: 'suggest_assignments',
-      description: 'Suggest the best developer per task based on skills, load, and similar-task completion.',
-      input_schema: jsonSchema(
-        'object',
-        {
-          taskIds: { type: 'array', items: { type: 'string' }, minItems: 1 },
-        },
-        ['taskIds']
-      ),
-    },
   ];
-
-  return tools.map((tool) => ({
-    type: 'function',
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.input_schema,
-    },
-  }));
 }
+
+module.exports = { getToolDefinitions, buildSourceFingerprint };
 
 async function ensureAgentActionsTable(orgPool) {
   await orgPool.query(
@@ -192,6 +99,12 @@ async function ensureAgentTaskColumns(orgPool) {
   await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_agent_id TEXT');
   await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_by TEXT');
   await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ');
+  await orgPool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_fingerprint TEXT');
+  await orgPool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_project_source_fingerprint
+     ON tasks(project_id, source_fingerprint)
+     WHERE source_fingerprint IS NOT NULL`
+  );
 }
 
 async function ensureAgentApprovalsTable(orgPool) {
@@ -376,13 +289,44 @@ async function createTask(orgPool, context, input) {
   }
   const storyPoints = Number(input.storyPoints || 0);
   const labels = toArray(input.labels).map((v) => String(v));
+  const sourceFingerprint = String(
+    input.sourceFingerprint ||
+      buildSourceFingerprint([
+        context.agentId,
+        context.projectId,
+        input.sprintId,
+        input.title,
+        input.description || '',
+        input.priority || 'medium',
+        labels.join(','),
+      ])
+  ).trim();
+
+  if (sourceFingerprint) {
+    const existing = await orgPool.query(
+      `SELECT id, jira_issue_key, project_id, sprint_id, title, priority, story_points, tech_tags, assignee_id
+       FROM tasks
+       WHERE project_id = $1
+         AND source_fingerprint = $2
+       LIMIT 1`,
+      [String(context.projectId), sourceFingerprint]
+    );
+    if (existing.rows[0]?.id) {
+      const row = existing.rows[0];
+      return {
+        taskId: row.id,
+        code: row.jira_issue_key || `TASK-${String(row.id).slice(0, 8)}`,
+        url: `/tasks/${row.id}`,
+      };
+    }
+  }
   const resp = await orgPool.query(
     `INSERT INTO tasks (
        sprint_id, project_id, title, description, status, type, priority,
        story_points, tech_tags, assignee_id, created_by,
-       created_source, created_agent_id, assigned_by, assigned_at
+       created_source, created_agent_id, assigned_by, assigned_at, source_fingerprint
      )
-     VALUES ($1,$2,$3,$4,'todo','task',$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     VALUES ($1,$2,$3,$4,'todo','task',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
     RETURNING id, jira_issue_key, project_id, sprint_id, title, priority, story_points, tech_tags, assignee_id`,
     [
       String(input.sprintId),
@@ -398,6 +342,7 @@ async function createTask(orgPool, context, input) {
       safe(context.agentId) || null,
       safe(input.assigneeId) ? 'ai_agentic' : null,
       safe(input.assigneeId) ? new Date().toISOString() : null,
+      sourceFingerprint || null,
     ]
   );
   const row = resp.rows[0];

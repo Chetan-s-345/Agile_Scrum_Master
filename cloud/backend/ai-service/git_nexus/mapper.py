@@ -5,6 +5,7 @@ Maps repository analysis to sprint task schema
 
 import asyncio
 import difflib
+import json
 import logging
 from typing import Any
 
@@ -45,6 +46,25 @@ class NexusMapper:
             await self.pool.close()
             logger.info("✅ Database pool closed")
 
+    def _sanitize_payload(self, value: Any) -> Any:
+        """Remove NUL bytes from nested payload values before JSONB storage."""
+        if isinstance(value, str):
+            return value.replace("\x00", "")
+
+        if isinstance(value, list):
+            return [self._sanitize_payload(item) for item in value]
+
+        if isinstance(value, tuple):
+            return [self._sanitize_payload(item) for item in value]
+
+        if isinstance(value, dict):
+            return {
+                self._sanitize_payload(key) if isinstance(key, str) else key: self._sanitize_payload(item)
+                for key, item in value.items()
+            }
+
+        return value
+
     async def _fetch_developers(self) -> list:
         """Fetch active developers from DB."""
         if not self.pool:
@@ -56,7 +76,6 @@ class NexusMapper:
                     """
                     SELECT id, email, name, tech_stack, current_sprint_load, max_sprint_capacity
                     FROM app.developers
-                    WHERE deleted_at IS NULL
                     """
                 )
                 return [dict(row) for row in rows]
@@ -64,21 +83,25 @@ class NexusMapper:
             logger.warning(f"⚠️ Fetch developers error: {e}")
             return []
 
-    async def _fetch_existing_tasks(self, project_id: str) -> list:
+    async def _fetch_existing_tasks(self, sprint_id: str | None = None) -> list:
         """Fetch open tasks for deduplication."""
         if not self.pool:
             return []
         
         try:
             async with self.pool.acquire() as conn:
-                rows = await conn.fetch(
-                    """
+                query = """
                     SELECT id, title, status
                     FROM app.tasks
-                    WHERE project_id = $1 AND status IN ('todo', 'in_progress', 'in_review')
-                    """,
-                    project_id,
-                )
+                    WHERE status IN ('todo', 'in_progress', 'in_review')
+                """
+                params: list[Any] = []
+
+                if sprint_id:
+                    query += " AND sprint_id = $1"
+                    params.append(sprint_id)
+
+                rows = await conn.fetch(query, *params)
                 return [dict(row) for row in rows]
         except Exception as e:
             logger.warning(f"⚠️ Fetch tasks error: {e}")
@@ -298,7 +321,7 @@ class NexusMapper:
         try:
             # Fetch data
             developers = await self._fetch_developers()
-            existing_tasks = await self._fetch_existing_tasks(project_id)
+            existing_tasks = await self._fetch_existing_tasks(sprint_id)
             
             suggested_tasks = nexus_result.get("suggested_tasks", [])
             self._match_report["total_suggested"] = len(suggested_tasks)
@@ -332,3 +355,31 @@ class NexusMapper:
     def get_match_report(self) -> dict:
         """Return mapping statistics."""
         return self._match_report
+
+    async def save_analysis(self, nexus_result: dict, project_id: str, repo_url: str | None = None) -> None:
+        """Replace the saved analysis for a project with the newest raw nexus_result."""
+        if not self.pool:
+            logger.warning("Database pool not ready; skipping save_analysis")
+            return
+
+        try:
+            nexus_result = self._sanitize_payload(nexus_result)
+
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM app.nexus_analyses WHERE project_id = $1",
+                    project_id,
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO app.nexus_analyses(project_id, repo_url, raw_payload, created_at, updated_at)
+                    VALUES($1, $2, $3, NOW(), NOW())
+                    """,
+                    project_id,
+                    repo_url,
+                    json.dumps(nexus_result, ensure_ascii=False),
+                )
+                logger.info(f"Saved nexus analysis for project {project_id}")
+        except Exception as e:
+            logger.error(f"Failed to save nexus analysis: {e}")

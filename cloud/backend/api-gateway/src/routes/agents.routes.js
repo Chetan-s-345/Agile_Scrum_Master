@@ -313,6 +313,18 @@ function buildCommitFingerprint(signal) {
   return createHash('sha256').update(payload).digest('hex');
 }
 
+function buildAgentTaskFingerprint(projectId, agentId, signal, draftIndex) {
+  const signalFingerprint = buildCommitFingerprint(signal || {});
+  const payload = [
+    'custom-agent-task',
+    safe(projectId),
+    safe(agentId),
+    signalFingerprint,
+    String(Number.isFinite(Number(draftIndex)) ? Number(draftIndex) : 0),
+  ].join('|');
+  return createHash('sha256').update(payload).digest('hex');
+}
+
 function extractCommitSignalsForMemory(signals) {
   const rows = Array.isArray(signals) ? signals : [];
   const unique = [];
@@ -528,24 +540,17 @@ function parseGithubToken(rawToken) {
   }
 }
 
-function fallbackDraftFromSignal(signal, prompt, agentName) {
-  const titleBase = normalizeCommitTitle(signal?.title) || 'Repository follow-up task';
-  const descriptionLines = [
-    `Generated from repository activity by ${agentName}.`,
-    `Source event: ${safe(signal?.eventType) || 'github_event'}`,
-    `Task intent: ${safe(prompt) || 'Review and implement changes suggested by repository activity.'}`,
-  ];
-  if (safe(signal?.branch)) descriptionLines.push(`Branch: ${safe(signal.branch)}`);
-  if (safe(signal?.sha)) descriptionLines.push(`Commit: ${safe(signal.sha).slice(0, 12)}`);
-  if (safe(signal?.author)) descriptionLines.push(`Author: ${safe(signal.author)}`);
-  if (safe(signal?.details)) descriptionLines.push(`Context: ${safe(signal.details).slice(0, 280)}`);
-  if (safe(signal?.url)) descriptionLines.push(`Reference: ${safe(signal.url)}`);
-  return {
-    title: titleBase,
-    description: descriptionLines.join('\n'),
-    priority: 'medium',
-    storyPoints: 3,
-  };
+function isNoisySignalTitle(value) {
+  const title = safe(value).toLowerCase();
+  if (!title) return true;
+  return (
+    title.startsWith('merge pull request') ||
+    title.startsWith('merge branch') ||
+    title.startsWith('chore(release)') ||
+    title.startsWith('release:') ||
+    title === 'update' ||
+    title === 'wip'
+  );
 }
 
 function inferLabelsFromDraft(draft, signal) {
@@ -575,15 +580,16 @@ function inferLabelsFromDraft(draft, signal) {
   return labels.slice(0, 8);
 }
 
-function ensureMeaningfulDraft(draft, signal, prompt, agentName) {
-  const fallback = fallbackDraftFromSignal(signal, prompt, agentName);
+function ensureMeaningfulDraft(draft) {
   const title = safe(draft?.title);
   const description = safe(draft?.description);
+  if (!title || !description) return null;
+  if (isGenericTaskTitle(title) || isNoisySignalTitle(title)) return null;
   return {
-    title: !title || isGenericTaskTitle(title) ? fallback.title : title,
-    description: description || fallback.description,
-    priority: safe(draft?.priority || fallback.priority || 'medium').toLowerCase(),
-    storyPoints: Number(draft?.storyPoints || fallback.storyPoints || 3),
+    title,
+    description,
+    priority: safe(draft?.priority || 'medium').toLowerCase(),
+    storyPoints: Number(draft?.storyPoints || 3),
   };
 }
 
@@ -863,6 +869,11 @@ router.post('/', async (req, res, next) => {
       const lower = safe(source).toLowerCase();
       return lower.includes('rag') || lower.includes('documentation') || lower.includes('docs');
     });
+    const graphEnabled = dataSources.some((source) => {
+      const lower = safe(source).toLowerCase();
+      return lower.includes('graph') || lower.includes('nexus') || lower.includes('network');
+    });
+    const hybridMode = ragEnabled && graphEnabled ? 'graph+rag' : ragEnabled ? 'rag' : graphEnabled ? 'graph' : 'normal';
 
     if (!name) return jsonError(res, 400, 'Bad request', 'name is required.');
     if (!projectIds.length) return jsonError(res, 400, 'Bad request', 'projectIds is required.');
@@ -876,6 +887,30 @@ router.post('/', async (req, res, next) => {
     await ensureAgentConfigsTable(req.orgDb);
 
     const id = `${normalizeAgentId(name)}-${randomUUID().slice(0, 8)}`;
+
+    // Fetch RAG context if hybrid mode or RAG-only mode is enabled (fallback gracefully if unavailable)
+    let ragContext = '';
+    if ((hybridMode === 'graph+rag' || hybridMode === 'rag') && projectIds.length > 0) {
+      try {
+        const projectId = projectIds[0];
+        const aiServiceUrl = safe(process.env.AI_SERVICE_URL || 'http://localhost:8000');
+        const ragPayload = {
+          project_id: projectId,
+          message: `Generate context for creating a new ${role} agent named "${name}". Initial prompt: ${promptTemplate || 'standard task creation'}`,
+        };
+        const ragResp = await axios.post(
+          `${aiServiceUrl}/rag/chat`,
+          ragPayload,
+          { timeout: 10_000, validateStatus: () => true }
+        );
+        if (ragResp.status === 200 && ragResp.data?.response) {
+          ragContext = String(ragResp.data.response).slice(0, 800);
+        }
+      } catch (ragErr) {
+        console.warn(`[agents.routes] RAG context fetch failed for agent "${name}" (will continue without context):`, ragErr.message);
+        // Graceful fallback: agent creation continues without RAG context
+      }
+    }
 
     await req.orgDb.query(
       `INSERT INTO custom_agents (
@@ -917,8 +952,16 @@ router.post('/', async (req, res, next) => {
           projectId,
           JSON.stringify({ events: triggerEvents, conditions: triggerConditions }),
           autonomyLevel,
-          JSON.stringify({ actions, dataSources, ragEnabled, promptTemplate }),
-          promptTemplate || null,
+          JSON.stringify({ 
+            actions, 
+            dataSources, 
+            ragEnabled, 
+            graphEnabled,
+            hybridMode,
+            promptTemplate,
+            ragContext: ragContext || null,
+          }),
+          promptTemplate || ragContext || null,
         ]
       );
     }
@@ -1396,6 +1439,8 @@ router.post('/:agentId/run', async (req, res, next) => {
     const prompt = safe(operatorPrompt || cfgResp.rows[0]?.context_memo || customAgent.name);
     const role = safe(customAgent.role || 'custom');
     const quickMode = Boolean(req.body?.quickMode);
+    const allowRepeatedSignals = Boolean(req.body?.allowRepeatedSignals);
+    const forceTaskGeneration = Boolean(req.body?.forceTaskGeneration || req.body?.forceGenerateWithoutSignals);
     const requestedTaskCountRaw = Number(req.body?.taskCount);
     const requestedTaskCount = Number.isFinite(requestedTaskCountRaw)
       ? Math.max(1, Math.min(quickMode ? 3 : 8, Math.floor(requestedTaskCountRaw)))
@@ -1475,6 +1520,9 @@ router.post('/:agentId/run', async (req, res, next) => {
 
         if (!unseen.length) {
           commitMemory.skippedAsRepeated = true;
+          if (!allowRepeatedSignals) {
+            repoSignals = [];
+          }
         }
       }
 
@@ -1490,7 +1538,7 @@ router.post('/:agentId/run', async (req, res, next) => {
         sprintId = safe(createdSprint?.sprintId || createdSprint?.id);
       }
 
-      if (!repoSignals.length) {
+      if (!repoSignals.length && forceTaskGeneration) {
         repoSignals = [
           {
             eventType: 'manual-intent',
@@ -1505,38 +1553,62 @@ router.post('/:agentId/run', async (req, res, next) => {
         ];
       }
 
+      repoSignals = repoSignals.filter((signal) => !isNoisySignalTitle(signal?.title));
+
       let drafts = [];
-      if (!quickMode) {
-        try {
-          drafts = await generateDraftsWithLlm({
-            prompt,
-            taskCount: requestedTaskCount,
-            signals: repoSignals,
-            githubRepo,
-            agentName: customAgent.name,
-          });
-        } catch {
-          drafts = [];
-        }
+      try {
+        drafts = await generateDraftsWithLlm({
+          prompt,
+          taskCount: requestedTaskCount,
+          signals: repoSignals,
+          githubRepo,
+          agentName: customAgent.name,
+        });
+      } catch {
+        drafts = [];
       }
 
       if (!drafts.length) {
-        drafts = repoSignals.slice(0, requestedTaskCount).map((signal) => fallbackDraftFromSignal(signal, prompt, customAgent.name));
-      }
+        await insertAgentDecision(req.orgDb, {
+          agentType: agentId,
+          projectId,
+          actionDescription: 'Custom agent run skipped task creation due to missing AI/RAG drafts',
+          reasoning: { source: 'manual-run', actor: String(req.user?.userId || ''), prompt },
+          dataUsed: {
+            role,
+            quickMode,
+            prompt,
+            githubRepo,
+            repoSignalCount: repoSignals.length,
+            commitMemory,
+          },
+          status: 'skipped',
+          resolvedBy: String(req.user?.userId || ''),
+          resolutionType: 'ai-drafts-required',
+        });
 
-      if (drafts.length && drafts.length < requestedTaskCount) {
-        let idx = 0;
-        while (drafts.length < requestedTaskCount) {
-          const signal = repoSignals[idx % repoSignals.length];
-          drafts.push(fallbackDraftFromSignal(signal, prompt, customAgent.name));
-          idx += 1;
-        }
+        return res.status(200).json({
+          success: true,
+          createdTasks: [],
+          assignedTasks: [],
+          assignmentFailures: [],
+          monitoringEmail: null,
+          githubIssues: [],
+          githubIssueErrors: [],
+          githubRepo: githubRepo || null,
+          commitMemory,
+          detail: 'Run skipped: no valid AI/RAG task drafts were generated. No fallback task titles were created from raw issue/commit text.',
+        });
       }
 
       let draftIdx = 0;
       for (const draft of drafts.slice(0, requestedTaskCount)) {
         const signal = repoSignals[draftIdx % repoSignals.length];
-        const cleanDraft = ensureMeaningfulDraft(draft, signal, prompt, customAgent.name);
+        const cleanDraft = ensureMeaningfulDraft(draft);
+        if (!cleanDraft) {
+          draftIdx += 1;
+          continue;
+        }
         const title = safe(cleanDraft.title);
         const description = safe(cleanDraft.description);
         const priority = safe(cleanDraft.priority || 'medium').toLowerCase();
@@ -1549,6 +1621,7 @@ router.post('/:agentId/run', async (req, res, next) => {
           priority: ['low', 'medium', 'high', 'critical'].includes(priority) ? priority : 'medium',
           storyPoints: Number.isFinite(storyPoints) ? Math.max(1, Math.min(13, Math.round(storyPoints))) : 3,
           labels,
+          sourceFingerprint: buildAgentTaskFingerprint(projectId, agentId, signal, draftIdx),
         });
 
         let githubIssue = null;
@@ -1787,7 +1860,7 @@ router.post('/:agentId/run', async (req, res, next) => {
       // Do not fail manual runs when event forwarding is unavailable.
     }
 
-    if (shouldMirrorToGithub && githubIssues.length === 0) {
+    if (shouldMirrorToGithub && githubIssues.length === 0 && createdTasks.length > 0) {
       return jsonError(
         res,
         502,
